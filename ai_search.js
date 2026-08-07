@@ -46,17 +46,7 @@
             source: 'tmdb',
             media_type: realMediaType,
             ready: true,
-            
-            title: String(item.title || item.name || 'Без назви'),
-            name: String(item.name || item.title || 'Без назви'),
-            original_title: String(item.original_title || item.original_name || item.title || item.name || ''),
-            original_name: String(item.original_name || item.original_title || item.name || item.title || ''),
-            
             overview: String(item.overview || ''),
-            
-            release_date: String(item.release_date || item.first_air_date || '2000-01-01'),
-            first_air_date: String(item.first_air_date || item.release_date || '2000-01-01'),
-            
             poster_path: item.poster_path,
             backdrop_path: item.backdrop_path,
             vote_average: parseFloat(item.vote_average || 0),
@@ -65,6 +55,18 @@
             production_countries: [],
             origin_country: item.origin_country || []
         };
+
+        // ИСПРАВЛЕНИЕ 2.0: Жесткое разделение полей name и title.
+        // Lampa сходит с ума, если у фильма есть поле name (считает его сериалом).
+        if (realMediaType === 'tv') {
+            card.name = String(item.name || item.title || 'Без назви');
+            card.original_name = String(item.original_name || item.original_title || item.name || item.title || '');
+            card.first_air_date = String(item.first_air_date || item.release_date || '2000-01-01');
+        } else {
+            card.title = String(item.title || item.name || 'Без назви');
+            card.original_title = String(item.original_title || item.original_name || item.title || item.name || '');
+            card.release_date = String(item.release_date || item.first_air_date || '2000-01-01');
+        }
 
         if (card.genre_ids.length) {
             card.genres = card.genre_ids.map(function(id) { return { id: id, name: GENRES_MAP[id] || 'Жанр' }; });
@@ -367,7 +369,6 @@
             });
         }});
         
-        // НОВЕ: Інтерактивне меню з мульти-вибором країн
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_exclude_countries_btn', type: 'trigger' }, field: { name: 'Виключити країни' }, onRender: function(item) {
             var val = Lampa.Storage.get('ai_exclude_countries_list', '');
             item.find('.settings-param__value').text(val ? val : 'Немає').css('color', val ? '#f55':'#fff');
@@ -418,7 +419,6 @@
                             Lampa.Storage.set('ai_exclude_countries_list', newVal);
                             item.find('.settings-param__value').text(newVal ? newVal : 'Немає').css('color', newVal ? '#f55':'#fff');
                             
-                            // Затримка перед перемальовкою для плавного візуального ефекту кліку
                             setTimeout(showSelect, 50);
                         },
                         onBack: function () {
@@ -479,7 +479,7 @@
             btn('anime', 'Випадкове аніме', 'ai_show_btn_anime');
         }
         addButtons();
-        console.log('AI Search: V52 (Interactive UI Multi-Select for Countries) - UA Patched');
+        console.log('AI Search: V53 (Strict Media Type Fields) - UA Patched');
     }
 
     if (!window.plugin_ai_search_ready) {
