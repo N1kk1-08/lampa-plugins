@@ -921,9 +921,9 @@
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_assistant_btn', type: 'trigger', default: true }, field: { name: 'Кнопка: AI Асистент (у картці фільму)' } });
 
         // 10. Кнопки меню рандому
-        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_movie', type: 'trigger', default: true }, field: { name: 'Кнопка: Випадкові фільми' } });
-        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_tv', type: 'trigger', default: true }, field: { name: 'Кнопка: Випадкові серіали' } });
-        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_cartoon', type: 'trigger', default: true }, field: { name: 'Кнопка: Випадкові мультфільми' } });
+        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_movie', type: 'trigger', default: true }, field: { name: 'Пункт в меню: Випадкові фільми' } });
+        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_tv', type: 'trigger', default: true }, field: { name: 'Пункт в меню: Випадкові серіали' } });
+        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_cartoon', type: 'trigger', default: true }, field: { name: 'Пункт в меню: Випадкові мультфільми' } });
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_anime', type: 'trigger', default: true }, field: { name: 'Кнопка: Випадкове аніме' } });
 
         // --- РЕЄСТРАЦІЯ ДЖЕРЕЛ ---
