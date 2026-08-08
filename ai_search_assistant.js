@@ -924,7 +924,7 @@
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_movie', type: 'trigger', default: true }, field: { name: 'Пункт в меню: Випадкові фільми' } });
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_tv', type: 'trigger', default: true }, field: { name: 'Пункт в меню: Випадкові серіали' } });
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_cartoon', type: 'trigger', default: true }, field: { name: 'Пункт в меню: Випадкові мультфільми' } });
-        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_anime', type: 'trigger', default: true }, field: { name: 'Кнопка: Випадкове аніме' } });
+        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_show_btn_anime', type: 'trigger', default: true }, field: { name: 'Пункт в меню: Випадкове аніме' } });
 
         // --- РЕЄСТРАЦІЯ ДЖЕРЕЛ ---
         Lampa.Api.sources.ai_random = NativeRandomSource;
