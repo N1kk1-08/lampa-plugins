@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_stats_plugin_v6) return;
-    window.lampa_stats_plugin_v6 = true;
+    if (window.lampa_stats_plugin_v7) return;
+    window.lampa_stats_plugin_v7 = true;
 
     // --- Локалізація (Українська) ---
     const LANG = {
@@ -158,15 +158,26 @@
         }
     };
 
-    // --- Логіка відображення меню ---
+    // --- Логіка відображення меню через MutationObserver ---
     const Menu = {
-        intervalId: null,
+        observer: null,
 
-        startPolling() {
-            if (this.intervalId) return;
-            this.intervalId = setInterval(() => {
+        initObserver() {
+            if (this.observer) return;
+
+            // Первинна перевірка
+            this.updateVisibility();
+
+            // Слідкуємо за змінами в DOM-дереві додатку, щоб миттєво повертати пункт при перерисовках меню
+            const target = document.getElementById('app') || document.body;
+            this.observer = new MutationObserver(() => {
                 this.updateVisibility();
-            }, 1000);
+            });
+
+            this.observer.observe(target, {
+                childList: true,
+                subtree: true
+            });
         },
 
         updateVisibility() {
@@ -174,11 +185,13 @@
             const existingItem = $('.menu__item[data-action="lampa_stats"]');
             
             if (!isVisible) {
-                existingItem.remove();
+                if (existingItem.length) existingItem.remove();
                 return;
             }
             if (existingItem.length) return;
-            if ($('.menu__list').length === 0) return;
+            
+            const menuList = $('.menu__list');
+            if (menuList.length === 0) return;
 
             const menuItem = $(`<li class="menu__item selector" data-action="lampa_stats">
                 <div class="menu__ico">
@@ -203,11 +216,11 @@
                 });
             });
 
-            const historyItem = $('.menu__item[data-action="history"]');
+            const historyItem = menuList.find('.menu__item[data-action="history"]');
             if (historyItem.length) {
                 historyItem.after(menuItem);
             } else {
-                $('.menu__list').append(menuItem);
+                menuList.append(menuItem);
             }
         }
     };
@@ -215,7 +228,6 @@
     // --- Визначення екрану Activity ---
     const StatsActivity = {
         start() {
-            // Використовуємо прямий контейнер замість застарілого виклику шаблонів Лампи
             const render = $('<div class="lampa-stats-view"></div>');
             this.dom = render;
 
@@ -316,7 +328,7 @@
             Tracker.init();
             Lampa.Activity.define('lampa_stats_view', StatsActivity);
 
-            Menu.startPolling();
+            Menu.initObserver();
 
         } catch (err) {
             console.error('Lampa Stats Plugin init error:', err);
