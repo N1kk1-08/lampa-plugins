@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_stats_plugin_v5) return;
-    window.lampa_stats_plugin_v5 = true;
+    if (window.lampa_stats_plugin_v6) return;
+    window.lampa_stats_plugin_v6 = true;
 
     // --- Локалізація (Українська) ---
     const LANG = {
@@ -13,12 +13,7 @@
         watched: 'ПЕРЕГЛЯНУТО',
         movies_episodes: '{movies} фільмів / {episodes} серій',
         empty_text: 'Тут поки що порожньо. Почніть дивитися фільми або серіали!',
-        fav_genre: 'УЛЮБЛЕНИЙ ЖАНР',
-        actors_title: 'ВАШІ УЛЮБЛЕНІ АКТОРИ (Демо)',
-        chart_genre_title: 'РОЗПОДІЛ ЖАНРІВ (Демо)',
-        records_title: 'РЕКОРДИ (Демо)',
-        records_oct: 'Жовтень (120 год.)',
-        records_sat: 'Субота, 21:00'
+        demo_notice: '* Графіки нижче використовують демонстраційні дані для тестування дизайну *'
     };
 
     // --- Локальна База Даних Плагіна ---
@@ -68,12 +63,10 @@
             }
 
             const origSet = Lampa.Storage.set;
-            // ФИКС: Используем классическую функцию для сохранения контекста 'this'
             Lampa.Storage.set = function (name, value) {
                 if (name === 'file_view' && Lampa.Storage.get('stats_collect', true)) {
                     Tracker.processFileViewUpdate(value);
                 }
-                // Обязательно передаем контекст дальше
                 return origSet.apply(this, arguments);
             };
         },
@@ -171,17 +164,9 @@
 
         startPolling() {
             if (this.intervalId) return;
-            // ФИКС: Возвращаем setInterval. Делать DOM-запросы 60 раз в секунду не нужно.
             this.intervalId = setInterval(() => {
                 this.updateVisibility();
             }, 1000);
-        },
-
-        stopPolling() {
-            if (this.intervalId) {
-                clearInterval(this.intervalId);
-                this.intervalId = null;
-            }
         },
 
         updateVisibility() {
@@ -230,7 +215,8 @@
     // --- Визначення екрану Activity ---
     const StatsActivity = {
         start() {
-            const render = Lampa.Template.get('activity_lampa_stats_view', {});
+            // Використовуємо прямий контейнер замість застарілого виклику шаблонів Лампи
+            const render = $('<div class="lampa-stats-view"></div>');
             this.dom = render;
 
             render.append(`<div class="lampa-stats-title">${LANG.page_title}</div>`);
@@ -246,7 +232,6 @@
                 render.append(this.renderDemoNotice());
             }
 
-            render.addClass('lampa-stats-view');
             render.onfocus = this.onfocus.bind(this);
         },
 
@@ -282,7 +267,7 @@
         },
 
         renderDemoNotice() {
-            return $('<div style="color:#a0aec0; margin-top:20px; font-size:14px; text-align:center;">* Графіки нижче використовують демонстраційні дані для тестування дизайну *</div>');
+            return $(`<div style="color:#a0aec0; margin-top:20px; font-size:14px; text-align:center;">${LANG.demo_notice}</div>`);
         },
 
         onfocus() {
@@ -299,54 +284,39 @@
 
     // --- CSS Стилі ---
     const CSS_STYLES = `
-        :root {
-            --stats-bg: rgba(255,255,255,0.05);
-            --stats-bg-empty: rgba(255,255,255,0.02);
-            --stats-border-focus: #3182CE;
-            --stats-shadow-focus: rgba(49,130,206,0.5);
-            --stats-text: #fff;
-            --stats-text-secondary: #a0aec0;
-            --stats-error: #F56565;
-        }
-
-        .lampa-stats-view { padding: 20px; color: var(--stats-text); font-family: sans-serif; }
-        .lampa-stats-title { font-size: 24px; font-weight: bold; margin-bottom: 20px; color: var(--stats-text); }
+        .lampa-stats-view { padding: 20px; color: #fff; font-family: sans-serif; }
+        .lampa-stats-title { font-size: 24px; font-weight: bold; margin-bottom: 20px; color: #fff; }
         .lampa-stats-summary { display: flex; gap: 15px; margin-bottom: 25px; }
-        .lampa-stats-card { background: var(--stats-bg); padding: 15px; border-radius: 8px; flex: 1; display: flex; align-items: center; gap: 10px; border: 2px solid transparent; transition: border-color 0.2s, box-shadow 0.2s; }
-        .lampa-stats-card:focus { border-color: var(--stats-border-focus); box-shadow: 0 0 10px var(--stats-shadow-focus); outline: none; background: rgba(255,255,255,0.1); }
-        .lampa-stats-card-icon { font-size: 24px; color: var(--stats-border-focus); }
+        .lampa-stats-card { background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; flex: 1; display: flex; align-items: center; gap: 10px; border: 2px solid transparent; transition: border-color 0.2s, box-shadow 0.2s; }
+        .lampa-stats-card:focus { border-color: #3182CE; box-shadow: 0 0 10px rgba(49,130,206,0.5); outline: none; background: rgba(255,255,255,0.1); }
+        .lampa-stats-card-icon { font-size: 24px; color: #3182CE; }
         .lampa-stats-card-content { flex-grow: 1; }
-        .lampa-stats-card-label { font-size: 12px; color: var(--stats-text-secondary); text-transform: uppercase; }
-        .lampa-stats-card-value { font-size: 18px; font-weight: bold; margin-top: 2px; color: var(--stats-text); }
-        .lampa-stats-empty { background: var(--stats-bg-empty); border-radius: 8px; padding: 40px; text-align: center; color: var(--stats-text-secondary); font-size: 16px; margin-bottom: 20px; border: 2px solid transparent; }
-        .lampa-stats-empty:focus { border-color: var(--stats-border-focus); outline: none; }
+        .lampa-stats-card-label { font-size: 12px; color: #a0aec0; text-transform: uppercase; }
+        .lampa-stats-card-value { font-size: 18px; font-weight: bold; margin-top: 2px; color: #fff; }
+        .lampa-stats-empty { background: rgba(255,255,255,0.02); border-radius: 8px; padding: 40px; text-align: center; color: #a0aec0; font-size: 16px; margin-bottom: 20px; border: 2px solid transparent; }
+        .lampa-stats-empty:focus { border-color: #3182CE; outline: none; }
     `;
 
     // --- Запуск ---
     function init() {
         try {
-            if (!Lampa.Template || !Lampa.SettingsApi || !Lampa.Activity) {
+            if (!Lampa.SettingsApi || !Lampa.Activity) {
                 console.warn('Lampa Stats Plugin: Required APIs not available');
                 return;
             }
 
             if (!document.getElementById('lampa-stats-style')) {
-                Lampa.Template.add('stats_plugin_styles', `<style id="lampa-stats-style">${CSS_STYLES}</style>`);
-                $('body').append(Lampa.Template.get('stats_plugin_styles'));
+                const style = document.createElement('style');
+                style.id = 'lampa-stats-style';
+                style.innerHTML = CSS_STYLES;
+                document.head.appendChild(style);
             }
 
             Settings.setup();
             Tracker.init();
             Lampa.Activity.define('lampa_stats_view', StatsActivity);
 
-            const waitForMenu = () => {
-                if ($('.menu__list').length > 0) {
-                    Menu.startPolling();
-                } else {
-                    setTimeout(waitForMenu, 100);
-                }
-            };
-            waitForMenu();
+            Menu.startPolling();
 
         } catch (err) {
             console.error('Lampa Stats Plugin init error:', err);
