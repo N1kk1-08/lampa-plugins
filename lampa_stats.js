@@ -1,50 +1,180 @@
-// --- Функція ініціалізації плагіна ---
-    function initStatsPlugin() {
+(function () {
+    'use strict';
+
+    if (window.lampa_stats_plugin_v1) return;
+    window.lampa_stats_plugin_v1 = true;
+
+    // --- Локалізація (Українська) ---
+    var lang = {
+        menu_title: 'Статистика',
+        page_title: 'МОЯ СТАТИСТИКА ПЕРЕГЛЯДІВ',
+        total_time: 'СУМАРНИЙ ЧАС',
+        days_hours: '{days} день {hours} годин',
+        watched: 'ПЕРЕГЛЯНУТО',
+        movies_episodes: '{movies} фільмів / {episodes} серій',
+        fav_genre: 'УЛЮБЛЕНИЙ ЖАНР',
+        genre_sci_fi: 'ФАНТАСТИКА',
+        actors_title: 'ВАШІ УЛЮБЛЕНІ АКТОРИ',
+        hours_movies: '{hours} годин, {movies} фільмів',
+        chart_year_title: 'ВПОДОБАННЯ ЗА РОКАМИ ВИПУСКУ',
+        chart_genre_title: 'РОЗПОДІЛ ЖАНРІВ',
+        records_title: 'РЕКОРДИ',
+        records_oct: 'Жовтень ({hours} год.)',
+        records_sat: 'Субота, 21:00'
+    };
+
+    // --- Mock-дані ---
+    var mock_data = {
+        total_time: { days: 21, hours: 7 },
+        watched: { movies: 312, episodes: 1150 },
+        fav_genre: { name: lang.genre_sci_fi, percent: 35 },
+        actors: [
+            { name: 'Кілліан Мерфі', img: 'https://image.tmdb.org/t/p/w185/wMrlvE7H14r6ZJm3HlC1M5G0A5T.jpg', hours: 48, movies: 12 },
+            { name: 'Флоренс П\'ю', img: 'https://image.tmdb.org/t/p/w185/4YdFT0Y0T4q44f8W1K8v9XFm6f6.jpg', hours: 31, movies: 8 },
+            { name: 'Том Круз', img: 'https://image.tmdb.org/t/p/w185/g5m5t4A0qA3D1M5R5S6b3G6oM5P.jpg', hours: 29, movies: 7 },
+            { name: 'Емма Стоун', img: 'https://image.tmdb.org/t/p/w185/vM5t4A0qA3D1M5R5S6b3G6oM5P.jpg', hours: 25, movies: 6 }
+        ],
+        year_prefs: [ { year: '2010-ті', value: 180 }, { year: '2020-ті', value: 210 } ],
+        genre_dist: [
+            { name: 'Фантастика', percent: 35, color: '#3182CE' },
+            { name: 'Драма', percent: 25, color: '#48BB78' },
+            { name: 'Комедія', percent: 20, color: '#F6E05E' },
+            { name: 'Трилер', percent: 20, color: '#F56565' }
+        ],
+        records: { month: 'Жовтень', hours: 120, day: 'Субота, 21:00' }
+    };
+
+    // --- CSS Стилі ---
+    var css_styles = `
+        .lampa-stats-view { padding: 20px; color: #fff; font-family: sans-serif; }
+        .lampa-stats-title { font-size: 24px; font-weight: bold; margin-bottom: 20px; color: #fff; }
+        .lampa-stats-summary { display: flex; gap: 15px; margin-bottom: 25px; }
+        .lampa-stats-card { background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; flex: 1; display: flex; align-items: center; gap: 10px; border: 2px solid transparent; transition: border-color 0.2s, box-shadow 0.2s; }
+        .lampa-stats-card:focus { border-color: #3182CE; box-shadow: 0 0 10px rgba(49,130,206,0.5); outline: none; }
+        .lampa-stats-card-icon { font-size: 24px; color: #3182CE; }
+        .lampa-stats-card-content { flex-grow: 1; }
+        .lampa-stats-card-label { font-size: 12px; color: #a0aec0; text-transform: uppercase; }
+        .lampa-stats-card-value { font-size: 18px; font-weight: bold; margin-top: 2px; color: #fff; }
+        .lampa-stats-fav-genre-chart { width: 50px; height: 50px; border-radius: 50%; background: conic-gradient(#3182CE ${mock_data.fav_genre.percent}%, rgba(255,255,255,0.1) 0%); position: relative; }
+        .lampa-stats-fav-genre-percent { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 12px; font-weight: bold; color: #fff; }
+        .lampa-stats-actors { margin-bottom: 25px; }
+        .lampa-stats-actors-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #fff; }
+        .lampa-stats-carousel { overflow: hidden; position: relative; width: 100%; height: 210px; }
+        .lampa-stats-actor-card { width: 160px; text-align: center; margin-right: 15px; border: 2px solid transparent; border-radius: 8px; padding: 10px; background: rgba(255,255,255,0.02); transition: border-color 0.2s, background 0.2s, box-shadow 0.2s; }
+        .lampa-stats-actor-card:focus { border-color: #3182CE; box-shadow: 0 0 10px rgba(49,130,206,0.5); outline: none; background: rgba(255,255,255,0.05); }
+        .lampa-stats-actor-img { width: 100px; height: 100px; border-radius: 50%; object-fit: cover; margin: 0 auto 10px; display: block; border: 2px solid rgba(255,255,255,0.1); }
+        .lampa-stats-actor-card:focus .lampa-stats-actor-img { border-color: #3182CE; }
+        .lampa-stats-actor-name { font-size: 14px; font-weight: bold; color: #fff; margin-bottom: 2px; }
+        .lampa-stats-actor-info { font-size: 10px; color: #a0aec0; }
+        .lampa-stats-charts-grid { display: flex; gap: 15px; margin-bottom: 25px; }
+        .lampa-stats-chart-block { background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px; flex: 1; border: 2px solid transparent; }
+        .lampa-stats-chart-block:focus { border-color: #3182CE; outline: none; box-shadow: 0 0 10px rgba(49,130,206,0.3); }
+        .lampa-stats-chart-title { font-size: 14px; font-weight: bold; margin-bottom: 10px; color: #fff; }
+        .lampa-stats-chart-years { display: flex; align-items: flex-end; gap: 10px; height: 150px; padding-top: 20px; }
+        .lampa-stats-chart-year-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; }
+        .lampa-stats-chart-year-bar { background: #3182CE; border-radius: 4px; width: 30px; position: relative; transition: height 0.3s; }
+        .lampa-stats-chart-year-value { position: absolute; top: -20px; left: 50%; transform: translateX(-50%); font-size: 10px; color: #a0aec0; }
+        .lampa-stats-chart-year-label { font-size: 10px; color: #a0aec0; margin-top: 5px; }
+        .lampa-stats-chart-genres { display: flex; gap: 15px; align-items: center; }
+        .lampa-stats-chart-genres-pie { width: 100px; height: 100px; border-radius: 50%; position: relative; }
+        .lampa-stats-chart-genres-legend { flex-grow: 1; display: flex; flex-direction: column; gap: 5px; }
+        .lampa-stats-genre-legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #a0aec0; }
+        .lampa-stats-genre-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .lampa-stats-records-left { width: 25%; float: left; margin-top: 25px; background: rgba(255,255,255,0.02); padding: 10px; border-radius: 8px; }
+        .lampa-stats-records-title { font-size: 14px; font-weight: bold; margin-bottom: 10px; color: #fff; }
+        .lampa-stats-record-item { font-size: 12px; color: #a0aec0; margin-bottom: 5px; }
+    `;
+
+    // --- Налаштування плагіна ---
+    function setupSettings() {
+        if (!Lampa.SettingsApi || !Lampa.SettingsApi.addParam) return;
+        if (window.stats_settings_added) return;
+        window.stats_settings_added = true;
+
+        var targetComponent = 'interface';
+
+        // Встановлення значень за замовчуванням, якщо їх ще немає
+        if (Lampa.Storage.get('stats_collect') === null) Lampa.Storage.set('stats_collect', true);
+        if (Lampa.Storage.get('stats_menu_visible') === null) Lampa.Storage.set('stats_menu_visible', true);
+
+        // Додаємо розділ в налаштування інтерфейсу
+        Lampa.SettingsApi.addParam({
+            component: targetComponent,
+            param: { type: 'title' },
+            field: { name: 'Статистика (Stats Plugin)' }
+        });
+
+        // Перемикач: Збирати статистику
+        Lampa.SettingsApi.addParam({
+            component: targetComponent,
+            param: { name: 'stats_collect', type: 'trigger', default: true },
+            field: { name: 'Збирати статистику переглядів' }
+        });
+
+        // Перемикач: Відображати в меню
+        Lampa.SettingsApi.addParam({
+            component: targetComponent,
+            param: { name: 'stats_menu_visible', type: 'trigger', default: true },
+            field: { name: 'Відображати розділ у головному меню' },
+            onChange: function () {
+                updateMenuVisibility();
+            }
+        });
+    }
+
+    // --- Логіка відображення меню ---
+    function updateMenuVisibility() {
+        var isVisible = Lampa.Storage.get('stats_menu_visible', true);
+        var existingMenuItem = $('.menu__item[data-action="lampa_stats"]');
         
-        // 1. Додавання пункту в бокове меню Lampa вручну (через jQuery)
-        var addMenuItem = function () {
-            // Перевіряємо, чи немає вже нашого пункту, щоб уникнути дублів
-            if ($('.menu__item[data-action="lampa_stats"]').length) return;
+        if (!isVisible) {
+            existingMenuItem.remove();
+            return;
+        }
 
-            // HTML-структура пункту меню, як у самої Lampa
-            var menuItem = $('<li class="menu__item selector" data-action="lampa_stats">' +
-                '<div class="menu__ico">' +
-                    // Використовуємо красиву SVG-іконку графіка (Lampa віддає перевагу SVG)
-                    '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10"></path><path d="M12 20V4"></path><path d="M6 20V14"></path></svg>' +
-                '</div>' +
-                '<div class="menu__text">' + lang.menu_title + '</div>' +
-            '</li>');
+        if (existingMenuItem.length) return; // Якщо вже є, нічого не робимо
 
-            // 'hover:enter' — це подія Lampa для натискання кнопки ОК на пульті
-            menuItem.on('hover:enter click', function () {
-                // Закриваємо меню, якщо воно відкрите на мобільних/ТБ
-                if ($('body').hasClass('menu--open')) {
-                    $('body').removeClass('menu--open');
-                }
-                
-                // Відкриваємо нашу активність
-                Lampa.Activity.push({
-                    url: 'stats.view',
-                    title: lang.menu_title,
-                    component: 'lampa_stats_view',
-                    page: 1
-                });
+        var menuItem = $('<li class="menu__item selector" data-action="lampa_stats">' +
+            '<div class="menu__ico">' +
+                '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10"></path><path d="M12 20V4"></path><path d="M6 20V14"></path></svg>' +
+            '</div>' +
+            '<div class="menu__text">' + lang.menu_title + '</div>' +
+        '</li>');
+
+        menuItem.on('hover:enter click', function () {
+            if ($('body').hasClass('menu--open')) {
+                $('body').removeClass('menu--open');
+            }
+            Lampa.Activity.push({
+                url: 'stats.view',
+                title: lang.menu_title,
+                component: 'lampa_stats_view',
+                page: 1
             });
+        });
 
-            // Додаємо наш пункт у список
+        // Намагаємось вставити після вкладки "Історія", інакше в кінець списку
+        var historyItem = $('.menu__item[data-action="history"]');
+        if (historyItem.length) {
+            historyItem.after(menuItem);
+        } else if ($('.menu__list').length) {
             $('.menu__list').append(menuItem);
-        };
+        }
+    }
 
-        // Викликаємо функцію для додавання меню
-        addMenuItem();
-
-        // 2. Визначення компонента Activity (самого екрану)
+    // --- Визначення екрану Activity ---
+    function defineActivity() {
         Lampa.Activity.define('lampa_stats_view', {
             start: function () {
                 var render = Lampa.Template.get('activity_lampa_stats_view', {});
                 this.dom = render;
 
                 render.append('<div class="lampa-stats-title">' + lang.page_title + '</div>');
+
+                // Якщо збір вимкнено - показуємо попередження
+                if (!Lampa.Storage.get('stats_collect', true)) {
+                    render.append('<div style="color:#F56565; margin-bottom:20px;">Збір статистики наразі вимкнено в налаштуваннях Інтерфейсу.</div>');
+                }
 
                 var summary = $('<div class="lampa-stats-summary"></div>');
                 summary.append(this.renderSummaryCard(lang.total_time, lang.days_hours.replace('{days}', mock_data.total_time.days).replace('{hours}', mock_data.total_time.hours), '<i class="fa fa-clock-o"></i>'));
@@ -178,3 +308,31 @@
             }
         });
     }
+
+    // --- Запуск ---
+    function runInit() {
+        if (!document.getElementById('lampa-stats-style')) {
+            Lampa.Template.add('stats_plugin_styles', '<style id="lampa-stats-style">' + css_styles + '</style>');
+            $('body').append(Lampa.Template.get('stats_plugin_styles'));
+        }
+        setupSettings();
+        defineActivity();
+        
+        // Перевіряємо та додаємо пункт меню з затримками 
+        // для гарантованого відпрацювання на повільних пристроях чи веб-версіях
+        updateMenuVisibility();
+        setTimeout(updateMenuVisibility, 500);
+        setTimeout(updateMenuVisibility, 2000);
+    }
+
+    if (window.appready) {
+        runInit();
+    } else if (Lampa.Listener && Lampa.Listener.follow) {
+        Lampa.Listener.follow('app', function (e) {
+            if (e.type === 'ready') runInit();
+        });
+    } else {
+        setTimeout(runInit, 1500);
+    }
+
+})();
