@@ -373,312 +373,223 @@
      * ТРЕКЕР
      * ============================================================ */
     const Tracker = {
-        timer: null,
-        initialized: false,
-        currentMovie: null,
-        sessionId: '',
-        // для вбудованого: обмеження приросту wall-clock
-        lastTickAt: 0,
+    timer: null,
+    initialized: false,
+    currentMovie: null,
+    lastDebug: {
+        at: 0,
+        source: '-',
+        id: '-',
+        time: 0,
+        duration: 0,
+        added: 0,
+        movie: false,
+        collecting: false
+    },
 
-        init() {
-            if (this.initialized) return;
-            this.initialized = true;
+    init() {
+        if (this.initialized) return;
+        this.initialized = true;
 
-            // Старт / зовнішній плеєр
-            try {
-                if (Lampa.Player && Lampa.Player.listener) {
-                    Lampa.Player.listener.follow('start', (e) => {
-                        this.onPlayerStart(e);
-                    });
-
-                    // деякі збірки шлють 'external'
-                    Lampa.Player.listener.follow('external', (e) => {
-                        this.onPlayerStart(e);
-                    });
-
-                    Lampa.Player.listener.follow('destroy', () => {
-                        // не очищуємо currentMovie одразу —
-                        // Timeline може прийти трохи пізніше після VLC
-                        setTimeout(() => {
-                            this.currentMovie = null;
-                            this.sessionId = '';
-                        }, 3000);
-                    });
-                }
-            } catch (e) {
-                console.error('Статистика Lampa: Player listener', e);
-            }
-
-            // Timeline — головний канал для зовнішнього VLC
-            try {
-                if (Lampa.Timeline && Lampa.Timeline.listener) {
-                    Lampa.Timeline.listener.follow('update', (e) => {
-                        this.onTimelineUpdate(e);
-                    });
-                }
-            } catch (e) {
-                console.error('Статистика Lampa: Timeline listener', e);
-            }
-
-            // Після повернення з VLC WebView «прокидається»
-            try {
-                document.addEventListener('visibilitychange', () => {
-                    if (!document.hidden) {
-                        setTimeout(() => this.onAppResume(), 500);
-                    }
+        try {
+            if (Lampa.Player && Lampa.Player.listener) {
+                Lampa.Player.listener.follow('start', (e) => this.onPlayerStart(e));
+                Lampa.Player.listener.follow('ready', (e) => this.onPlayerStart(e));
+                Lampa.Player.listener.follow('external', (e) => this.onPlayerStart(e));
+                Lampa.Player.listener.follow('destroy', () => {
+                    setTimeout(() => {
+                        this.currentMovie = null;
+                    }, 5000);
                 });
-            } catch (e) {}
+            }
+        } catch (e) {}
 
-            try {
-                window.addEventListener('focus', () => {
-                    setTimeout(() => this.onAppResume(), 500);
+        try {
+            if (Lampa.PlayerVideo && Lampa.PlayerVideo.listener) {
+                Lampa.PlayerVideo.listener.follow('timeupdate', (e) => {
+                    this.onVideoTimeUpdate(e);
                 });
-            } catch (e) {}
-
-            // realtime лише для вбудованого
-            this.timer = setInterval(() => this.tick(), CONFIG.interval);
-        },
-
-        onPlayerStart(e) {
-            const movie = Media.normalizeFromPlayerData(e) || Current.getMovie();
-            if (movie) {
-                this.currentMovie = movie;
-                this.sessionId = Media.getId(movie);
             }
-        },
+        } catch (e) {}
 
-        onAppResume() {
-            if (!Settings.collecting()) return;
-
-            // спроба підхопити прогрес, якщо Timeline вже оновився
-            const movie = this.currentMovie || Current.getMovie();
-            if (!movie) return;
-
-            // додатково: якщо є video — tick сам підхопить
-            // якщо немає (зовнішній) — чекаємо Timeline.update
-        },
-
-        onTimelineUpdate(e) {
-            if (!Settings.collecting()) return;
-            if (!e || !e.data) return;
-
-            const road = e.data.road || e.data;
-            if (!road) return;
-
-            const time = Number(road.time);
-            const duration = Number(road.duration);
-            const percent = Number(road.percent);
-
-            if (!Number.isFinite(time) || time < 0) return;
-
-            let movie = this.currentMovie || Current.getMovie();
-
-            // якщо movie немає — пробуємо не оновлювати completed, але час
-            // без id надійно не додамо; вимагаємо movie
-            if (!movie) return;
-
-            const id = Media.getId(movie);
-
-            StatsDB.addWatchProgress(
-                id,
-                time,
-                Number.isFinite(duration) ? duration : 0
-            );
-
-            const doneByPercent =
-                Number.isFinite(percent) && percent / 100 >= CONFIG.completion;
-            const doneByTime =
-                Number.isFinite(duration) &&
-                duration > 0 &&
-                time / duration >= CONFIG.completion;
-
-            if (doneByPercent || doneByTime) {
-                this.markCompleted(movie, id);
+        try {
+            if (Lampa.Timeline && Lampa.Timeline.listener) {
+                Lampa.Timeline.listener.follow('update', (e) => this.onTimelineUpdate(e));
             }
-        },
+        } catch (e) {}
 
-        tick() {
-            if (!Settings.collecting()) return;
+        // періодичний poll — головний канал для вбудованого
+        this.timer = setInterval(() => this.tick(), 1000);
 
-            const movie = this.currentMovie || Current.getMovie();
-            if (!movie) return;
+        console.log('[stats] tracker init');
+    },
 
-            const video = Current.getVideoState();
-            if (!video) return; // зовнішній плеєр — тут нічого немає, ок
+    setDebug(partial) {
+        this.lastDebug = Object.assign({}, this.lastDebug, partial, { at: Date.now() });
+    },
 
-            const id = Media.getId(movie);
-            const now = Date.now();
+    onPlayerStart(e) {
+        const movie = Media.normalizeFromPlayerData(e) || Current.getMovie();
+        if (movie) this.currentMovie = movie;
 
-            // обмеження приросту wall-clock (анти-чит перемотуванням + захист)
-            const wallDelta = this.lastTickAt
-                ? Math.max(0, (now - this.lastTickAt) / 1000)
-                : CONFIG.interval / 1000;
-            this.lastTickAt = now;
-
-            const prev = StatsDB.getLastRecorded(id);
-            let time = video.time;
-
-            // якщо стрибок часу більший за wall-clock + запас — ріжемо
-            if (time > prev) {
-                const rawDelta = time - prev;
-                const capped = Math.min(rawDelta, wallDelta + 2);
-                time = prev + capped;
+        // іноді card лежить глибше
+        try {
+            if (!this.currentMovie && e && e.card) this.currentMovie = e.card;
+            if (!this.currentMovie && e && e.object && e.object.movie) {
+                this.currentMovie = e.object.movie;
             }
+        } catch (err) {}
 
-            StatsDB.addWatchProgress(id, time, video.duration);
+        this.setDebug({
+            source: 'player-start',
+            movie: !!this.currentMovie,
+            collecting: Settings.collecting()
+        });
+    },
 
-            if (video.time / video.duration >= CONFIG.completion) {
-                this.markCompleted(movie, id);
-            }
-        },
+    onVideoTimeUpdate(e) {
+        if (!Settings.collecting()) return;
 
-        markCompleted(movie, id) {
-            if (!id || StatsDB.data.completed[id]) return;
+        const time = Number(e && (e.current !== undefined ? e.current : e.time));
+        const duration = Number(e && e.duration);
 
-            StatsDB.data.completed[id] = { date: Date.now() };
+        if (!Number.isFinite(time) || time < 0) return;
 
-            if (Media.isEpisode(movie)) {
-                StatsDB.data.episodes_watched++;
-            } else {
-                StatsDB.data.movies_watched++;
-            }
+        const movie = this.currentMovie || Current.getMovie();
+        const id = movie ? Media.getId(movie) : 'session:video';
 
-            StatsDB.save();
+        const added = StatsDB.addWatchProgress(
+            id,
+            time,
+            Number.isFinite(duration) ? duration : 0
+        );
+
+        this.setDebug({
+            source: 'video-timeupdate',
+            id: id,
+            time: time,
+            duration: duration || 0,
+            added: added,
+            movie: !!movie,
+            collecting: true
+        });
+
+        if (movie && Number.isFinite(duration) && duration > 0 && time / duration >= CONFIG.completion) {
+            this.markCompleted(movie, id);
         }
-    };
+    },
+
+    onTimelineUpdate(e) {
+        if (!Settings.collecting()) return;
+        if (!e || !e.data) return;
+
+        const hash = e.data.hash;
+        const road = e.data.road || e.data;
+        if (!road) return;
+
+        const time = Number(road.time);
+        const duration = Number(road.duration);
+        const percent = Number(road.percent);
+
+        if (!Number.isFinite(time) || time < 0) return;
+
+        const movie = this.currentMovie || Current.getMovie();
+        // важливо: навіть без movie рахуємо по hash
+        const id = movie ? Media.getId(movie) : ('hash:' + String(hash || 'unknown'));
+
+        const added = StatsDB.addWatchProgress(
+            id,
+            time,
+            Number.isFinite(duration) ? duration : 0
+        );
+
+        this.setDebug({
+            source: 'timeline',
+            id: id,
+            time: time,
+            duration: duration || 0,
+            added: added,
+            movie: !!movie,
+            collecting: true
+        });
+
+        const done =
+            (Number.isFinite(percent) && percent >= CONFIG.completion * 100) ||
+            (Number.isFinite(duration) && duration > 0 && time / duration >= CONFIG.completion);
+
+        if (done && movie) {
+            this.markCompleted(movie, Media.getId(movie));
+        }
+    },
+
+    tick() {
+        const collecting = Settings.collecting();
+        if (!collecting) {
+            this.setDebug({ collecting: false, source: 'tick-off' });
+            return;
+        }
+
+        const movie = this.currentMovie || Current.getMovie();
+        const video = Current.getVideoState();
+
+        if (!video) {
+            this.setDebug({
+                source: 'tick-no-video',
+                movie: !!movie,
+                collecting: true,
+                time: 0,
+                duration: 0,
+                added: 0
+            });
+            return;
+        }
+
+        const id = movie ? Media.getId(movie) : 'session:tick';
+        const added = StatsDB.addWatchProgress(id, video.time, video.duration);
+
+        this.setDebug({
+            source: 'tick',
+            id: id,
+            time: video.time,
+            duration: video.duration,
+            added: added,
+            movie: !!movie,
+            collecting: true
+        });
+
+        if (movie && video.duration > 0 && video.time / video.duration >= CONFIG.completion) {
+            this.markCompleted(movie, Media.getId(movie));
+        }
+    },
+
+    markCompleted(movie, id) {
+        if (!id || StatsDB.data.completed[id]) return;
+
+        StatsDB.data.completed[id] = { date: Date.now() };
+        if (Media.isEpisode(movie)) StatsDB.data.episodes_watched++;
+        else StatsDB.data.movies_watched++;
+        StatsDB.save();
+    }
+};
 
     /* ============================================================
      * ЕКРАН СТАТИСТИКИ
      * ============================================================ */
-    const StatsActivity = {
-        start() {
-            const render = $('<div class="lampa-stats-view"></div>');
-            this.dom = render;
-            this.buildContent(render);
-            return render;
-        },
+   var d = Tracker.lastDebug || {};
+var dbg =
+    'sec=' + (StatsDB.data.seconds_watched || 0) +
+    ' | src=' + (d.source || '-') +
+    ' | t=' + Math.floor(d.time || 0) +
+    '/' + Math.floor(d.duration || 0) +
+    ' | movie=' + (d.movie ? 'Y' : 'N') +
+    ' | collect=' + (d.collecting ? 'Y' : 'N') +
+    ' | add=' + (d.added || 0);
 
-        buildContent(container) {
-            container.empty();
-
-            container.append(
-                '<div class="lampa-stats-title">' + LANG.page_title + '</div>'
-            );
-
-            if (!Settings.collecting()) {
-                container.append(
-                    '<div class="lampa-stats-disabled">' +
-                    LANG.disabled_text +
-                    '</div>'
-                );
-            }
-
-            const hasData =
-                StatsDB.data.seconds_watched > 0 ||
-                StatsDB.data.movies_watched > 0 ||
-                StatsDB.data.episodes_watched > 0;
-
-            if (!hasData) {
-                container.append(this.renderEmptyState());
-            } else {
-                container.append(this.renderSummary());
-                container.append(this.renderResetButton());
-            }
-        },
-
-        refresh() {
-            if (this.dom) {
-                this.buildContent(this.dom);
-                this.onfocus();
-            }
-        },
-
-        renderEmptyState() {
-            return $(
-                '<div class="lampa-stats-empty selector">' +
-                LANG.empty_text +
-                '</div>'
-            );
-        },
-
-        renderSummary() {
-            const summary = $('<div class="lampa-stats-summary"></div>');
-
-            summary.append(
-                this.renderCard(
-                    LANG.total_time,
-                    StatsDB.getTimeString(),
-                    '<i class="fa fa-clock-o"></i>'
-                )
-            );
-            summary.append(
-                this.renderCard(
-                    LANG.movies,
-                    StatsDB.data.movies_watched || 0,
-                    '<i class="fa fa-film"></i>'
-                )
-            );
-            summary.append(
-                this.renderCard(
-                    LANG.episodes,
-                    StatsDB.data.episodes_watched || 0,
-                    '<i class="fa fa-list"></i>'
-                )
-            );
-
-            return summary;
-        },
-
-        renderCard(label, value, icon) {
-            const card = $('<div class="lampa-stats-card selector"></div>');
-            card.append('<div class="lampa-stats-card-icon">' + icon + '</div>');
-
-            const content = $('<div class="lampa-stats-card-content"></div>');
-            content.append(
-                '<div class="lampa-stats-card-label">' + label + '</div>'
-            );
-            content.append(
-                '<div class="lampa-stats-card-value">' + value + '</div>'
-            );
-            card.append(content);
-            return card;
-        },
-
-        renderResetButton() {
-            const button = $(
-                '<div class="lampa-stats-reset selector">' + LANG.reset + '</div>'
-            );
-
-            button.on('hover:enter click', function () {
-                if (confirm(LANG.reset_confirm)) {
-                    StatsDB.reset();
-                    Lampa.Noty.show(LANG.reset_done);
-                    StatsActivity.refresh();
-                }
-            });
-
-            return button;
-        },
-
-        onfocus() {
-            if (!this.dom) return;
-            try {
-                Lampa.Controller.collectionSet(this.dom);
-                Lampa.Controller.collectionFocus(false, this.dom);
-            } catch (e) {
-                try {
-                    Lampa.Focus.set({ element: this.dom.find('.selector') });
-                } catch (e2) {}
-            }
-        },
-
-        destroy() {
-            if (this.dom) {
-                this.dom.empty().remove();
-                this.dom = null;
-            }
-        }
-    };
+container.append(
+    '<div style="opacity:0.45;font-size:13px;margin-bottom:16px;word-break:break-all;">' +
+    dbg +
+    '</div>'
+);
 
     /* ============================================================
      * МЕНЮ
