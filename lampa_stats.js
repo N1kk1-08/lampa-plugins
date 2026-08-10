@@ -1,12 +1,12 @@
 (function () {
     'use strict';
 
-    // Змінено версію на v3 для уникнення конфліктів при оновленні
-    if (window.lampa_stats_plugin_v3) return;
-    window.lampa_stats_plugin_v3 = true;
+    // Змінено версію на v4 для уникнення конфліктів при оновленні
+    if (window.lampa_stats_plugin_v4) return;
+    window.lampa_stats_plugin_v4 = true;
 
     // --- Локалізація (Українська) ---
-    var lang = {
+    const LANG = {
         menu_title: 'Статистика',
         page_title: 'МОЯ СТАТИСТИКА ПЕРЕГЛЯДІВ',
         total_time: 'СУМАРНИЙ ЧАС',
@@ -23,219 +23,401 @@
     };
 
     // --- Локальна База Даних Плагіна ---
-    var StatsDB = {
-        data: Lampa.Storage.get('lampa_personal_stats', {
-            seconds_watched: 0,
-            movies_watched: 0,
-            episodes_watched: 0
-        }),
-        save: function() {
+    const DEFAULT_STATS = {
+        seconds_watched: 0,
+        movies_watched: 0,
+        episodes_watched: 0
+    };
+
+    const StatsDB = {
+        data: Lampa.Storage.get('lampa_personal_stats', DEFAULT_STATS),
+
+        save() {
+            // Валідація даних перед збереженням
+            for (const key in DEFAULT_STATS) {
+                if (typeof this.data[key] !== 'number' || this.data[key] < 0) {
+                    this.data[key] = DEFAULT_STATS[key];
+                }
+            }
             Lampa.Storage.set('lampa_personal_stats', this.data);
         },
-        getFormattedTime: function() {
-            var totalMins = Math.floor((this.data.seconds_watched || 0) / 60);
-            var days = Math.floor(totalMins / (24 * 60));
-            var hours = Math.floor((totalMins % (24 * 60)) / 60);
-            var mins = totalMins % 60;
-            return { days: days, hours: hours, mins: mins };
+
+        getFormattedTime() {
+            const totalMins = Math.floor((this.data.seconds_watched || 0) / 60);
+            const days = Math.floor(totalMins / (24 * 60));
+            const hours = Math.floor((totalMins % (24 * 60)) / 60);
+            const mins = totalMins % 60;
+            return { days, hours, mins };
         }
     };
 
-    // --- Універсальний Трекер (Для внутрішніх та зовнішніх плеєрів) ---
-    var view_cache = {};
-    var stats_initialized = false;
+    // --- Універсальний Трекер ---
+    const Tracker = {
+        view_cache: {},
+        initialized: false,
 
-    function initTracker() {
-        if (stats_initialized) return;
-        stats_initialized = true;
+        init() {
+            if (this.initialized) return;
+            this.initialized = true;
 
-        var initial_views = Lampa.Storage.get('file_view', {});
-        var now = Date.now();
-        for(var h in initial_views) {
-            view_cache[h] = { time: initial_views[h].time || 0, ts: now };
-        }
-
-        var origSet = Lampa.Storage.set;
-        Lampa.Storage.set = function (name, value) {
-            if (name === 'file_view' && Lampa.Storage.get('stats_collect', true)) {
-                processFileViewUpdate(value);
+            const initialViews = Lampa.Storage.get('file_view', {});
+            const now = Date.now();
+            for (const hash in initialViews) {
+                this.view_cache[hash] = {
+                    time: initialViews[hash].time || 0,
+                    ts: now
+                };
             }
-            origSet.apply(this, arguments);
-        };
-    }
 
-    function processFileViewUpdate(new_views) {
-        var now = Date.now();
-        for (var hash in new_views) {
-            var curr = new_views[hash];
-            var cached = view_cache[hash];
+            const origSet = Lampa.Storage.set;
+            Lampa.Storage.set = (name, value) => {
+                if (name === 'file_view' && Lampa.Storage.get('stats_collect', true)) {
+                    this.processFileViewUpdate(value);
+                }
+                origSet(name, value);
+            };
+        },
 
-            if (!cached) {
-                view_cache[hash] = { time: curr.time || 0, ts: now };
-            } else if (curr.time !== cached.time) {
-                var video_delta = (curr.time || 0) - cached.time;
-                var real_delta = Math.floor((now - cached.ts) / 1000);
+        processFileViewUpdate(newViews) {
+            const now = Date.now();
+            for (const hash in newViews) {
+                const curr = newViews[hash];
+                const cached = this.view_cache[hash];
 
-                if (video_delta > 0) {
-                    var actual_watched = Math.min(video_delta, real_delta + 15);
+                if (!cached) {
+                    this.view_cache[hash] = { time: curr.time || 0, ts: now };
+                    continue;
+                }
 
-                    if (actual_watched > 0) {
-                        StatsDB.data.seconds_watched = (StatsDB.data.seconds_watched || 0) + actual_watched;
-                        
-                        var duration = curr.duration || 1;
-                        var percent_now = (curr.time || 0) / duration;
-                        var percent_before = cached.time / duration;
+                if (curr.time === cached.time) continue;
 
-                        if (percent_now >= 0.85 && percent_before < 0.85) {
-                            var is_tv = false;
-                            var active = Lampa.Activity.active();
-                            if (active && active.movie && active.movie.name) is_tv = true;
-                            
-                            if (is_tv) StatsDB.data.episodes_watched = (StatsDB.data.episodes_watched || 0) + 1;
-                            else StatsDB.data.movies_watched = (StatsDB.data.movies_watched || 0) + 1;
-                        }
-                        
-                        StatsDB.save();
+                const videoDelta = (curr.time || 0) - cached.time;
+                const realDelta = Math.floor((now - cached.ts) / 1000);
+
+                if (videoDelta <= 0) {
+                    this.view_cache[hash] = { time: curr.time || 0, ts: now };
+                    continue;
+                }
+
+                const actualWatched = Math.min(videoDelta, realDelta + 15);
+                if (actualWatched <= 0) {
+                    this.view_cache[hash] = { time: curr.time || 0, ts: now };
+                    continue;
+                }
+
+                StatsDB.data.seconds_watched = (StatsDB.data.seconds_watched || 0) + actualWatched;
+
+                const duration = curr.duration || 1;
+                const percentNow = (curr.time || 0) / duration;
+                const percentBefore = cached.time / duration;
+
+                if (percentNow >= 0.85 && percentBefore < 0.85) {
+                    const isTv = this.isTvShow();
+                    if (isTv) {
+                        StatsDB.data.episodes_watched = (StatsDB.data.episodes_watched || 0) + 1;
+                    } else {
+                        StatsDB.data.movies_watched = (StatsDB.data.movies_watched || 0) + 1;
                     }
                 }
-                view_cache[hash] = { time: curr.time || 0, ts: now };
+
+                StatsDB.save();
+                this.view_cache[hash] = { time: curr.time || 0, ts: now };
             }
+        },
+
+        isTvShow() {
+            const active = Lampa.Activity.active();
+            return !!(active && active.movie && active.movie.name);
         }
-    }
+    };
 
     // --- Налаштування плагіна ---
-    function setupSettings() {
-        if (!Lampa.SettingsApi || !Lampa.SettingsApi.addParam) return;
-        if (window.stats_settings_added) return;
-        window.stats_settings_added = true;
+    const Settings = {
+        added: false,
 
-        var targetComponent = 'interface';
-        if (Lampa.Storage.get('stats_collect') === null) Lampa.Storage.set('stats_collect', true);
-        if (Lampa.Storage.get('stats_menu_visible') === null) Lampa.Storage.set('stats_menu_visible', true);
+        setup() {
+            if (!Lampa.SettingsApi || !Lampa.SettingsApi.addParam) return;
+            if (this.added) return;
+            this.added = true;
 
-        Lampa.SettingsApi.addParam({ component: targetComponent, param: { type: 'title' }, field: { name: 'Статистика (Stats Plugin)' } });
-        Lampa.SettingsApi.addParam({ component: targetComponent, param: { name: 'stats_collect', type: 'trigger', default: true }, field: { name: 'Збирати статистику переглядів' } });
-        Lampa.SettingsApi.addParam({ component: targetComponent, param: { name: 'stats_menu_visible', type: 'trigger', default: true }, field: { name: 'Відображати розділ у головному меню' }, onChange: function () { updateMenuVisibility(); } });
-    }
+            const targetComponent = 'interface';
+            if (Lampa.Storage.get('stats_collect') === null) Lampa.Storage.set('stats_collect', true);
+            if (Lampa.Storage.get('stats_menu_visible') === null) Lampa.Storage.set('stats_menu_visible', true);
 
-    // --- Логіка відображення меню (З ФІКСОМ ПЕРЕЗАВАНТАЖЕННЯ) ---
-    function updateMenuVisibility() {
-        var isVisible = Lampa.Storage.get('stats_menu_visible', true);
-        var existingMenuItem = $('.menu__item[data-action="lampa_stats"]');
-        
-        if (!isVisible) {
-            existingMenuItem.remove();
-            return;
+            Lampa.SettingsApi.addParam({
+                component: targetComponent,
+                param: { type: 'title' },
+                field: { name: 'Статистика (Stats Plugin)' }
+            });
+
+            Lampa.SettingsApi.addParam({
+                component: targetComponent,
+                param: { name: 'stats_collect', type: 'trigger', default: true },
+                field: { name: 'Збирати статистику переглядів' }
+            });
+
+            Lampa.SettingsApi.addParam({
+                component: targetComponent,
+                param: { name: 'stats_menu_visible', type: 'trigger', default: true },
+                field: { name: 'Відображати розділ у головному меню' },
+                onChange: () => Menu.updateVisibility()
+            });
         }
-        if (existingMenuItem.length) return; 
-        if ($('.menu__list').length === 0) return; // Меню ще не відрендерене Лампою
+    };
 
-        var menuItem = $('<li class="menu__item selector" data-action="lampa_stats">' +
-            '<div class="menu__ico">' +
-                '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10"></path><path d="M12 20V4"></path><path d="M6 20V14"></path></svg>' +
-            '</div>' +
-            '<div class="menu__text">' + lang.menu_title + '</div>' +
-        '</li>');
+    // --- Логіка відображення меню ---
+    const Menu = {
+        intervalId: null,
 
-        menuItem.on('hover:enter click', function () {
-            if ($('body').hasClass('menu--open')) $('body').removeClass('menu--open');
-            Lampa.Activity.push({ url: 'stats.view', title: lang.menu_title, component: 'lampa_stats_view', page: 1 });
-        });
+        startPolling() {
+            if (this.intervalId) return;
+            const check = () => {
+                this.updateVisibility();
+                this.intervalId = requestAnimationFrame(check);
+            };
+            this.intervalId = requestAnimationFrame(check);
+        },
 
-        var historyItem = $('.menu__item[data-action="history"]');
-        if (historyItem.length) historyItem.after(menuItem);
-        else $('.menu__list').append(menuItem);
-    }
+        stopPolling() {
+            if (this.intervalId) {
+                cancelAnimationFrame(this.intervalId);
+                this.intervalId = null;
+            }
+        },
+
+        updateVisibility() {
+            const isVisible = Lampa.Storage.get('stats_menu_visible', true);
+            const existingItem = $('.menu__item[data-action="lampa_stats"]');
+            
+            if (!isVisible) {
+                existingItem.remove();
+                return;
+            }
+            if (existingItem.length) return;
+            if ($('.menu__list').length === 0) return;
+
+            const menuItem = $(`<li class="menu__item selector" data-action="lampa_stats">
+                <div class="menu__ico">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 20V10"></path>
+                        <path d="M12 20V4"></path>
+                        <path d="M6 20V14"></path>
+                    </svg>
+                </div>
+                <div class="menu__text">${LANG.menu_title}</div>
+            </li>`);
+
+            menuItem.on('hover:enter click', () => {
+                if ($('body').hasClass('menu--open')) {
+                    $('body').removeClass('menu--open');
+                }
+                Lampa.Activity.push({
+                    url: 'stats.view',
+                    title: LANG.menu_title,
+                    component: 'lampa_stats_view',
+                    page: 1
+                });
+            });
+
+            const historyItem = $('.menu__item[data-action="history"]');
+            if (historyItem.length) {
+                historyItem.after(menuItem);
+            } else {
+                $('.menu__list').append(menuItem);
+            }
+        }
+    };
 
     // --- Визначення екрану Activity ---
-    function defineActivity() {
-        Lampa.Activity.define('lampa_stats_view', {
-            start: function () {
-                var render = Lampa.Template.get('activity_lampa_stats_view', {});
-                this.dom = render;
+    const StatsActivity = {
+        start() {
+            const render = Lampa.Template.get('activity_lampa_stats_view', {});
+            this.dom = render;
 
-                render.append('<div class="lampa-stats-title">' + lang.page_title + '</div>');
+            render.append(`<div class="lampa-stats-title">${LANG.page_title}</div>`);
 
-                if (!Lampa.Storage.get('stats_collect', true)) {
-                    render.append('<div style="color:#F56565; margin-bottom:20px;">Збір статистики наразі вимкнено в налаштуваннях Інтерфейсу.</div>');
-                }
-
-                if ((StatsDB.data.seconds_watched || 0) === 0) {
-                    var emptyBlock = $('<div class="lampa-stats-empty selector" tabindex="0">' + lang.empty_text + '</div>');
-                    render.append(emptyBlock);
-                } else {
-                    var timeData = StatsDB.getFormattedTime();
-                    var timeString = lang.days_hours.replace('{days}', timeData.days).replace('{hours}', timeData.hours).replace('{minutes}', timeData.mins);
-                    var watchedString = lang.movies_episodes.replace('{movies}', StatsDB.data.movies_watched || 0).replace('{episodes}', StatsDB.data.episodes_watched || 0);
-
-                    var summary = $('<div class="lampa-stats-summary"></div>');
-                    summary.append(this.renderSummaryCard(lang.total_time, timeString, '<i class="fa fa-clock-o"></i>'));
-                    summary.append(this.renderSummaryCard(lang.watched, watchedString, '<i class="fa fa-film"></i>'));
-                    render.append(summary);
-                    
-                    var demoNotice = $('<div style="color:#a0aec0; margin-top:20px; font-size:14px; text-align:center;">* Графіки нижче використовують демонстраційні дані для тестування дизайну *</div>');
-                    render.append(demoNotice);
-                }
-
-                render.addClass('lampa-stats-view');
-                render.onfocus = this.onfocus.bind(this);
-            },
-            
-            renderSummaryCard: function (label, value, iconHtml) {
-                var card = $('<div class="lampa-stats-card selector" tabindex="0"></div>');
-                card.append('<div class="lampa-stats-card-icon">' + iconHtml + '</div>');
-                var content = $('<div class="lampa-stats-card-content"></div>');
-                content.append('<div class="lampa-stats-card-label">' + label + '</div>');
-                content.append('<div class="lampa-stats-card-value">' + value + '</div>');
-                card.append(content);
-                return card;
-            },
-
-            onfocus: function () {
-                var render = this.dom;
-                Lampa.Focus.set({ element: render.find('.selector') });
-            },
-            
-            destroy: function () {
-                if (this.dom) this.dom.empty().remove();
+            if (!Lampa.Storage.get('stats_collect', true)) {
+                render.append('<div style="color:#F56565; margin-bottom:20px;">Збір статистики наразі вимкнено в налаштуваннях Інтерфейсу.</div>');
             }
-        });
-    }
+
+            if ((StatsDB.data.seconds_watched || 0) === 0) {
+                render.append(this.renderEmptyState());
+            } else {
+                render.append(this.renderSummary());
+                render.append(this.renderDemoNotice());
+            }
+
+            render.addClass('lampa-stats-view');
+            render.onfocus = this.onfocus.bind(this);
+        },
+
+        renderEmptyState() {
+            return $(`<div class="lampa-stats-empty selector" tabindex="0">${LANG.empty_text}</div>`);
+        },
+
+        renderSummary() {
+            const timeData = StatsDB.getFormattedTime();
+            const timeString = LANG.days_hours
+                .replace('{days}', timeData.days)
+                .replace('{hours}', timeData.hours)
+                .replace('{minutes}', timeData.mins);
+
+            const watchedString = LANG.movies_episodes
+                .replace('{movies}', StatsDB.data.movies_watched || 0)
+                .replace('{episodes}', StatsDB.data.episodes_watched || 0);
+
+            const summary = $('<div class="lampa-stats-summary"></div>');
+            summary.append(this.renderSummaryCard(LANG.total_time, timeString, '<i class="fa fa-clock-o"></i>'));
+            summary.append(this.renderSummaryCard(LANG.watched, watchedString, '<i class="fa fa-film"></i>'));
+            return summary;
+        },
+
+        renderSummaryCard(label, value, iconHtml) {
+            const card = $('<div class="lampa-stats-card selector" tabindex="0"></div>');
+            card.append(`<div class="lampa-stats-card-icon">${iconHtml}</div>`);
+            const content = $('<div class="lampa-stats-card-content"></div>');
+            content.append(`<div class="lampa-stats-card-label">${label}</div>`);
+            content.append(`<div class="lampa-stats-card-value">${value}</div>`);
+            card.append(content);
+            return card;
+        },
+
+        renderDemoNotice() {
+            return $('<div style="color:#a0aec0; margin-top:20px; font-size:14px; text-align:center;">* Графіки нижче використовують демонстраційні дані для тестування дизайну *</div>');
+        },
+
+        onfocus() {
+            const render = this.dom;
+            Lampa.Focus.set({ element: render.find('.selector') });
+        },
+
+        destroy() {
+            if (this.dom) {
+                this.dom.empty().remove();
+            }
+        }
+    };
 
     // --- CSS Стилі ---
-    var css_styles = `
-        .lampa-stats-view { padding: 20px; color: #fff; font-family: sans-serif; }
-        .lampa-stats-title { font-size: 24px; font-weight: bold; margin-bottom: 20px; color: #fff; }
-        .lampa-stats-summary { display: flex; gap: 15px; margin-bottom: 25px; }
-        .lampa-stats-card { background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; flex: 1; display: flex; align-items: center; gap: 10px; border: 2px solid transparent; transition: border-color 0.2s, box-shadow 0.2s; }
-        .lampa-stats-card:focus { border-color: #3182CE; box-shadow: 0 0 10px rgba(49,130,206,0.5); outline: none; background: rgba(255,255,255,0.1); }
-        .lampa-stats-card-icon { font-size: 24px; color: #3182CE; }
-        .lampa-stats-card-content { flex-grow: 1; }
-        .lampa-stats-card-label { font-size: 12px; color: #a0aec0; text-transform: uppercase; }
-        .lampa-stats-card-value { font-size: 18px; font-weight: bold; margin-top: 2px; color: #fff; }
-        .lampa-stats-empty { background: rgba(255,255,255,0.02); border-radius: 8px; padding: 40px; text-align: center; color: #a0aec0; font-size: 16px; margin-bottom: 20px; border: 2px solid transparent; }
-        .lampa-stats-empty:focus { border-color: #3182CE; outline: none; }
+    const CSS_STYLES = `
+        :root {
+            --stats-bg: rgba(255,255,255,0.05);
+            --stats-bg-empty: rgba(255,255,255,0.02);
+            --stats-border-focus: #3182CE;
+            --stats-shadow-focus: rgba(49,130,206,0.5);
+            --stats-text: #fff;
+            --stats-text-secondary: #a0aec0;
+            --stats-error: #F56565;
+        }
+
+        .lampa-stats-view {
+            padding: 20px;
+            color: var(--stats-text);
+            font-family: sans-serif;
+        }
+
+        .lampa-stats-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: var(--stats-text);
+        }
+
+        .lampa-stats-summary {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .lampa-stats-card {
+            background: var(--stats-bg);
+            padding: 15px;
+            border-radius: 8px;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border: 2px solid transparent;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .lampa-stats-card:focus {
+            border-color: var(--stats-border-focus);
+            box-shadow: 0 0 10px var(--stats-shadow-focus);
+            outline: none;
+            background: rgba(255,255,255,0.1);
+        }
+
+        .lampa-stats-card-icon {
+            font-size: 24px;
+            color: var(--stats-border-focus);
+        }
+
+        .lampa-stats-card-content {
+            flex-grow: 1;
+        }
+
+        .lampa-stats-card-label {
+            font-size: 12px;
+            color: var(--stats-text-secondary);
+            text-transform: uppercase;
+        }
+
+        .lampa-stats-card-value {
+            font-size: 18px;
+            font-weight: bold;
+            margin-top: 2px;
+            color: var(--stats-text);
+        }
+
+        .lampa-stats-empty {
+            background: var(--stats-bg-empty);
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            color: var(--stats-text-secondary);
+            font-size: 16px;
+            margin-bottom: 20px;
+            border: 2px solid transparent;
+        }
+
+        .lampa-stats-empty:focus {
+            border-color: var(--stats-border-focus);
+            outline: none;
+        }
     `;
 
     // --- Запуск ---
-    function runInit() {
-        if (!document.getElementById('lampa-stats-style')) {
-            Lampa.Template.add('stats_plugin_styles', '<style id="lampa-stats-style">' + css_styles + '</style>');
-            $('body').append(Lampa.Template.get('stats_plugin_styles'));
+    function init() {
+        try {
+            if (!Lampa.Template || !Lampa.SettingsApi || !Lampa.Activity) {
+                console.warn('Lampa Stats Plugin: Required APIs not available');
+                return;
+            }
+
+            if (!document.getElementById('lampa-stats-style')) {
+                Lampa.Template.add('stats_plugin_styles', `<style id="lampa-stats-style">${CSS_STYLES}</style>`);
+                $('body').append(Lampa.Template.get('stats_plugin_styles'));
+            }
+
+            Settings.setup();
+            Tracker.init();
+            Lampa.Activity.define('lampa_stats_view', StatsActivity);
+            Menu.startPolling();
+
+        } catch (err) {
+            console.error('Lampa Stats Plugin init error:', err);
         }
-        setupSettings();
-        initTracker(); 
-        defineActivity();
-        
-        // Перевіряємо наявність меню кожну секунду (вирішує проблему з перезавантаженням)
-        setInterval(updateMenuVisibility, 1000);
     }
 
-    if (window.appready) runInit();
-    else if (Lampa.Listener && Lampa.Listener.follow) {
-        Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') runInit(); });
+    if (window.appready) {
+        init();
+    } else if (Lampa.Listener && Lampa.Listener.follow) {
+        Lampa.Listener.follow('app', (e) => {
+            if (e.type === 'ready') init();
+        });
     } else {
-        setTimeout(runInit, 1500);
+        setTimeout(init, 1500);
     }
 
 })();
