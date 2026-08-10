@@ -81,18 +81,27 @@
     };
 
     function isGarbageGenre(name) {
-        if (!name || typeof name !== 'string') return true;
-        var p = name.trim();
-        if (!p) return true;
-        if (/^\d{1,2}:\d{2}$/.test(p)) return true;
-        if (/\d/.test(p) && /(хв|год|min|сек|сезон|season|ep|runtime)/i.test(p)) return true;
-        if (/^\d{3,4}p$/i.test(p)) return true;
-        if (/^(4k|uhd|hdr|dv|3d|cam|ts|hdrip|webrip|web-dl)$/i.test(p)) return true;
-        if (/^\d+$/.test(p)) return true;
-        if (/^(19|20)\d{2}$/.test(p)) return true;
-        if (p.length < 2 || p.length > 48) return true;
-        return false;
-    }
+    if (!name || typeof name !== 'string') return true;
+    var p = name.trim();
+    if (!p) return true;
+    
+    // Відсікаємо таймкоди типу 01:25
+    if (/^\d{1,2}:\d{2}$/.test(p)) return true;
+    
+    // Відсікаємо тривалість, сезони та серії (тепер і українською)
+    if (/\d/.test(p) && /(хв|год|min|сек|сезон|season|ep|runtime|серія|серії|серій|епізод)/i.test(p)) return true;
+    
+    // Відсікаємо технічну інформацію (якість, роки тощо)
+    if (/^\d{3,4}p$/i.test(p)) return true;
+    if (/^(4k|uhd|hdr|dv|3d|cam|ts|hdrip|webrip|web-dl)$/i.test(p)) return true;
+    if (/^\d+$/.test(p)) return true;
+    if (/^(19|20)\d{2}$/.test(p)) return true;
+    
+    // Занадто короткі або довгі рядки
+    if (p.length < 2 || p.length > 48) return true;
+    
+    return false;
+}
 
     function posterUrl(path) {
         if (!path) return '';
