@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v97) return;
-    window.lampa_ukrainian_stats_v97 = true;
+    if (window.lampa_ukrainian_stats_v98) return;
+    window.lampa_ukrainian_stats_v98 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -94,11 +94,46 @@
         return false;
     }
 
-    function posterUrl(path, size) {
+    function posterUrl(path) {
         if (!path) return '';
         var s = String(path);
         if (s.indexOf('http') === 0) return s;
-        return (size || CONFIG.tmdb_poster) + s;
+        return CONFIG.tmdb_poster + s;
+    }
+
+    function openActorPage(a) {
+        var id = a && a.id;
+        if (id && /^\d+$/.test(String(id))) {
+            try {
+                Lampa.Activity.push({
+                    url: 'person/' + id,
+                    title: a.name || '',
+                    component: 'actor',
+                    id: id,
+                    source: 'tmdb',
+                    page: 1
+                });
+                return;
+            } catch (e) {}
+            try {
+                Lampa.Activity.push({
+                    url: 'person/' + id,
+                    title: a.name || '',
+                    component: 'person',
+                    id: id,
+                    source: 'tmdb',
+                    page: 1
+                });
+                return;
+            } catch (e2) {}
+        }
+        Lampa.Activity.push({
+            url: 'stats_actor',
+            title: (a && a.name) || LANG.actor_works,
+            component: CONFIG.activity_actor,
+            actor_key: (a && (a._key || String(a.id || a.name))) || '',
+            page: 1
+        });
     }
 
     /* ===================== CardCache ===================== */
@@ -183,7 +218,6 @@
             return String(id) + ':' + String(season) + ':' + String(episode);
         },
 
-        // id без сезону/серії — для «робіт» актора
         getBaseId: function (movie) {
             if (!movie) return 'unknown';
             return String(movie.id || movie.tmdb_id || movie.kinopoisk_id || movie.imdb_id ||
@@ -400,12 +434,15 @@
                     var name = (el.textContent || '').trim();
                     if (!name) return;
                     var img = '';
+                    var personId = null;
                     var root = el.closest('.full-person, .person, .card, .full-persons__item');
                     if (root) {
                         var im = root.querySelector('img');
                         if (im) img = im.getAttribute('src') || im.getAttribute('data-src') || '';
+                        var dataId = root.getAttribute('data-id') || root.getAttribute('data-person') || '';
+                        if (dataId && /^\d+$/.test(dataId)) personId = dataId;
                     }
-                    result.actors.push({ id: name, name: name, profile_path: img });
+                    result.actors.push({ id: personId || name, name: name, profile_path: img });
                 });
 
                 try {
@@ -637,7 +674,6 @@
             ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour'].forEach(function (k) {
                 if (!StatsDB.data[k] || typeof StatsDB.data[k] !== 'object') StatsDB.data[k] = {};
             });
-            // міграція works
             Object.keys(this.data.actors).forEach(function (k) {
                 if (!StatsDB.data.actors[k].works) StatsDB.data.actors[k].works = {};
             });
@@ -699,6 +735,8 @@
             if (!row.works) row.works = {};
             if (a.name) row.name = a.name;
             if (a.profile_path) row.profile_path = a.profile_path;
+            // якщо був текстовий id, а прийшов числовий — оновити
+            if (a.id && /^\d+$/.test(String(a.id))) row.id = a.id;
             return row;
         },
 
@@ -726,13 +764,8 @@
 
             if (completed && !w.completed) {
                 w.completed = true;
-                row.count = Object.keys(row.works).filter(function (k) {
-                    return row.works[k].completed;
-                }).length;
-            } else {
-                // count = кількість унікальних робіт (хоч частково переглянутих)
-                row.count = Object.keys(row.works).length;
             }
+            row.count = Object.keys(row.works).length;
         },
 
         addProgress: function (id, time, duration, deltaSec, meta) {
@@ -1229,7 +1262,7 @@
         }
     };
 
-    /* ===================== UI: main stats ===================== */
+    /* ===================== UI: main ===================== */
     function StatsComponent() {
         var html = $('<div class="stv-root"></div>');
 
@@ -1336,10 +1369,14 @@
         function actorsBlock() {
             var wrap = $('<div class="stv-section"></div>');
             wrap.append('<div class="stv-section-title">' + LANG.fav_actors + '</div>');
+
+            var scrollWrap = $('<div class="stv-actors-scroll"></div>');
             var row = $('<div class="stv-actors"></div>');
+
             var list = StatsDB.topActors(CONFIG.max_actors_show);
-            if (!list.length) row.append('<div class="stv-muted">' + LANG.no_actors + '</div>');
-            else {
+            if (!list.length) {
+                row.append('<div class="stv-muted">' + LANG.no_actors + '</div>');
+            } else {
                 list.forEach(function (a) {
                     var item = $('<div class="stv-actor selector"></div>');
                     var img = a.profile_path
@@ -1352,21 +1389,15 @@
                         '<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) +
                         ', ' + (a.count || 0) + ' ' + LANG.films_short + '</div>'
                     );
-
                     item.on('hover:enter click', function () {
-                        Lampa.Activity.push({
-                            url: 'stats_actor',
-                            title: a.name || LANG.actor_works,
-                            component: CONFIG.activity_actor,
-                            actor_key: a._key || String(a.id || a.name),
-                            page: 1
-                        });
+                        openActorPage(a);
                     });
-
                     row.append(item);
                 });
             }
-            wrap.append(row);
+
+            scrollWrap.append(row);
+            wrap.append(scrollWrap);
             return wrap;
         }
 
@@ -1452,7 +1483,7 @@
         }
     }
 
-    /* ===================== UI: actor works ===================== */
+    /* ===================== UI: fallback actor works ===================== */
     function ActorWorksComponent(object) {
         var html = $('<div class="stv-root"></div>');
         var key = (object && object.actor_key) || '';
@@ -1580,8 +1611,9 @@
         '.stv-poster-badge{position:absolute;bottom:2px;right:2px;font-size:8px;background:rgba(0,0,0,0.7);padding:1px 3px;border-radius:3px;}' +
         '.stv-section{margin-bottom:26px;}' +
         '.stv-section-title{font-size:13px;opacity:0.55;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;}' +
-        '.stv-actors{display:flex;gap:12px;overflow:hidden;flex-wrap:wrap;}' +
-        '.stv-actor{width:110px;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;}' +
+        '.stv-actors-scroll{width:100%;overflow:hidden;}' +
+        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding-bottom:8px;-webkit-overflow-scrolling:touch;}' +
+        '.stv-actor{width:110px;min-width:110px;flex-shrink:0;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;}' +
         '.stv-actor:focus{border-color:rgba(59,130,246,0.7);background:rgba(255,255,255,0.06);}' +
         '.stv-actor-photo{width:68px;height:68px;border-radius:50%;margin:0 auto 8px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.08);}' +
         '.stv-actor-ph{display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;}' +
@@ -1632,7 +1664,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v9.7 ready');
+            console.log('Lampa stats v9.8 ready');
         } catch (e) {
             console.error('stats init', e);
         }
