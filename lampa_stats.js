@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v92) return;
-    window.lampa_ukrainian_stats_v92 = true;
+    if (window.lampa_ukrainian_stats_v93) return;
+    window.lampa_ukrainian_stats_v93 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -73,7 +73,7 @@
         by_hour: {}
     };
 
-    /* ===== Card cache ===== */
+    /* ===================== CardCache ===================== */
     var CardCache = {
         map: {},
         loading: {},
@@ -85,12 +85,42 @@
 
         put: function (m) {
             var k = this.key(m);
-            if (!k) return;
+            if (!k || !m) return;
+
             var prev = this.map[k] || {};
-            this.map[k] = Object.assign({}, prev, m);
-            if (m.credits) this.map[k].credits = m.credits;
-            if (m.genres) this.map[k].genres = m.genres;
-            if (m.genre_ids) this.map[k].genre_ids = m.genre_ids;
+            var next = Object.assign({}, prev, m);
+
+            // не затирати багаті поля порожніми з балансера
+            var prevGenres = prev.genres && prev.genres.length ? prev.genres : null;
+            var newGenres = m.genres && m.genres.length ? m.genres : null;
+            next.genres = newGenres || prevGenres || m.genres || prev.genres;
+
+            var prevIds = prev.genre_ids && prev.genre_ids.length ? prev.genre_ids : null;
+            var newIds = m.genre_ids && m.genre_ids.length ? m.genre_ids : null;
+            next.genre_ids = newIds || prevIds || m.genre_ids || prev.genre_ids;
+
+            var prevCast =
+                (prev.credits && prev.credits.cast && prev.credits.cast.length && prev.credits) ||
+                (prev.persons && prev.persons.cast && prev.persons.cast.length && prev.persons) ||
+                null;
+            var newCast =
+                (m.credits && m.credits.cast && m.credits.cast.length && m.credits) ||
+                (m.persons && m.persons.cast && m.persons.cast.length && m.persons) ||
+                null;
+
+            if (newCast && newCast.cast) {
+                next.credits = { cast: newCast.cast };
+                if (m.persons) next.persons = m.persons;
+            } else if (prevCast && prevCast.cast) {
+                next.credits = { cast: prevCast.cast };
+                if (prev.persons) next.persons = prev.persons;
+            }
+
+            if (!next.release_date && prev.release_date) next.release_date = prev.release_date;
+            if (!next.first_air_date && prev.first_air_date) next.first_air_date = prev.first_air_date;
+            if (!next.poster_path && prev.poster_path) next.poster_path = prev.poster_path;
+
+            this.map[k] = next;
         },
 
         get: function (m) {
@@ -112,14 +142,23 @@
         }
     };
 
-    /* ===== TMDB meta loader ===== */
+    /* ===================== MetaLoader ===================== */
     var MetaLoader = {
         isTv: function (movie) {
             if (!movie) return false;
             if (movie.number_of_seasons || movie.first_air_date) return true;
             if (movie.name && !movie.title) return true;
             if (movie.season_number || movie.episode_number || movie.episode || movie.season) return true;
+            if (movie.media_type === 'tv') return true;
             return false;
+        },
+
+        lang: function () {
+            try {
+                return Lampa.Storage.field('tmdb_lang') || Lampa.Storage.field('language') || 'uk-UA';
+            } catch (e) {
+                return 'uk-UA';
+            }
         },
 
         enrich: function (movie, done) {
@@ -148,38 +187,82 @@
 
             var type = this.isTv(movie) ? 'tv' : 'movie';
             var self = this;
+            var path = type + '/' + id + '?append_to_response=credits&language=' + encodeURIComponent(this.lang());
 
             function finish(data) {
                 CardCache.loading[key] = false;
-                if (data) {
-                    var merged = Object.assign({}, movie, data);
-                    if (data.credits) merged.credits = data.credits;
-                    if (data.genres) merged.genres = data.genres;
-                    if (data.genre_ids) merged.genre_ids = data.genre_ids;
-                    if (!merged.release_date && data.release_date) merged.release_date = data.release_date;
-                    if (!merged.first_air_date && data.first_air_date) merged.first_air_date = data.first_air_date;
-                    CardCache.put(merged);
-                    Media.remember(merged);
-                    if (Tracker.currentMovie && CardCache.key(Tracker.currentMovie) === key) {
-                        Tracker.currentMovie = merged;
-                    }
-                    if (done) done(merged);
-                } else if (done) {
-                    done(movie);
+                if (!data) {
+                    if (done) done(movie);
+                    return;
                 }
+
+                var merged = Object.assign({}, movie, data);
+                if (data.credits) merged.credits = data.credits;
+                if (data.genres) merged.genres = data.genres;
+                if (data.genre_ids) merged.genre_ids = data.genre_ids;
+                if (data.release_date) merged.release_date = data.release_date;
+                if (data.first_air_date) merged.first_air_date = data.first_air_date;
+
+                CardCache.put(merged);
+                Media.remember(merged);
+
+                if (Tracker.currentMovie && CardCache.key(Tracker.currentMovie) === key) {
+                    Tracker.currentMovie = merged;
+                }
+
+                try {
+                    var watchedId = Media.getId(merged);
+                    var last = StatsDB.getLast(watchedId);
+                    if (last > 0) {
+                        var meta = Media.metaFrom(merged);
+                        StatsDB.enrichMetaOnly(Math.min(last, 600), meta);
+                    }
+                } catch (e) {}
+
+                if (done) done(merged);
             }
 
-            // 1) Lampa.TMDB + Reguest
             try {
-                if (Lampa.TMDB && typeof Lampa.TMDB.api === 'function' && Lampa.Reguest) {
-                    var path = type + '/' + id + '?append_to_response=credits';
+                if (Lampa.TMDB && typeof Lampa.TMDB.api === 'function') {
                     var url = Lampa.TMDB.api(path);
-                    var req = new Lampa.Reguest();
-                    req.silent(url, function (data) {
-                        finish(data);
-                    }, function () {
+                    if (Lampa.Reguest) {
+                        var req = new Lampa.Reguest();
+                        req.timeout(10000);
+                        req.silent(
+                            url,
+                            function (data) { finish(data); },
+                            function () { self.tryNetwork(url, movie, type, id, finish); }
+                        );
+                        return;
+                    }
+                }
+            } catch (e) {}
+
+            this.tryNetwork(null, movie, type, id, finish);
+        },
+
+        tryNetwork: function (url, movie, type, id, finish) {
+            var self = this;
+            try {
+                if (!url && Lampa.TMDB && typeof Lampa.TMDB.api === 'function') {
+                    url = Lampa.TMDB.api(
+                        type + '/' + id + '?append_to_response=credits&language=' + encodeURIComponent(this.lang())
+                    );
+                }
+                if (url && Lampa.Network && typeof Lampa.Network.silent === 'function') {
+                    Lampa.Network.silent(url, function (data) { finish(data); }, function () {
                         self.tryApiFull(movie, type, id, finish);
                     });
+                    return;
+                }
+            } catch (e) {}
+
+            try {
+                if (url && typeof fetch === 'function') {
+                    fetch(url)
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) { finish(data); })
+                        .catch(function () { self.tryApiFull(movie, type, id, finish); });
                     return;
                 }
             } catch (e) {}
@@ -191,7 +274,7 @@
             try {
                 if (Lampa.Api && typeof Lampa.Api.full === 'function') {
                     Lampa.Api.full(
-                        { id: id, method: type === 'tv' ? 'tv' : 'movie', card: movie },
+                        { id: id, method: type === 'tv' ? 'tv' : 'movie', card: movie, source: 'tmdb' },
                         function (data) {
                             if (data && data.movie) {
                                 var m = data.movie;
@@ -206,9 +289,7 @@
                                 finish(null);
                             }
                         },
-                        function () {
-                            finish(null);
-                        }
+                        function () { finish(null); }
                     );
                     return;
                 }
@@ -217,7 +298,7 @@
         }
     };
 
-    /* ===== StatsDB ===== */
+    /* ===================== StatsDB ===================== */
     var StatsDB = {
         data: null,
 
@@ -291,6 +372,12 @@
             this.data.by_weekday[now.getDay()] = (this.data.by_weekday[now.getDay()] || 0) + sec;
             this.data.by_hour[now.getHours()] = (this.data.by_hour[now.getHours()] || 0) + sec;
             if (!meta) return;
+            this.enrichMetaOnly(sec, meta, true);
+        },
+
+        // meta-only: жанри/актори/роки; skipSave=true якщо викликаємо з enrich (save зробить батько)
+        enrichMetaOnly: function (sec, meta, skipSave) {
+            if (!sec || !meta) return;
 
             if (meta.year) {
                 var y = String(meta.year);
@@ -324,6 +411,7 @@
                     if (a.profile_path) row.profile_path = a.profile_path;
                 });
             }
+            if (!skipSave) this.save();
         },
 
         markCompleted: function (id, meta) {
@@ -450,7 +538,7 @@
         }
     };
 
-    /* ===== Settings ===== */
+    /* ===================== Settings ===================== */
     var Settings = {
         added: false,
         setup: function () {
@@ -485,7 +573,7 @@
         }
     };
 
-    /* ===== Media ===== */
+    /* ===================== Media ===================== */
     var Media = {
         lastCard: null,
 
@@ -611,7 +699,7 @@
         }
     };
 
-    /* ===== Tracker ===== */
+    /* ===================== Tracker ===================== */
     var Tracker = {
         timer: null,
         initialized: false,
@@ -622,6 +710,40 @@
             if (this.initialized) return;
             this.initialized = true;
             var self = this;
+
+            // Хуки Player.play — card до старту
+            try {
+                if (Lampa.Player && typeof Lampa.Player.play === 'function' && !Lampa.Player._stats_play_hooked) {
+                    Lampa.Player._stats_play_hooked = true;
+                    var _play = Lampa.Player.play.bind(Lampa.Player);
+                    Lampa.Player.play = function (data) {
+                        try {
+                            if (data) {
+                                var movie = data.card || data.movie || null;
+                                if (movie) {
+                                    if (data.season != null) {
+                                        movie = Object.assign({}, movie, {
+                                            season_number: data.season,
+                                            season: data.season
+                                        });
+                                    }
+                                    if (data.episode != null) {
+                                        movie = Object.assign({}, movie, {
+                                            episode_number: data.episode,
+                                            episode: data.episode
+                                        });
+                                    }
+                                    Media.remember(movie);
+                                    movie = CardCache.get(movie);
+                                    Tracker.currentMovie = movie;
+                                    MetaLoader.enrich(movie);
+                                }
+                            }
+                        } catch (err) {}
+                        return _play(data);
+                    };
+                }
+            } catch (e) {}
 
             try {
                 if (Lampa.Player && Lampa.Player.listener) {
@@ -648,14 +770,24 @@
 
             try {
                 Lampa.Listener.follow('full', function (e) {
-                    if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
-                    var movie = e.data.movie;
-                    if (e.data.persons && e.data.persons.cast) {
+                    if (!e || !e.data) return;
+                    if (e.type !== 'complite' && e.type !== 'start' && e.type !== 'complete') return;
+
+                    var movie = e.data.movie || (e.object && e.object.card) || null;
+                    if (!movie) return;
+
+                    var cast = null;
+                    if (e.data.persons && e.data.persons.cast) cast = e.data.persons.cast;
+                    else if (e.data.persons && Array.isArray(e.data.persons)) cast = e.data.persons;
+                    else if (e.data.credits && e.data.credits.cast) cast = e.data.credits.cast;
+
+                    if (cast && cast.length) {
                         movie = Object.assign({}, movie, {
-                            credits: { cast: e.data.persons.cast },
-                            persons: e.data.persons
+                            credits: { cast: cast },
+                            persons: e.data.persons || { cast: cast }
                         });
                     }
+
                     Media.remember(movie);
                     MetaLoader.enrich(movie);
                     if (self.currentMovie && CardCache.key(self.currentMovie) === CardCache.key(movie)) {
@@ -670,13 +802,14 @@
         onStart: function (e) {
             var movie = Media.normalize(e) || Current.getMovie();
             if (!movie) return;
+
+            Media.remember(movie);
             movie = CardCache.get(movie);
             this.currentMovie = movie;
-            Media.remember(movie);
-            // підвантажити жанри/акторів з TMDB
+
             MetaLoader.enrich(movie, function (rich) {
                 if (rich) {
-                    Tracker.currentMovie = rich;
+                    Tracker.currentMovie = CardCache.get(rich);
                     Media.remember(rich);
                 }
             });
@@ -723,7 +856,7 @@
         }
     };
 
-    /* ===== UI ===== */
+    /* ===================== UI ===================== */
     function StatsComponent() {
         var html = $('<div class="stv-root"></div>');
 
@@ -995,7 +1128,7 @@
             if (Lampa.Component && Lampa.Component.add) Lampa.Component.add(CONFIG.activity, StatsComponent);
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v9.2 ready');
+            console.log('Lampa stats v9.3 ready');
         } catch (e) {
             console.error('stats init', e);
         }
