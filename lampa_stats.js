@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v91) return;
-    window.lampa_ukrainian_stats_v91 = true;
+    if (window.lampa_ukrainian_stats_v92) return;
+    window.lampa_ukrainian_stats_v92 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -45,7 +45,6 @@
         max_actors_show: 8
     };
 
-    // TMDB genre_id → українська назва
     var GENRE_MAP = {
         28: 'Бойовик', 12: 'Пригоди', 16: 'Мультфільм', 35: 'Комедія',
         80: 'Кримінал', 99: 'Документальний', 18: 'Драма', 10751: 'Сімейний',
@@ -74,13 +73,14 @@
         by_hour: {}
     };
 
-    /* ========== Card cache (повні картки з екрану фільму) ========== */
+    /* ===== Card cache ===== */
     var CardCache = {
         map: {},
+        loading: {},
 
         key: function (m) {
             if (!m) return '';
-            return String(m.id || m.tmdb_id || m.imdb_id || '');
+            return String(m.id || m.tmdb_id || '');
         },
 
         put: function (m) {
@@ -89,7 +89,8 @@
             var prev = this.map[k] || {};
             this.map[k] = Object.assign({}, prev, m);
             if (m.credits) this.map[k].credits = m.credits;
-            if (m.persons) this.map[k].persons = m.persons;
+            if (m.genres) this.map[k].genres = m.genres;
+            if (m.genre_ids) this.map[k].genre_ids = m.genre_ids;
         },
 
         get: function (m) {
@@ -97,23 +98,137 @@
             var k = this.key(m);
             if (k && this.map[k]) return Object.assign({}, m, this.map[k]);
             return m;
+        },
+
+        hasRich: function (m) {
+            if (!m) return false;
+            var c = this.get(m);
+            var hasGenre = (c.genres && c.genres.length) || (c.genre_ids && c.genre_ids.length);
+            var hasCast =
+                (c.credits && c.credits.cast && c.credits.cast.length) ||
+                (c.cast && c.cast.length) ||
+                (c.persons && c.persons.cast && c.persons.cast.length);
+            return !!(hasGenre && hasCast);
         }
     };
 
-    /* ========== DB ========== */
+    /* ===== TMDB meta loader ===== */
+    var MetaLoader = {
+        isTv: function (movie) {
+            if (!movie) return false;
+            if (movie.number_of_seasons || movie.first_air_date) return true;
+            if (movie.name && !movie.title) return true;
+            if (movie.season_number || movie.episode_number || movie.episode || movie.season) return true;
+            return false;
+        },
+
+        enrich: function (movie, done) {
+            if (!movie) {
+                if (done) done(null);
+                return;
+            }
+
+            var id = movie.id || movie.tmdb_id;
+            if (!id) {
+                if (done) done(movie);
+                return;
+            }
+
+            if (CardCache.hasRich(movie)) {
+                if (done) done(CardCache.get(movie));
+                return;
+            }
+
+            var key = String(id);
+            if (CardCache.loading[key]) {
+                if (done) done(CardCache.get(movie));
+                return;
+            }
+            CardCache.loading[key] = true;
+
+            var type = this.isTv(movie) ? 'tv' : 'movie';
+            var self = this;
+
+            function finish(data) {
+                CardCache.loading[key] = false;
+                if (data) {
+                    var merged = Object.assign({}, movie, data);
+                    if (data.credits) merged.credits = data.credits;
+                    if (data.genres) merged.genres = data.genres;
+                    if (data.genre_ids) merged.genre_ids = data.genre_ids;
+                    if (!merged.release_date && data.release_date) merged.release_date = data.release_date;
+                    if (!merged.first_air_date && data.first_air_date) merged.first_air_date = data.first_air_date;
+                    CardCache.put(merged);
+                    Media.remember(merged);
+                    if (Tracker.currentMovie && CardCache.key(Tracker.currentMovie) === key) {
+                        Tracker.currentMovie = merged;
+                    }
+                    if (done) done(merged);
+                } else if (done) {
+                    done(movie);
+                }
+            }
+
+            // 1) Lampa.TMDB + Reguest
+            try {
+                if (Lampa.TMDB && typeof Lampa.TMDB.api === 'function' && Lampa.Reguest) {
+                    var path = type + '/' + id + '?append_to_response=credits';
+                    var url = Lampa.TMDB.api(path);
+                    var req = new Lampa.Reguest();
+                    req.silent(url, function (data) {
+                        finish(data);
+                    }, function () {
+                        self.tryApiFull(movie, type, id, finish);
+                    });
+                    return;
+                }
+            } catch (e) {}
+
+            this.tryApiFull(movie, type, id, finish);
+        },
+
+        tryApiFull: function (movie, type, id, finish) {
+            try {
+                if (Lampa.Api && typeof Lampa.Api.full === 'function') {
+                    Lampa.Api.full(
+                        { id: id, method: type === 'tv' ? 'tv' : 'movie', card: movie },
+                        function (data) {
+                            if (data && data.movie) {
+                                var m = data.movie;
+                                if (data.persons && data.persons.cast) {
+                                    m = Object.assign({}, m, {
+                                        credits: { cast: data.persons.cast },
+                                        persons: data.persons
+                                    });
+                                }
+                                finish(m);
+                            } else {
+                                finish(null);
+                            }
+                        },
+                        function () {
+                            finish(null);
+                        }
+                    );
+                    return;
+                }
+            } catch (e) {}
+            finish(null);
+        }
+    };
+
+    /* ===== StatsDB ===== */
     var StatsDB = {
         data: null,
 
         init: function () {
             var saved = null;
             try { saved = Lampa.Storage.get(CONFIG.stats_storage); } catch (e) {}
-
             if (!saved || typeof saved !== 'object') {
                 this.data = JSON.parse(JSON.stringify(DEFAULT_STATS));
                 this.save();
                 return;
             }
-
             this.data = Object.assign(JSON.parse(JSON.stringify(DEFAULT_STATS)), saved);
             ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour'].forEach(function (k) {
                 if (!StatsDB.data[k] || typeof StatsDB.data[k] !== 'object') StatsDB.data[k] = {};
@@ -149,28 +264,21 @@
 
         addProgress: function (id, time, duration, deltaSec, meta) {
             if (!id || !Number.isFinite(time) || time < 0) return 0;
-
             var prev = this.getLast(id);
             if (time < prev - 5) {
                 this.setLast(id, time);
                 this.save();
                 return 0;
             }
-
             var raw = Math.max(0, time - prev);
-            if (Number.isFinite(deltaSec) && deltaSec >= 0) {
-                raw = Math.min(raw, deltaSec + 1.5);
-            }
-
+            if (Number.isFinite(deltaSec) && deltaSec >= 0) raw = Math.min(raw, deltaSec + 1.5);
             var maxJump = Number.isFinite(duration) && duration > 0 ? Math.min(duration, 7200) : 600;
             if (prev === 0 && raw > 30) raw = Math.min(raw, 5);
-
             var safe = Math.min(raw, maxJump);
             if (safe > 0) {
                 this.data.seconds_watched += Math.floor(safe);
                 this.enrich(Math.floor(safe), meta);
             }
-
             this.setLast(id, time);
             this.save();
             return Math.floor(safe);
@@ -178,16 +286,10 @@
 
         enrich: function (sec, meta) {
             if (!sec) return;
-
             var now = new Date();
-            var month = now.getMonth();
-            var weekday = now.getDay();
-            var hour = now.getHours();
-
-            this.data.by_month[month] = (this.data.by_month[month] || 0) + sec;
-            this.data.by_weekday[weekday] = (this.data.by_weekday[weekday] || 0) + sec;
-            this.data.by_hour[hour] = (this.data.by_hour[hour] || 0) + sec;
-
+            this.data.by_month[now.getMonth()] = (this.data.by_month[now.getMonth()] || 0) + sec;
+            this.data.by_weekday[now.getDay()] = (this.data.by_weekday[now.getDay()] || 0) + sec;
+            this.data.by_hour[now.getHours()] = (this.data.by_hour[now.getHours()] || 0) + sec;
             if (!meta) return;
 
             if (meta.year) {
@@ -195,7 +297,6 @@
                 if (!this.data.years[y]) this.data.years[y] = { seconds: 0, count: 0 };
                 this.data.years[y].seconds += sec;
             }
-
             if (meta.genres && meta.genres.length) {
                 meta.genres.forEach(function (g) {
                     var name = typeof g === 'string' ? g : (g && g.name);
@@ -204,7 +305,6 @@
                     StatsDB.data.genres[name].seconds += sec;
                 });
             }
-
             if (meta.actors && meta.actors.length) {
                 meta.actors.slice(0, 10).forEach(function (a) {
                     if (!a || !(a.id || a.name)) return;
@@ -228,9 +328,7 @@
 
         markCompleted: function (id, meta) {
             if (!id || this.data.completed[id]) return false;
-
             this.data.completed[id] = { date: Date.now(), isEpisode: !!(meta && meta.isEpisode) };
-
             if (meta && meta.isEpisode) this.data.episodes_watched++;
             else this.data.movies_watched++;
 
@@ -242,7 +340,6 @@
                     StatsDB.data.genres[name].count += 1;
                 });
             }
-
             if (meta && meta.actors) {
                 meta.actors.slice(0, 10).forEach(function (a) {
                     if (!a || !(a.id || a.name)) return;
@@ -259,13 +356,11 @@
                     StatsDB.data.actors[key].count += 1;
                 });
             }
-
             if (meta && meta.year) {
                 var y = String(meta.year);
                 if (!this.data.years[y]) this.data.years[y] = { seconds: 0, count: 0 };
                 this.data.years[y].count += 1;
             }
-
             this.save();
             return true;
         },
@@ -276,11 +371,7 @@
             var days = Math.floor(totalMin / 1440);
             var hours = Math.floor((totalMin % 1440) / 60);
             var minutes = totalMin % 60;
-
-            if (days > 0) {
-                var dlabel = days === 1 ? LANG.day : LANG.days;
-                return days + ' ' + dlabel + ' ' + hours + ' ' + LANG.hours;
-            }
+            if (days > 0) return days + ' ' + (days === 1 ? LANG.day : LANG.days) + ' ' + hours + ' ' + LANG.hours;
             if (hours > 0) return hours + ' ' + LANG.hours + ' ' + minutes + ' ' + LANG.minutes;
             return minutes + ' ' + LANG.minutes;
         },
@@ -303,18 +394,15 @@
         },
 
         topActors: function (limit) {
-            limit = limit || CONFIG.max_actors_show;
             return Object.keys(this.data.actors)
                 .map(function (k) { return StatsDB.data.actors[k]; })
                 .sort(function (a, b) { return (b.seconds || 0) - (a.seconds || 0); })
-                .slice(0, limit);
+                .slice(0, limit || CONFIG.max_actors_show);
         },
 
         genreList: function () {
             return Object.keys(this.data.genres)
-                .map(function (name) {
-                    return { name: name, seconds: StatsDB.data.genres[name].seconds || 0 };
-                })
+                .map(function (name) { return { name: name, seconds: StatsDB.data.genres[name].seconds || 0 }; })
                 .sort(function (a, b) { return b.seconds - a.seconds; });
         },
 
@@ -323,10 +411,8 @@
             Object.keys(this.data.years).forEach(function (y) {
                 var year = parseInt(y, 10);
                 if (!year) return;
-                var decade = Math.floor(year / 10) * 10;
-                var key = decade + '-ті';
-                if (!buckets[key]) buckets[key] = 0;
-                buckets[key] += StatsDB.data.years[y].seconds || 0;
+                var key = Math.floor(year / 10) * 10 + '-ті';
+                buckets[key] = (buckets[key] || 0) + (StatsDB.data.years[y].seconds || 0);
             });
             return Object.keys(buckets)
                 .map(function (k) { return { label: k, seconds: buckets[k] }; })
@@ -364,7 +450,7 @@
         }
     };
 
-    /* ========== Settings ========== */
+    /* ===== Settings ===== */
     var Settings = {
         added: false,
         setup: function () {
@@ -399,7 +485,7 @@
         }
     };
 
-    /* ========== Media ========== */
+    /* ===== Media ===== */
     var Media = {
         lastCard: null,
 
@@ -414,10 +500,8 @@
 
         isEpisode: function (movie) {
             if (!movie) return false;
-            if (movie.episode || movie.episode_number) return true;
-            if ((movie.season_number || movie.season) && (movie.episode_number || movie.episode)) return true;
-            // tv show without episode fields still film-level id
-            return false;
+            return !!(movie.episode || movie.episode_number ||
+                ((movie.season_number || movie.season) && (movie.episode_number || movie.episode)));
         },
 
         yearOf: function (movie) {
@@ -431,21 +515,17 @@
         genresOf: function (movie) {
             if (!movie) return [];
             var out = [];
-
             if (Array.isArray(movie.genres)) {
                 movie.genres.forEach(function (g) {
                     if (typeof g === 'string' && g) out.push({ name: g });
                     else if (g && g.name) out.push({ name: g.name, id: g.id });
                 });
             }
-
             if (!out.length && Array.isArray(movie.genre_ids)) {
-                movie.genre_ids.forEach(function (id) {
-                    var name = GENRE_MAP[id];
-                    if (name) out.push({ name: name, id: id });
+                movie.genre_ids.forEach(function (gid) {
+                    if (GENRE_MAP[gid]) out.push({ name: GENRE_MAP[gid], id: gid });
                 });
             }
-
             return out;
         },
 
@@ -458,17 +538,9 @@
                 else if (movie.persons && Array.isArray(movie.persons.cast)) list = movie.persons.cast;
                 else if (Array.isArray(movie.persons)) list = movie.persons;
             } catch (e) {}
-
-            return list
-                .filter(function (p) { return p && (p.id || p.name); })
-                .slice(0, 12)
-                .map(function (p) {
-                    return {
-                        id: p.id || p.name,
-                        name: p.name || '',
-                        profile_path: p.profile_path || p.img || p.photo || ''
-                    };
-                });
+            return list.filter(function (p) { return p && (p.id || p.name); }).slice(0, 12).map(function (p) {
+                return { id: p.id || p.name, name: p.name || '', profile_path: p.profile_path || p.img || p.photo || '' };
+            });
         },
 
         metaFrom: function (movie) {
@@ -524,9 +596,7 @@
         getVideoState: function () {
             try {
                 var video = null;
-                if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.video === 'function') {
-                    video = Lampa.PlayerVideo.video();
-                }
+                if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.video === 'function') video = Lampa.PlayerVideo.video();
                 if (!video) video = document.querySelector('.player video') || document.querySelector('video');
                 if (!video) return null;
                 var time = Number(video.currentTime);
@@ -541,7 +611,7 @@
         }
     };
 
-    /* ========== Tracker ========== */
+    /* ===== Tracker ===== */
     var Tracker = {
         timer: null,
         initialized: false,
@@ -576,13 +646,10 @@
                 }
             } catch (e) {}
 
-            // Повна картка з акторів/жанрів
             try {
                 Lampa.Listener.follow('full', function (e) {
-                    if (!e || e.type !== 'complite' || !e.data) return;
+                    if (!e || e.type !== 'complite' || !e.data || !e.data.movie) return;
                     var movie = e.data.movie;
-                    if (!movie) return;
-
                     if (e.data.persons && e.data.persons.cast) {
                         movie = Object.assign({}, movie, {
                             credits: { cast: e.data.persons.cast },
@@ -590,6 +657,7 @@
                         });
                     }
                     Media.remember(movie);
+                    MetaLoader.enrich(movie);
                     if (self.currentMovie && CardCache.key(self.currentMovie) === CardCache.key(movie)) {
                         self.currentMovie = Media.lastCard;
                     }
@@ -600,27 +668,27 @@
         },
 
         onStart: function (e) {
-            var movie = Media.normalize(e);
-            if (!movie) movie = Current.getMovie();
-            if (movie) {
-                // злити з кешем (жанри/актори з екрану full)
-                movie = CardCache.get(movie);
-                this.currentMovie = movie;
-                Media.remember(movie);
-            }
+            var movie = Media.normalize(e) || Current.getMovie();
+            if (!movie) return;
+            movie = CardCache.get(movie);
+            this.currentMovie = movie;
+            Media.remember(movie);
+            // підвантажити жанри/акторів з TMDB
+            MetaLoader.enrich(movie, function (rich) {
+                if (rich) {
+                    Tracker.currentMovie = rich;
+                    Media.remember(rich);
+                }
+            });
         },
 
         apply: function (time, duration, wallDelta) {
-            if (!Settings.collecting()) return 0;
-
+            if (!Settings.collecting()) return;
             var movie = this.currentMovie || Current.getMovie() || Media.lastCard;
             if (movie) movie = CardCache.get(movie);
-
             var id = movie ? Media.getId(movie) : 'session:anon';
             var meta = Media.metaFrom(movie);
-
             StatsDB.addProgress(id, time, duration, wallDelta, meta);
-
             if (movie && Number.isFinite(duration) && duration > 0 && time / duration >= CONFIG.completion) {
                 StatsDB.markCompleted(Media.getId(movie), meta);
             }
@@ -655,7 +723,7 @@
         }
     };
 
-    /* ========== UI (той самий layout) ========== */
+    /* ===== UI ===== */
     function StatsComponent() {
         var html = $('<div class="stv-root"></div>');
 
@@ -663,7 +731,6 @@
             renderAll(html);
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
-
         this.start = function () {
             try {
                 Lampa.Controller.add('content', {
@@ -686,7 +753,6 @@
                 Lampa.Controller.toggle('content');
             } catch (e) {}
         };
-
         this.pause = function () {};
         this.render = function () { return html; };
         this.destroy = function () { html.remove(); };
@@ -694,9 +760,7 @@
         function renderAll(root) {
             root.empty();
             root.append('<div class="stv-title">' + LANG.page_title + '</div>');
-            if (!Settings.collecting()) {
-                root.append('<div class="stv-disabled">' + LANG.disabled_text + '</div>');
-            }
+            if (!Settings.collecting()) root.append('<div class="stv-disabled">' + LANG.disabled_text + '</div>');
 
             var has = StatsDB.data.seconds_watched > 0 || StatsDB.data.movies_watched > 0 || StatsDB.data.episodes_watched > 0;
             if (!has) {
@@ -704,7 +768,6 @@
                 root.append(resetBtn(root));
                 return;
             }
-
             root.append(topCards());
             root.append(actorsBlock());
             root.append(bottomRow());
@@ -740,10 +803,9 @@
             var wrap = $('<div class="stv-section"></div>');
             wrap.append('<div class="stv-section-title">' + LANG.fav_actors + '</div>');
             var row = $('<div class="stv-actors"></div>');
-            var list = StatsDB.topActors(CONFIG.max_actors_show);
-            if (!list.length) {
-                row.append('<div class="stv-muted">' + LANG.no_actors + '</div>');
-            } else {
+            var list = StatsDB.topActors();
+            if (!list.length) row.append('<div class="stv-muted">' + LANG.no_actors + '</div>');
+            else {
                 list.forEach(function (a) {
                     var item = $('<div class="stv-actor selector"></div>');
                     var img = a.profile_path
@@ -762,13 +824,9 @@
 
         function bottomRow() {
             var row = $('<div class="stv-bottom"></div>');
-
             var rec = $('<div class="stv-panel selector"></div>');
             rec.append('<div class="stv-section-title">' + LANG.records + '</div>');
-            var bm = StatsDB.bestMonth();
-            var bw = StatsDB.bestWeekday();
-            var bh = StatsDB.bestHour();
-            var recHtml = '';
+            var bm = StatsDB.bestMonth(), bw = StatsDB.bestWeekday(), bh = StatsDB.bestHour(), recHtml = '';
             if (bm) recHtml += '<div class="stv-rec-line"><b>' + bm.label + '</b> (' + bm.text + ')</div>';
             if (bw) recHtml += '<div class="stv-rec-line">' + bw + (bh ? ', ' + bh : '') + '</div>';
             if (!recHtml) recHtml = '<div class="stv-muted">—</div>';
@@ -784,7 +842,6 @@
             genres.append('<div class="stv-section-title">' + LANG.genres_dist + '</div>');
             genres.append(genrePie());
             row.append(genres);
-
             return row;
         }
 
@@ -814,17 +871,16 @@
             var colors = ['#3b82f6', '#ef4444', '#f59e0b', '#22c55e', '#a855f7', '#06b6d4'];
             var stops = [], acc = 0;
             list.forEach(function (g, i) {
-                var p = (g.seconds / total) * 100;
-                var from = acc; acc += p;
+                var p = (g.seconds / total) * 100, from = acc;
+                acc += p;
                 stops.push(colors[i % colors.length] + ' ' + from.toFixed(2) + '% ' + acc.toFixed(2) + '%');
             });
             box.append($('<div class="stv-pie" style="background:conic-gradient(' + stops.join(',') + ')"></div>'));
             var legend = $('<div class="stv-legend"></div>');
             list.forEach(function (g, i) {
-                var pct = Math.round((g.seconds / total) * 100);
                 legend.append(
                     '<div class="stv-leg-item"><span class="stv-dot" style="background:' + colors[i % colors.length] +
-                    '"></span>' + g.name + ' ' + pct + '%</div>'
+                    '"></span>' + g.name + ' ' + Math.round((g.seconds / total) * 100) + '%</div>'
                 );
             });
             box.append(legend);
@@ -876,8 +932,7 @@
         init: function () {
             var self = this;
             setTimeout(function () { self.update(); }, 500);
-            var n = 0;
-            var t = setInterval(function () { self.update(); if (++n >= 30) clearInterval(t); }, 1000);
+            var n = 0, t = setInterval(function () { self.update(); if (++n >= 30) clearInterval(t); }, 1000);
         }
     };
 
@@ -940,7 +995,7 @@
             if (Lampa.Component && Lampa.Component.add) Lampa.Component.add(CONFIG.activity, StatsComponent);
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v9.1 ready');
+            console.log('Lampa stats v9.2 ready');
         } catch (e) {
             console.error('stats init', e);
         }
