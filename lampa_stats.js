@@ -1,7 +1,6 @@
 (function () {
     'use strict';
 
-    // Змінено версію на v5 для уникнення конфліктів при оновленні
     if (window.lampa_stats_plugin_v5) return;
     window.lampa_stats_plugin_v5 = true;
 
@@ -33,7 +32,6 @@
         data: Lampa.Storage.get('lampa_personal_stats', DEFAULT_STATS),
 
         save() {
-            // Валідація даних перед збереженням
             for (const key in DEFAULT_STATS) {
                 if (typeof this.data[key] !== 'number' || this.data[key] < 0) {
                     this.data[key] = DEFAULT_STATS[key];
@@ -70,11 +68,13 @@
             }
 
             const origSet = Lampa.Storage.set;
-            Lampa.Storage.set = (name, value) => {
+            // ФИКС: Используем классическую функцию для сохранения контекста 'this'
+            Lampa.Storage.set = function (name, value) {
                 if (name === 'file_view' && Lampa.Storage.get('stats_collect', true)) {
-                    this.processFileViewUpdate(value);
+                    Tracker.processFileViewUpdate(value);
                 }
-                origSet(name, value);
+                // Обязательно передаем контекст дальше
+                return origSet.apply(this, arguments);
             };
         },
 
@@ -171,16 +171,15 @@
 
         startPolling() {
             if (this.intervalId) return;
-            const check = () => {
+            // ФИКС: Возвращаем setInterval. Делать DOM-запросы 60 раз в секунду не нужно.
+            this.intervalId = setInterval(() => {
                 this.updateVisibility();
-                this.intervalId = requestAnimationFrame(check);
-            };
-            this.intervalId = requestAnimationFrame(check);
+            }, 1000);
         },
 
         stopPolling() {
             if (this.intervalId) {
-                cancelAnimationFrame(this.intervalId);
+                clearInterval(this.intervalId);
                 this.intervalId = null;
             }
         },
@@ -310,81 +309,17 @@
             --stats-error: #F56565;
         }
 
-        .lampa-stats-view {
-            padding: 20px;
-            color: var(--stats-text);
-            font-family: sans-serif;
-        }
-
-        .lampa-stats-title {
-            font-size: 24px;
-            font-weight: bold;
-            margin-bottom: 20px;
-            color: var(--stats-text);
-        }
-
-        .lampa-stats-summary {
-            display: flex;
-            gap: 15px;
-            margin-bottom: 25px;
-        }
-
-        .lampa-stats-card {
-            background: var(--stats-bg);
-            padding: 15px;
-            border-radius: 8px;
-            flex: 1;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            border: 2px solid transparent;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-
-        .lampa-stats-card:focus {
-            border-color: var(--stats-border-focus);
-            box-shadow: 0 0 10px var(--stats-shadow-focus);
-            outline: none;
-            background: rgba(255,255,255,0.1);
-        }
-
-        .lampa-stats-card-icon {
-            font-size: 24px;
-            color: var(--stats-border-focus);
-        }
-
-        .lampa-stats-card-content {
-            flex-grow: 1;
-        }
-
-        .lampa-stats-card-label {
-            font-size: 12px;
-            color: var(--stats-text-secondary);
-            text-transform: uppercase;
-        }
-
-        .lampa-stats-card-value {
-            font-size: 18px;
-            font-weight: bold;
-            margin-top: 2px;
-            color: var(--stats-text);
-        }
-
-        .lampa-stats-empty {
-            background: var(--stats-bg-empty);
-            border-radius: 8px;
-            padding: 40px;
-            text-align: center;
-            color: var(--stats-text-secondary);
-            font-size: 16px;
-            margin-bottom: 20px;
-            border: 2px solid transparent;
-        }
-
-        .lampa-stats-empty:focus {
-            border-color: var(--stats-border-focus);
-            outline: none;
-        }
+        .lampa-stats-view { padding: 20px; color: var(--stats-text); font-family: sans-serif; }
+        .lampa-stats-title { font-size: 24px; font-weight: bold; margin-bottom: 20px; color: var(--stats-text); }
+        .lampa-stats-summary { display: flex; gap: 15px; margin-bottom: 25px; }
+        .lampa-stats-card { background: var(--stats-bg); padding: 15px; border-radius: 8px; flex: 1; display: flex; align-items: center; gap: 10px; border: 2px solid transparent; transition: border-color 0.2s, box-shadow 0.2s; }
+        .lampa-stats-card:focus { border-color: var(--stats-border-focus); box-shadow: 0 0 10px var(--stats-shadow-focus); outline: none; background: rgba(255,255,255,0.1); }
+        .lampa-stats-card-icon { font-size: 24px; color: var(--stats-border-focus); }
+        .lampa-stats-card-content { flex-grow: 1; }
+        .lampa-stats-card-label { font-size: 12px; color: var(--stats-text-secondary); text-transform: uppercase; }
+        .lampa-stats-card-value { font-size: 18px; font-weight: bold; margin-top: 2px; color: var(--stats-text); }
+        .lampa-stats-empty { background: var(--stats-bg-empty); border-radius: 8px; padding: 40px; text-align: center; color: var(--stats-text-secondary); font-size: 16px; margin-bottom: 20px; border: 2px solid transparent; }
+        .lampa-stats-empty:focus { border-color: var(--stats-border-focus); outline: none; }
     `;
 
     // --- Запуск ---
@@ -404,7 +339,6 @@
             Tracker.init();
             Lampa.Activity.define('lampa_stats_view', StatsActivity);
 
-            // --- ФІКС: Чекаємо, поки Ламппа побудує меню, потім запускаємо опитування ---
             const waitForMenu = () => {
                 if ($('.menu__list').length > 0) {
                     Menu.startPolling();
