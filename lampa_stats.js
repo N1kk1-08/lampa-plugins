@@ -1,9 +1,9 @@
 (function () {
     'use strict';
 
-    // Змінено версію на v4 для уникнення конфліктів при оновленні
-    if (window.lampa_stats_plugin_v4) return;
-    window.lampa_stats_plugin_v4 = true;
+    // Змінено версію на v5 для уникнення конфліктів при оновленні
+    if (window.lampa_stats_plugin_v5) return;
+    window.lampa_stats_plugin_v5 = true;
 
     // --- Локалізація (Українська) ---
     const LANG = {
@@ -403,7 +403,16 @@
             Settings.setup();
             Tracker.init();
             Lampa.Activity.define('lampa_stats_view', StatsActivity);
-            Menu.startPolling();
+
+            // --- ФІКС: Чекаємо, поки Ламппа побудує меню, потім запускаємо опитування ---
+            const waitForMenu = () => {
+                if ($('.menu__list').length > 0) {
+                    Menu.startPolling();
+                } else {
+                    setTimeout(waitForMenu, 100);
+                }
+            };
+            waitForMenu();
 
         } catch (err) {
             console.error('Lampa Stats Plugin init error:', err);
