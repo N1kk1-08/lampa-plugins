@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v95) return;
-    window.lampa_ukrainian_stats_v95 = true;
+    if (window.lampa_ukrainian_stats_v96) return;
+    window.lampa_ukrainian_stats_v96 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -42,7 +42,9 @@
         completion: 0.85,
         interval: 1000,
         tmdb_img: 'https://image.tmdb.org/t/p/w185',
-        max_actors_show: 8
+        tmdb_poster: 'https://image.tmdb.org/t/p/w92',
+        max_actors_show: 8,
+        max_posters_show: 8
     };
 
     var GENRE_MAP = {
@@ -73,6 +75,27 @@
         by_hour: {}
     };
 
+    function isGarbageGenre(name) {
+        if (!name || typeof name !== 'string') return true;
+        var p = name.trim();
+        if (!p) return true;
+        if (/^\d{1,2}:\d{2}$/.test(p)) return true;
+        if (/\d/.test(p) && /(хв|год|min|сек|сезон|season|ep|runtime)/i.test(p)) return true;
+        if (/^\d{3,4}p$/i.test(p)) return true;
+        if (/^(4k|uhd|hdr|dv|3d|cam|ts|hdrip|webrip|web-dl)$/i.test(p)) return true;
+        if (/^\d+$/.test(p)) return true;
+        if (/^(19|20)\d{2}$/.test(p)) return true;
+        if (p.length < 2 || p.length > 48) return true;
+        return false;
+    }
+
+    function posterUrl(path) {
+        if (!path) return '';
+        var s = String(path);
+        if (s.indexOf('http') === 0) return s;
+        return CONFIG.tmdb_poster + s;
+    }
+
     /* ===================== CardCache ===================== */
     var CardCache = {
         map: {},
@@ -85,10 +108,7 @@
 
         put: function (m) {
             var k = this.key(m);
-            if (!k || !m) {
-                // без id все одно тримаємо в last через Media.remember
-                return;
-            }
+            if (!k || !m) return;
 
             var prev = this.map[k] || {};
             var next = Object.assign({}, prev, m);
@@ -121,6 +141,7 @@
             if (!next.release_date && prev.release_date) next.release_date = prev.release_date;
             if (!next.first_air_date && prev.first_air_date) next.first_air_date = prev.first_air_date;
             if (!next.poster_path && prev.poster_path) next.poster_path = prev.poster_path;
+            if (!next.img && prev.img) next.img = prev.img;
 
             this.map[k] = next;
         },
@@ -144,7 +165,7 @@
         }
     };
 
-    /* ===================== Media base ===================== */
+    /* ===================== Media ===================== */
     var Media = {
         lastCard: null,
 
@@ -176,8 +197,9 @@
             var out = [];
             if (Array.isArray(movie.genres)) {
                 movie.genres.forEach(function (g) {
-                    if (typeof g === 'string' && g) out.push({ name: g });
-                    else if (g && g.name) out.push({ name: g.name, id: g.id });
+                    var name = typeof g === 'string' ? g : (g && g.name);
+                    if (!name || isGarbageGenre(name)) return;
+                    out.push({ name: name, id: g && g.id });
                 });
             }
             if (!out.length && Array.isArray(movie.genre_ids)) {
@@ -204,6 +226,16 @@
                     profile_path: p.profile_path || p.img || p.photo || ''
                 };
             });
+        },
+
+        posterOf: function (movie) {
+            if (!movie) return '';
+            return movie.poster_path || movie.img || movie.poster || '';
+        },
+
+        titleOf: function (movie) {
+            if (!movie) return '';
+            return movie.title || movie.name || movie.original_title || movie.original_name || '';
         },
 
         normalize: function (data) {
@@ -247,9 +279,10 @@
             try {
                 var meta = {
                     id: id,
-                    title: movie.title || movie.name || '',
+                    title: Media.titleOf(movie),
                     release_date: movie.release_date || '',
                     first_air_date: movie.first_air_date || '',
+                    poster_path: Media.posterOf(movie),
                     genres: Media.genresOf(movie),
                     genre_ids: movie.genre_ids || [],
                     actors: Media.actorsOf(movie),
@@ -262,11 +295,12 @@
                     if (!meta.year && old.year) meta.year = old.year;
                     if (!meta.release_date && old.release_date) meta.release_date = old.release_date;
                     if (!meta.first_air_date && old.first_air_date) meta.first_air_date = old.first_air_date;
+                    if (!meta.poster_path && old.poster_path) meta.poster_path = old.poster_path;
                     if ((!meta.genre_ids || !meta.genre_ids.length) && old.genre_ids && old.genre_ids.length) {
                         meta.genre_ids = old.genre_ids;
                     }
                 }
-                if ((meta.genres && meta.genres.length) || (meta.actors && meta.actors.length) || meta.year) {
+                if ((meta.genres && meta.genres.length) || (meta.actors && meta.actors.length) || meta.year || meta.poster_path) {
                     Lampa.Storage.set(this.prefix + id, meta);
                 }
             } catch (e) {}
@@ -302,6 +336,7 @@
             }
             if (stored.release_date && !movie.release_date) movie.release_date = stored.release_date;
             if (stored.first_air_date && !movie.first_air_date) movie.first_air_date = stored.first_air_date;
+            if (stored.poster_path && !movie.poster_path) movie.poster_path = stored.poster_path;
             return movie;
         }
     };
@@ -309,7 +344,7 @@
     /* ===================== DomMeta ===================== */
     var DomMeta = {
         scrape: function () {
-            var result = { genres: [], year: 0, actors: [], id: null, title: '' };
+            var result = { genres: [], year: 0, actors: [], id: null, title: '', poster: '' };
             try {
                 var y = document.querySelector('.tag--year');
                 if (y) {
@@ -327,15 +362,20 @@
                 var titleEl = document.querySelector('.full-start-new__title, .full-start__title');
                 if (titleEl) result.title = (titleEl.textContent || '').trim();
 
+                var posterEl = document.querySelector('.full-start-new__poster img, .full-start__poster img, .full-start-new__poster, .card__img');
+                if (posterEl) {
+                    result.poster = posterEl.getAttribute('src') || posterEl.getAttribute('data-src') ||
+                        (posterEl.style && posterEl.style.backgroundImage
+                            ? String(posterEl.style.backgroundImage).replace(/url\(["']?/, '').replace(/["']?\)/, '')
+                            : '');
+                }
+
                 var details = document.querySelector('.full-start-new__details, .full-start__details');
                 if (details) {
                     var text = (details.textContent || '').replace(/\s+/g, ' ').trim();
                     var parts = text.split(/●|•|·|\|/).map(function (s) { return s.trim(); });
                     parts.forEach(function (p) {
-                        if (!p) return;
-                        if (/\d/.test(p) && /(хв|год|min|сезон|season|ep)/i.test(p)) return;
-                        if (/^(19|20)\d{2}$/.test(p)) return;
-                        if (p.length < 2 || p.length > 48) return;
+                        if (isGarbageGenre(p)) return;
                         result.genres.push({ name: p });
                     });
                 }
@@ -362,6 +402,8 @@
                         if (act.id) result.id = act.id;
                         if (act.card && act.card.id) result.id = act.card.id;
                         if (act.movie && act.movie.id) result.id = act.movie.id;
+                        if (act.card && act.card.poster_path && !result.poster) result.poster = act.card.poster_path;
+                        if (act.movie && act.movie.poster_path && !result.poster) result.poster = act.movie.poster_path;
                     }
                 } catch (e) {}
             } catch (e) {}
@@ -379,6 +421,7 @@
             if (d.actors.length && !(movie.credits && movie.credits.cast && movie.credits.cast.length)) {
                 movie.credits = { cast: d.actors };
             }
+            if (d.poster && !movie.poster_path && !movie.img) movie.poster_path = d.poster;
             return movie;
         }
     };
@@ -391,7 +434,9 @@
             isEpisode: Media.isEpisode(movie),
             year: Media.yearOf(movie),
             genres: Media.genresOf(movie),
-            actors: Media.actorsOf(movie)
+            actors: Media.actorsOf(movie),
+            poster: Media.posterOf(movie),
+            title: Media.titleOf(movie)
         };
     };
 
@@ -470,6 +515,7 @@
                 if (data.genre_ids) merged.genre_ids = data.genre_ids;
                 if (data.release_date) merged.release_date = data.release_date;
                 if (data.first_air_date) merged.first_air_date = data.first_air_date;
+                if (data.poster_path) merged.poster_path = data.poster_path;
 
                 Media.remember(merged);
 
@@ -577,7 +623,19 @@
             ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour'].forEach(function (k) {
                 if (!StatsDB.data[k] || typeof StatsDB.data[k] !== 'object') StatsDB.data[k] = {};
             });
+            this.cleanupGenres();
             this.normalize();
+        },
+
+        cleanupGenres: function () {
+            var changed = false;
+            Object.keys(this.data.genres).forEach(function (name) {
+                if (isGarbageGenre(name)) {
+                    delete StatsDB.data.genres[name];
+                    changed = true;
+                }
+            });
+            if (changed) this.save();
         },
 
         normalize: function () {
@@ -649,7 +707,7 @@
             if (meta.genres && meta.genres.length) {
                 meta.genres.forEach(function (g) {
                     var name = typeof g === 'string' ? g : (g && g.name);
-                    if (!name) return;
+                    if (!name || isGarbageGenre(name)) return;
                     if (!StatsDB.data.genres[name]) StatsDB.data.genres[name] = { seconds: 0, count: 0 };
                     StatsDB.data.genres[name].seconds += sec;
                 });
@@ -676,16 +734,36 @@
             if (!skipSave) this.save();
         },
 
-        markCompleted: function (id, meta) {
+        markCompleted: function (id, meta, movie) {
             if (!id || this.data.completed[id]) return false;
-            this.data.completed[id] = { date: Date.now(), isEpisode: !!(meta && meta.isEpisode) };
-            if (meta && meta.isEpisode) this.data.episodes_watched++;
+
+            var entry = {
+                date: Date.now(),
+                isEpisode: !!(meta && meta.isEpisode),
+                title: (meta && meta.title) || Media.titleOf(movie) || '',
+                poster: (meta && meta.poster) || Media.posterOf(movie) || '',
+                tmdb_id: movie && (movie.id || movie.tmdb_id) || ''
+            };
+
+            // підтягнути постер з MetaStore якщо немає
+            if (!entry.poster && movie) {
+                var st = MetaStore.load(movie);
+                if (st && st.poster_path) entry.poster = st.poster_path;
+            }
+            if (!entry.poster && Media.lastCard) {
+                entry.poster = Media.posterOf(Media.lastCard);
+                if (!entry.title) entry.title = Media.titleOf(Media.lastCard);
+            }
+
+            this.data.completed[id] = entry;
+
+            if (entry.isEpisode) this.data.episodes_watched++;
             else this.data.movies_watched++;
 
             if (meta && meta.genres) {
                 meta.genres.forEach(function (g) {
                     var name = typeof g === 'string' ? g : (g && g.name);
-                    if (!name) return;
+                    if (!name || isGarbageGenre(name)) return;
                     if (!StatsDB.data.genres[name]) StatsDB.data.genres[name] = { seconds: 0, count: 0 };
                     StatsDB.data.genres[name].count += 1;
                 });
@@ -715,6 +793,20 @@
             return true;
         },
 
+        recentCompleted: function (limit) {
+            var list = Object.keys(this.data.completed).map(function (k) {
+                var c = StatsDB.data.completed[k];
+                return {
+                    id: k,
+                    date: c.date || 0,
+                    isEpisode: !!c.isEpisode,
+                    title: c.title || '',
+                    poster: c.poster || ''
+                };
+            }).sort(function (a, b) { return b.date - a.date; });
+            return list.slice(0, limit || CONFIG.max_posters_show);
+        },
+
         formatTime: function (sec) {
             sec = Math.max(0, Math.floor(sec || 0));
             var totalMin = Math.floor(sec / 60);
@@ -735,6 +827,7 @@
         topGenre: function () {
             var best = null, bestSec = -1, total = 0;
             Object.keys(this.data.genres).forEach(function (name) {
+                if (isGarbageGenre(name)) return;
                 var s = StatsDB.data.genres[name].seconds || 0;
                 total += s;
                 if (s > bestSec) { bestSec = s; best = name; }
@@ -752,6 +845,7 @@
 
         genreList: function () {
             return Object.keys(this.data.genres)
+                .filter(function (name) { return !isGarbageGenre(name); })
                 .map(function (name) { return { name: name, seconds: StatsDB.data.genres[name].seconds || 0 }; })
                 .sort(function (a, b) { return b.seconds - a.seconds; });
         },
@@ -1009,7 +1103,6 @@
 
             var meta = Media.metaFrom(movie);
 
-            // тонка картка з плеєра → жанри з lastCard (full/DOM)
             if (Media.lastCard) {
                 var alt = Media.metaFrom(Media.lastCard);
                 if (alt) {
@@ -1021,6 +1114,8 @@
                         meta.actors = alt.actors;
                     }
                     if (meta && !meta.year && alt.year) meta.year = alt.year;
+                    if (meta && !meta.poster && alt.poster) meta.poster = alt.poster;
+                    if (meta && !meta.title && alt.title) meta.title = alt.title;
                     if (meta && meta.isEpisode == null) meta.isEpisode = alt.isEpisode;
                 }
             }
@@ -1029,7 +1124,7 @@
             StatsDB.addProgress(id, time, duration, wallDelta, meta);
 
             if (movie && Number.isFinite(duration) && duration > 0 && time / duration >= CONFIG.completion) {
-                StatsDB.markCompleted(Media.getId(movie), meta);
+                StatsDB.markCompleted(Media.getId(movie), meta, movie);
             }
         },
 
@@ -1113,7 +1208,7 @@
                     ' | genres=' + mg +
                     ' | actors=' + ma +
                     ' | store=' + (stored ? ((stored.genres && stored.genres.length) || 0) + '/' + ((stored.actors && stored.actors.length) || 0) : 'no') +
-                    ' | gkeys=' + Object.keys(StatsDB.data.genres).length +
+                    ' | gkeys=' + Object.keys(StatsDB.data.genres).filter(function (n) { return !isGarbageGenre(n); }).length +
                     '</div>'
                 );
             } catch (e) {}
@@ -1136,18 +1231,46 @@
             var row = $('<div class="stv-cards"></div>');
             var g = StatsDB.topGenre();
             row.append(card(LANG.total_time, StatsDB.formatTime(StatsDB.data.seconds_watched), '⏱'));
-            row.append(card(
-                LANG.watched,
-                '<span class="stv-big">' + (StatsDB.data.movies_watched || 0) + '</span>' +
-                '<span class="stv-sub"> ' + LANG.movies + ' / ' + (StatsDB.data.episodes_watched || 0) + ' ' + LANG.episodes + '</span>',
-                '🎞'
-            ));
+            row.append(watchedCard());
             row.append(card(
                 LANG.fav_genre,
                 '<div class="stv-genre-name">' + g.name + '</div><div class="stv-genre-pct">' + g.percent + '%</div>',
                 '◎'
             ));
             return row;
+        }
+
+        function watchedCard() {
+            var c = $('<div class="stv-card selector stv-card-watched"></div>');
+            c.append('<div class="stv-card-label">' + LANG.watched + '</div>');
+
+            var body = $('<div class="stv-card-body stv-watched-body"></div>');
+            body.append(
+                '<div class="stv-watched-counts">' +
+                '<span class="stv-big">' + (StatsDB.data.movies_watched || 0) + '</span>' +
+                '<span class="stv-sub"> ' + LANG.movies + ' / ' + (StatsDB.data.episodes_watched || 0) + ' ' + LANG.episodes + '</span>' +
+                '</div>'
+            );
+
+            var posters = $('<div class="stv-posters"></div>');
+            var list = StatsDB.recentCompleted(CONFIG.max_posters_show);
+            if (list.length) {
+                list.forEach(function (item) {
+                    var p = $('<div class="stv-poster" title="' + (item.title || '').replace(/"/g, '&quot;') + '"></div>');
+                    var url = posterUrl(item.poster);
+                    if (url) {
+                        p.css('background-image', 'url(' + url + ')');
+                    } else {
+                        p.addClass('stv-poster-empty');
+                        p.text(item.isEpisode ? 'S' : 'F');
+                    }
+                    if (item.isEpisode) p.append('<span class="stv-poster-badge">EP</span>');
+                    posters.append(p);
+                });
+            }
+            body.append(posters);
+            c.append(body);
+            return c;
         }
 
         function card(label, valueHtml, icon) {
@@ -1308,6 +1431,12 @@
         '.stv-sub{font-size:13px;font-weight:500;opacity:0.7;}' +
         '.stv-genre-name{font-size:18px;font-weight:700;text-transform:uppercase;}' +
         '.stv-genre-pct{font-size:13px;opacity:0.6;margin-top:2px;}' +
+        '.stv-watched-body{flex-direction:column;align-items:flex-start;gap:10px;}' +
+        '.stv-watched-counts{display:flex;align-items:baseline;gap:4px;}' +
+        '.stv-posters{display:flex;flex-wrap:wrap;gap:6px;}' +
+        '.stv-poster{width:36px;height:54px;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.1);position:relative;flex-shrink:0;}' +
+        '.stv-poster-empty{display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;opacity:0.6;}' +
+        '.stv-poster-badge{position:absolute;bottom:2px;right:2px;font-size:8px;background:rgba(0,0,0,0.7);padding:1px 3px;border-radius:3px;}' +
         '.stv-section{margin-bottom:26px;}' +
         '.stv-section-title{font-size:13px;opacity:0.55;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;}' +
         '.stv-actors{display:flex;gap:14px;overflow:hidden;flex-wrap:wrap;}' +
@@ -1353,7 +1482,7 @@
             if (Lampa.Component && Lampa.Component.add) Lampa.Component.add(CONFIG.activity, StatsComponent);
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v9.5 ready');
+            console.log('Lampa stats v9.6 ready');
         } catch (e) {
             console.error('stats init', e);
         }
