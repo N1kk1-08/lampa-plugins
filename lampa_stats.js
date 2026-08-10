@@ -1,8 +1,9 @@
 (function () {
     'use strict';
 
-    if (window.lampa_stats_plugin_v2) return;
-    window.lampa_stats_plugin_v2 = true;
+    // Змінено версію на v3 для уникнення конфліктів при оновленні
+    if (window.lampa_stats_plugin_v3) return;
+    window.lampa_stats_plugin_v3 = true;
 
     // --- Локалізація (Українська) ---
     var lang = {
@@ -48,17 +49,14 @@
         if (stats_initialized) return;
         stats_initialized = true;
 
-        // Ініціалізуємо кеш поточними даними переглядів, щоб не зарахувати історію як нові перегляди
         var initial_views = Lampa.Storage.get('file_view', {});
         var now = Date.now();
         for(var h in initial_views) {
             view_cache[h] = { time: initial_views[h].time || 0, ts: now };
         }
 
-        // Перехоплюємо глобальне збереження Storage в Lampa
         var origSet = Lampa.Storage.set;
         Lampa.Storage.set = function (name, value) {
-            // Ловимо тільки оновлення таймкодів (file_view)
             if (name === 'file_view' && Lampa.Storage.get('stats_collect', true)) {
                 processFileViewUpdate(value);
             }
@@ -73,31 +71,23 @@
             var cached = view_cache[hash];
 
             if (!cached) {
-                // Вперше бачимо цей файл у сесії
                 view_cache[hash] = { time: curr.time || 0, ts: now };
             } else if (curr.time !== cached.time) {
-                // Таймкод змінився (плеєр передав нові дані)
                 var video_delta = (curr.time || 0) - cached.time;
                 var real_delta = Math.floor((now - cached.ts) / 1000);
 
                 if (video_delta > 0) {
-                    // ХИТРІСТЬ: Беремо мінімальне значення між реальним часом і зміною таймкоду.
-                    // Це відсікає перемотки (real_delta малий, video_delta великий), 
-                    // але коректно рахує зовнішній плеєр (він повертає великий video_delta і пройшов великий real_delta).
-                    // Додаємо 15 секунд буфера на пінги та завантаження буфера плеєра.
                     var actual_watched = Math.min(video_delta, real_delta + 15);
 
                     if (actual_watched > 0) {
                         StatsDB.data.seconds_watched = (StatsDB.data.seconds_watched || 0) + actual_watched;
                         
-                        // Перевіряємо, чи перетнули ми поріг 85% для повного зарахування фільму/серії
                         var duration = curr.duration || 1;
                         var percent_now = (curr.time || 0) / duration;
                         var percent_before = cached.time / duration;
 
                         if (percent_now >= 0.85 && percent_before < 0.85) {
                             var is_tv = false;
-                            // Намагаємось зрозуміти, серіал це чи фільм через поточну активність
                             var active = Lampa.Activity.active();
                             if (active && active.movie && active.movie.name) is_tv = true;
                             
@@ -108,7 +98,6 @@
                         StatsDB.save();
                     }
                 }
-                // Оновлюємо пам'ять
                 view_cache[hash] = { time: curr.time || 0, ts: now };
             }
         }
@@ -129,7 +118,7 @@
         Lampa.SettingsApi.addParam({ component: targetComponent, param: { name: 'stats_menu_visible', type: 'trigger', default: true }, field: { name: 'Відображати розділ у головному меню' }, onChange: function () { updateMenuVisibility(); } });
     }
 
-    // --- Логіка відображення меню ---
+    // --- Логіка відображення меню (З ФІКСОМ ПЕРЕЗАВАНТАЖЕННЯ) ---
     function updateMenuVisibility() {
         var isVisible = Lampa.Storage.get('stats_menu_visible', true);
         var existingMenuItem = $('.menu__item[data-action="lampa_stats"]');
@@ -139,6 +128,7 @@
             return;
         }
         if (existingMenuItem.length) return; 
+        if ($('.menu__list').length === 0) return; // Меню ще не відрендерене Лампою
 
         var menuItem = $('<li class="menu__item selector" data-action="lampa_stats">' +
             '<div class="menu__ico">' +
@@ -154,7 +144,7 @@
 
         var historyItem = $('.menu__item[data-action="history"]');
         if (historyItem.length) historyItem.after(menuItem);
-        else if ($('.menu__list').length) $('.menu__list').append(menuItem);
+        else $('.menu__list').append(menuItem);
     }
 
     // --- Визначення екрану Activity ---
@@ -183,7 +173,6 @@
                     summary.append(this.renderSummaryCard(lang.watched, watchedString, '<i class="fa fa-film"></i>'));
                     render.append(summary);
                     
-                    // Блок з демо-даними (Актори, Жанри), поки не реалізовано повноцінний парсинг
                     var demoNotice = $('<div style="color:#a0aec0; margin-top:20px; font-size:14px; text-align:center;">* Графіки нижче використовують демонстраційні дані для тестування дизайну *</div>');
                     render.append(demoNotice);
                 }
@@ -235,11 +224,11 @@
             $('body').append(Lampa.Template.get('stats_plugin_styles'));
         }
         setupSettings();
-        initTracker(); // Обов'язково запускаємо перехоплювач таймкодів
+        initTracker(); 
         defineActivity();
         
-        updateMenuVisibility();
-        setTimeout(updateMenuVisibility, 500);
+        // Перевіряємо наявність меню кожну секунду (вирішує проблему з перезавантаженням)
+        setInterval(updateMenuVisibility, 1000);
     }
 
     if (window.appready) runInit();
