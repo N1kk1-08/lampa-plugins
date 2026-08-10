@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v96) return;
-    window.lampa_ukrainian_stats_v96 = true;
+    if (window.lampa_ukrainian_stats_v97) return;
+    window.lampa_ukrainian_stats_v97 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -30,7 +30,11 @@
         reset_done: 'Статистику скинуто.',
         no_genre: '—',
         no_actors: 'Актори з’являться після переглядів',
-        films_short: 'фільмів'
+        films_short: 'фільмів',
+        actor_works: 'Фільми та серіали',
+        no_works: 'Поки немає записів',
+        film: 'фільм',
+        series_ep: 'серія'
     };
 
     var CONFIG = {
@@ -39,11 +43,12 @@
         menu_storage: 'stats_menu_visible',
         menu_action: 'lampa_ukrainian_stats',
         activity: 'lampa_ukrainian_stats_view',
+        activity_actor: 'lampa_ukrainian_stats_actor',
         completion: 0.85,
         interval: 1000,
         tmdb_img: 'https://image.tmdb.org/t/p/w185',
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
-        max_actors_show: 8,
+        max_actors_show: 15,
         max_posters_show: 8
     };
 
@@ -89,11 +94,11 @@
         return false;
     }
 
-    function posterUrl(path) {
+    function posterUrl(path, size) {
         if (!path) return '';
         var s = String(path);
         if (s.indexOf('http') === 0) return s;
-        return CONFIG.tmdb_poster + s;
+        return (size || CONFIG.tmdb_poster) + s;
     }
 
     /* ===================== CardCache ===================== */
@@ -178,6 +183,13 @@
             return String(id) + ':' + String(season) + ':' + String(episode);
         },
 
+        // id без сезону/серії — для «робіт» актора
+        getBaseId: function (movie) {
+            if (!movie) return 'unknown';
+            return String(movie.id || movie.tmdb_id || movie.kinopoisk_id || movie.imdb_id ||
+                movie.original_title || movie.original_name || movie.title || movie.name || 'unknown');
+        },
+
         isEpisode: function (movie) {
             if (!movie) return false;
             return !!(movie.episode || movie.episode_number ||
@@ -219,7 +231,7 @@
                 else if (movie.persons && Array.isArray(movie.persons.cast)) list = movie.persons.cast;
                 else if (Array.isArray(movie.persons)) list = movie.persons;
             } catch (e) {}
-            return list.filter(function (p) { return p && (p.id || p.name); }).slice(0, 12).map(function (p) {
+            return list.filter(function (p) { return p && (p.id || p.name); }).slice(0, 15).map(function (p) {
                 return {
                     id: p.id || p.name,
                     name: p.name || '',
@@ -384,7 +396,7 @@
                     '.full-person__name, .person__name, .full-persons .card__title, .persons .card__title, .full-person .card__title'
                 );
                 actorNodes.forEach(function (el, i) {
-                    if (i > 11) return;
+                    if (i > 14) return;
                     var name = (el.textContent || '').trim();
                     if (!name) return;
                     var img = '';
@@ -436,7 +448,9 @@
             genres: Media.genresOf(movie),
             actors: Media.actorsOf(movie),
             poster: Media.posterOf(movie),
-            title: Media.titleOf(movie)
+            title: Media.titleOf(movie),
+            baseId: Media.getBaseId(movie),
+            watchId: Media.getId(movie)
         };
     };
 
@@ -623,6 +637,10 @@
             ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour'].forEach(function (k) {
                 if (!StatsDB.data[k] || typeof StatsDB.data[k] !== 'object') StatsDB.data[k] = {};
             });
+            // міграція works
+            Object.keys(this.data.actors).forEach(function (k) {
+                if (!StatsDB.data.actors[k].works) StatsDB.data.actors[k].works = {};
+            });
             this.cleanupGenres();
             this.normalize();
         },
@@ -662,6 +680,59 @@
 
         setLast: function (id, t) {
             this.data.last_recorded[id] = Math.max(0, Math.floor(t));
+        },
+
+        ensureActor: function (a) {
+            if (!a || !(a.id || a.name)) return null;
+            var key = String(a.id || a.name);
+            if (!this.data.actors[key]) {
+                this.data.actors[key] = {
+                    id: a.id || a.name,
+                    name: a.name || '',
+                    profile_path: a.profile_path || '',
+                    seconds: 0,
+                    count: 0,
+                    works: {}
+                };
+            }
+            var row = this.data.actors[key];
+            if (!row.works) row.works = {};
+            if (a.name) row.name = a.name;
+            if (a.profile_path) row.profile_path = a.profile_path;
+            return row;
+        },
+
+        touchActorWork: function (a, meta, sec, completed) {
+            var row = this.ensureActor(a);
+            if (!row || !meta) return;
+
+            var wid = meta.baseId || meta.watchId || meta.title || 'unknown';
+            if (!row.works[wid]) {
+                row.works[wid] = {
+                    title: meta.title || '',
+                    poster: meta.poster || '',
+                    isEpisode: !!meta.isEpisode,
+                    seconds: 0,
+                    completed: false,
+                    date: Date.now()
+                };
+            }
+            var w = row.works[wid];
+            if (meta.title) w.title = meta.title;
+            if (meta.poster) w.poster = meta.poster;
+            w.isEpisode = !!meta.isEpisode;
+            if (sec) w.seconds += sec;
+            w.date = Date.now();
+
+            if (completed && !w.completed) {
+                w.completed = true;
+                row.count = Object.keys(row.works).filter(function (k) {
+                    return row.works[k].completed;
+                }).length;
+            } else {
+                // count = кількість унікальних робіт (хоч частково переглянутих)
+                row.count = Object.keys(row.works).length;
+            }
         },
 
         addProgress: function (id, time, duration, deltaSec, meta) {
@@ -713,22 +784,11 @@
                 });
             }
             if (meta.actors && meta.actors.length) {
-                meta.actors.slice(0, 10).forEach(function (a) {
-                    if (!a || !(a.id || a.name)) return;
-                    var key = String(a.id || a.name);
-                    if (!StatsDB.data.actors[key]) {
-                        StatsDB.data.actors[key] = {
-                            id: a.id || a.name,
-                            name: a.name || '',
-                            profile_path: a.profile_path || '',
-                            seconds: 0,
-                            count: 0
-                        };
-                    }
-                    var row = StatsDB.data.actors[key];
+                meta.actors.slice(0, 15).forEach(function (a) {
+                    var row = StatsDB.ensureActor(a);
+                    if (!row) return;
                     row.seconds += sec;
-                    if (a.name) row.name = a.name;
-                    if (a.profile_path) row.profile_path = a.profile_path;
+                    StatsDB.touchActorWork(a, meta, sec, false);
                 });
             }
             if (!skipSave) this.save();
@@ -745,7 +805,6 @@
                 tmdb_id: movie && (movie.id || movie.tmdb_id) || ''
             };
 
-            // підтягнути постер з MetaStore якщо немає
             if (!entry.poster && movie) {
                 var st = MetaStore.load(movie);
                 if (st && st.poster_path) entry.poster = st.poster_path;
@@ -769,19 +828,8 @@
                 });
             }
             if (meta && meta.actors) {
-                meta.actors.slice(0, 10).forEach(function (a) {
-                    if (!a || !(a.id || a.name)) return;
-                    var key = String(a.id || a.name);
-                    if (!StatsDB.data.actors[key]) {
-                        StatsDB.data.actors[key] = {
-                            id: a.id || a.name,
-                            name: a.name || '',
-                            profile_path: a.profile_path || '',
-                            seconds: 0,
-                            count: 0
-                        };
-                    }
-                    StatsDB.data.actors[key].count += 1;
+                meta.actors.slice(0, 15).forEach(function (a) {
+                    StatsDB.touchActorWork(a, meta, 0, true);
                 });
             }
             if (meta && meta.year) {
@@ -805,6 +853,36 @@
                 };
             }).sort(function (a, b) { return b.date - a.date; });
             return list.slice(0, limit || CONFIG.max_posters_show);
+        },
+
+        topActors: function (limit) {
+            return Object.keys(this.data.actors)
+                .map(function (k) {
+                    var a = StatsDB.data.actors[k];
+                    if (!a.works) a.works = {};
+                    a.count = Object.keys(a.works).length;
+                    a._key = k;
+                    return a;
+                })
+                .sort(function (a, b) { return (b.seconds || 0) - (a.seconds || 0); })
+                .slice(0, limit || CONFIG.max_actors_show);
+        },
+
+        actorWorks: function (key) {
+            var a = this.data.actors[key];
+            if (!a || !a.works) return [];
+            return Object.keys(a.works).map(function (wid) {
+                var w = a.works[wid];
+                return {
+                    id: wid,
+                    title: w.title || wid,
+                    poster: w.poster || '',
+                    isEpisode: !!w.isEpisode,
+                    seconds: w.seconds || 0,
+                    completed: !!w.completed,
+                    date: w.date || 0
+                };
+            }).sort(function (x, y) { return y.date - x.date; });
         },
 
         formatTime: function (sec) {
@@ -834,13 +912,6 @@
             });
             if (!best || total <= 0) return { name: LANG.no_genre, percent: 0 };
             return { name: best, percent: Math.round((bestSec / total) * 100) };
-        },
-
-        topActors: function (limit) {
-            return Object.keys(this.data.actors)
-                .map(function (k) { return StatsDB.data.actors[k]; })
-                .sort(function (a, b) { return (b.seconds || 0) - (a.seconds || 0); })
-                .slice(0, limit || CONFIG.max_actors_show);
         },
 
         genreList: function () {
@@ -1116,6 +1187,7 @@
                     if (meta && !meta.year && alt.year) meta.year = alt.year;
                     if (meta && !meta.poster && alt.poster) meta.poster = alt.poster;
                     if (meta && !meta.title && alt.title) meta.title = alt.title;
+                    if (meta && !meta.baseId && alt.baseId) meta.baseId = alt.baseId;
                     if (meta && meta.isEpisode == null) meta.isEpisode = alt.isEpisode;
                 }
             }
@@ -1157,7 +1229,7 @@
         }
     };
 
-    /* ===================== UI ===================== */
+    /* ===================== UI: main stats ===================== */
     function StatsComponent() {
         var html = $('<div class="stv-root"></div>');
 
@@ -1194,24 +1266,6 @@
         function renderAll(root) {
             root.empty();
             root.append('<div class="stv-title">' + LANG.page_title + '</div>');
-
-            try {
-                var last = Media.lastCard || Tracker.currentMovie;
-                var mid = last ? Media.labelOf(last) : 'none';
-                var rich = last ? MetaStore.applyToMovie(CardCache.get(last) || last) : null;
-                var mg = rich ? Media.genresOf(rich).length : 0;
-                var ma = rich ? Media.actorsOf(rich).length : 0;
-                var stored = last ? MetaStore.load(last) : null;
-                root.append(
-                    '<div style="opacity:0.4;font-size:12px;margin-bottom:12px;word-break:break-all;">' +
-                    'meta id=' + mid +
-                    ' | genres=' + mg +
-                    ' | actors=' + ma +
-                    ' | store=' + (stored ? ((stored.genres && stored.genres.length) || 0) + '/' + ((stored.actors && stored.actors.length) || 0) : 'no') +
-                    ' | gkeys=' + Object.keys(StatsDB.data.genres).filter(function (n) { return !isGarbageGenre(n); }).length +
-                    '</div>'
-                );
-            } catch (e) {}
 
             if (!Settings.collecting()) root.append('<div class="stv-disabled">' + LANG.disabled_text + '</div>');
 
@@ -1258,9 +1312,8 @@
                 list.forEach(function (item) {
                     var p = $('<div class="stv-poster" title="' + (item.title || '').replace(/"/g, '&quot;') + '"></div>');
                     var url = posterUrl(item.poster);
-                    if (url) {
-                        p.css('background-image', 'url(' + url + ')');
-                    } else {
+                    if (url) p.css('background-image', 'url(' + url + ')');
+                    else {
                         p.addClass('stv-poster-empty');
                         p.text(item.isEpisode ? 'S' : 'F');
                     }
@@ -1284,7 +1337,7 @@
             var wrap = $('<div class="stv-section"></div>');
             wrap.append('<div class="stv-section-title">' + LANG.fav_actors + '</div>');
             var row = $('<div class="stv-actors"></div>');
-            var list = StatsDB.topActors();
+            var list = StatsDB.topActors(CONFIG.max_actors_show);
             if (!list.length) row.append('<div class="stv-muted">' + LANG.no_actors + '</div>');
             else {
                 list.forEach(function (a) {
@@ -1295,7 +1348,21 @@
                     if (img) item.append('<div class="stv-actor-photo" style="background-image:url(' + img + ')"></div>');
                     else item.append('<div class="stv-actor-photo stv-actor-ph">' + (a.name || '?').charAt(0) + '</div>');
                     item.append('<div class="stv-actor-name">' + (a.name || '') + '</div>');
-                    item.append('<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) + ', ' + (a.count || 0) + ' ' + LANG.films_short + '</div>');
+                    item.append(
+                        '<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) +
+                        ', ' + (a.count || 0) + ' ' + LANG.films_short + '</div>'
+                    );
+
+                    item.on('hover:enter click', function () {
+                        Lampa.Activity.push({
+                            url: 'stats_actor',
+                            title: a.name || LANG.actor_works,
+                            component: CONFIG.activity_actor,
+                            actor_key: a._key || String(a.id || a.name),
+                            page: 1
+                        });
+                    });
+
                     row.append(item);
                 });
             }
@@ -1385,6 +1452,80 @@
         }
     }
 
+    /* ===================== UI: actor works ===================== */
+    function ActorWorksComponent(object) {
+        var html = $('<div class="stv-root"></div>');
+        var key = (object && object.actor_key) || '';
+
+        this.create = function () {
+            render();
+            try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
+        };
+        this.start = function () {
+            try {
+                Lampa.Controller.add('content', {
+                    toggle: function () {
+                        Lampa.Controller.collectionSet(html);
+                        Lampa.Controller.collectionFocus(false, html);
+                    },
+                    left: function () {
+                        if (Navigator.canmove('left')) Navigator.move('left');
+                        else Lampa.Controller.toggle('menu');
+                    },
+                    right: function () { Navigator.move('right'); },
+                    up: function () {
+                        if (Navigator.canmove('up')) Navigator.move('up');
+                        else Lampa.Controller.toggle('head');
+                    },
+                    down: function () { Navigator.move('down'); },
+                    back: function () { Lampa.Activity.backward(); }
+                });
+                Lampa.Controller.toggle('content');
+            } catch (e) {}
+        };
+        this.pause = function () {};
+        this.render = function () { return html; };
+        this.destroy = function () { html.remove(); };
+
+        function render() {
+            html.empty();
+            var actor = StatsDB.data.actors[key];
+            var name = (actor && actor.name) || (object && object.title) || LANG.actor_works;
+            html.append('<div class="stv-title">' + name + '</div>');
+            html.append('<div class="stv-section-title">' + LANG.actor_works + '</div>');
+
+            var works = StatsDB.actorWorks(key);
+            if (!works.length) {
+                html.append('<div class="stv-empty selector">' + LANG.no_works + '</div>');
+                return;
+            }
+
+            var list = $('<div class="stv-works"></div>');
+            works.forEach(function (w) {
+                var row = $('<div class="stv-work selector"></div>');
+                var poster = $('<div class="stv-work-poster"></div>');
+                var url = posterUrl(w.poster);
+                if (url) poster.css('background-image', 'url(' + url + ')');
+                else poster.addClass('stv-poster-empty').text(w.isEpisode ? 'S' : 'F');
+
+                var info = $('<div class="stv-work-info"></div>');
+                info.append('<div class="stv-work-title">' + (w.title || '') + '</div>');
+                info.append(
+                    '<div class="stv-work-meta">' +
+                    (w.isEpisode ? LANG.series_ep : LANG.film) +
+                    ' · ' + StatsDB.formatTime(w.seconds) +
+                    (w.completed ? ' · ✓' : '') +
+                    '</div>'
+                );
+
+                row.append(poster);
+                row.append(info);
+                list.append(row);
+            });
+            html.append(list);
+        }
+    }
+
     var Menu = {
         selector: '.menu .menu__list',
         createItem: function () {
@@ -1439,13 +1580,19 @@
         '.stv-poster-badge{position:absolute;bottom:2px;right:2px;font-size:8px;background:rgba(0,0,0,0.7);padding:1px 3px;border-radius:3px;}' +
         '.stv-section{margin-bottom:26px;}' +
         '.stv-section-title{font-size:13px;opacity:0.55;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;}' +
-        '.stv-actors{display:flex;gap:14px;overflow:hidden;flex-wrap:wrap;}' +
-        '.stv-actor{width:120px;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;}' +
+        '.stv-actors{display:flex;gap:12px;overflow:hidden;flex-wrap:wrap;}' +
+        '.stv-actor{width:110px;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;}' +
         '.stv-actor:focus{border-color:rgba(59,130,246,0.7);background:rgba(255,255,255,0.06);}' +
-        '.stv-actor-photo{width:72px;height:72px;border-radius:50%;margin:0 auto 8px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.08);}' +
-        '.stv-actor-ph{display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;}' +
-        '.stv-actor-name{font-size:13px;font-weight:600;line-height:1.2;margin-bottom:4px;}' +
+        '.stv-actor-photo{width:68px;height:68px;border-radius:50%;margin:0 auto 8px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.08);}' +
+        '.stv-actor-ph{display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;}' +
+        '.stv-actor-name{font-size:12px;font-weight:600;line-height:1.2;margin-bottom:4px;}' +
         '.stv-actor-meta{font-size:11px;opacity:0.55;}' +
+        '.stv-works{display:flex;flex-direction:column;gap:10px;}' +
+        '.stv-work{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
+        '.stv-work:focus{border-color:rgba(59,130,246,0.7);background:rgba(255,255,255,0.09);}' +
+        '.stv-work-poster{width:48px;height:72px;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.1);flex-shrink:0;}' +
+        '.stv-work-title{font-size:16px;font-weight:600;margin-bottom:4px;}' +
+        '.stv-work-meta{font-size:12px;opacity:0.55;}' +
         '.stv-bottom{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:24px;}' +
         '.stv-panel{flex:1;min-width:200px;padding:16px;border-radius:14px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
         '.stv-panel:focus{border-color:rgba(59,130,246,0.7);}' +
@@ -1479,10 +1626,13 @@
             StatsDB.init();
             installCSS();
             Settings.setup();
-            if (Lampa.Component && Lampa.Component.add) Lampa.Component.add(CONFIG.activity, StatsComponent);
+            if (Lampa.Component && Lampa.Component.add) {
+                Lampa.Component.add(CONFIG.activity, StatsComponent);
+                Lampa.Component.add(CONFIG.activity_actor, ActorWorksComponent);
+            }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v9.6 ready');
+            console.log('Lampa stats v9.7 ready');
         } catch (e) {
             console.error('stats init', e);
         }
