@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v94) return;
-    window.lampa_ukrainian_stats_v94 = true;
+    if (window.lampa_ukrainian_stats_v95) return;
+    window.lampa_ukrainian_stats_v95 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -80,12 +80,15 @@
 
         key: function (m) {
             if (!m) return '';
-            return String(m.id || m.tmdb_id || '');
+            return String(m.id || m.tmdb_id || m.imdb_id || '');
         },
 
         put: function (m) {
             var k = this.key(m);
-            if (!k || !m) return;
+            if (!k || !m) {
+                // без id все одно тримаємо в last через Media.remember
+                return;
+            }
 
             var prev = this.map[k] || {};
             var next = Object.assign({}, prev, m);
@@ -141,7 +144,7 @@
         }
     };
 
-    /* ===================== Media (forward decl helpers used below) ===================== */
+    /* ===================== Media base ===================== */
     var Media = {
         lastCard: null,
 
@@ -218,15 +221,28 @@
                 if (episode != null) { movie.episode_number = episode; movie.episode = episode; }
             }
             return movie;
+        },
+
+        labelOf: function (movie) {
+            if (!movie) return '?';
+            return movie.id || movie.tmdb_id || movie.title || movie.name || movie.original_title || movie.original_name || '?';
         }
     };
 
-    /* ===================== MetaStore (Storage) ===================== */
+    /* ===================== MetaStore ===================== */
     var MetaStore = {
         prefix: 'stats_meta_',
 
+        keyOf: function (movie) {
+            if (!movie) return '';
+            var id = movie.id || movie.tmdb_id || movie.imdb_id || movie.kinopoisk_id;
+            if (id) return String(id);
+            var title = movie.original_title || movie.original_name || movie.title || movie.name || '';
+            return title ? ('t:' + title) : '';
+        },
+
         save: function (movie) {
-            var id = movie && (movie.id || movie.tmdb_id);
+            var id = this.keyOf(movie);
             if (!id) return;
             try {
                 var meta = {
@@ -256,7 +272,8 @@
             } catch (e) {}
         },
 
-        load: function (id) {
+        load: function (idOrMovie) {
+            var id = typeof idOrMovie === 'object' ? this.keyOf(idOrMovie) : idOrMovie;
             if (!id) return null;
             try {
                 var m = Lampa.Storage.get(this.prefix + id);
@@ -268,8 +285,7 @@
 
         applyToMovie: function (movie) {
             if (!movie) return movie;
-            var id = movie.id || movie.tmdb_id;
-            var stored = this.load(id);
+            var stored = this.load(movie);
             if (!stored) return movie;
 
             movie = Object.assign({}, movie);
@@ -293,7 +309,7 @@
     /* ===================== DomMeta ===================== */
     var DomMeta = {
         scrape: function () {
-            var result = { genres: [], year: 0, actors: [] };
+            var result = { genres: [], year: 0, actors: [], id: null, title: '' };
             try {
                 var y = document.querySelector('.tag--year');
                 if (y) {
@@ -307,6 +323,9 @@
                         if (hm) result.year = parseInt(hm[0], 10);
                     }
                 }
+
+                var titleEl = document.querySelector('.full-start-new__title, .full-start__title');
+                if (titleEl) result.title = (titleEl.textContent || '').trim();
 
                 var details = document.querySelector('.full-start-new__details, .full-start__details');
                 if (details) {
@@ -336,20 +355,27 @@
                     }
                     result.actors.push({ id: name, name: name, profile_path: img });
                 });
+
+                try {
+                    var act = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
+                    if (act) {
+                        if (act.id) result.id = act.id;
+                        if (act.card && act.card.id) result.id = act.card.id;
+                        if (act.movie && act.movie.id) result.id = act.movie.id;
+                    }
+                } catch (e) {}
             } catch (e) {}
             return result;
         },
 
         mergeInto: function (movie) {
-            if (!movie) return movie;
+            if (!movie) movie = {};
             var d = this.scrape();
             movie = Object.assign({}, movie);
-            if (d.year && !Media.yearOf(movie)) {
-                movie.release_date = String(d.year) + '-01-01';
-            }
-            if (d.genres.length && !(movie.genres && movie.genres.length)) {
-                movie.genres = d.genres;
-            }
+            if (d.id && !movie.id) movie.id = d.id;
+            if (d.title && !movie.title && !movie.name) movie.title = d.title;
+            if (d.year && !Media.yearOf(movie)) movie.release_date = String(d.year) + '-01-01';
+            if (d.genres.length && !(movie.genres && movie.genres.length)) movie.genres = d.genres;
             if (d.actors.length && !(movie.credits && movie.credits.cast && movie.credits.cast.length)) {
                 movie.credits = { cast: d.actors };
             }
@@ -357,10 +383,9 @@
         }
     };
 
-    // Media methods that depend on MetaStore/DomMeta
     Media.metaFrom = function (movie) {
         if (!movie) return null;
-        movie = CardCache.get(movie);
+        movie = CardCache.get(movie) || movie;
         movie = MetaStore.applyToMovie(movie);
         return {
             isEpisode: Media.isEpisode(movie),
@@ -374,11 +399,11 @@
         if (!movie || typeof movie !== 'object') return;
         movie = DomMeta.mergeInto(movie);
         CardCache.put(movie);
-        movie = CardCache.get(movie);
+        movie = CardCache.get(movie) || movie;
         movie = MetaStore.applyToMovie(movie);
         CardCache.put(movie);
         MetaStore.save(movie);
-        this.lastCard = CardCache.get(movie);
+        this.lastCard = CardCache.get(movie) || movie;
     };
 
     /* ===================== MetaLoader ===================== */
@@ -409,19 +434,20 @@
             movie = MetaStore.applyToMovie(movie);
             var id = movie.id || movie.tmdb_id;
             if (!id) {
+                Media.remember(movie);
                 if (done) done(movie);
                 return;
             }
 
             if (CardCache.hasRich(movie) || (Media.genresOf(movie).length && Media.actorsOf(movie).length)) {
                 Media.remember(movie);
-                if (done) done(CardCache.get(movie));
+                if (done) done(CardCache.get(movie) || movie);
                 return;
             }
 
             var key = String(id);
             if (CardCache.loading[key]) {
-                if (done) done(CardCache.get(movie));
+                if (done) done(CardCache.get(movie) || movie);
                 return;
             }
             CardCache.loading[key] = true;
@@ -448,7 +474,7 @@
                 Media.remember(merged);
 
                 if (Tracker.currentMovie && CardCache.key(Tracker.currentMovie) === key) {
-                    Tracker.currentMovie = CardCache.get(merged);
+                    Tracker.currentMovie = CardCache.get(merged) || merged;
                 }
 
                 try {
@@ -460,7 +486,7 @@
                     }
                 } catch (e) {}
 
-                if (done) done(CardCache.get(merged));
+                if (done) done(CardCache.get(merged) || merged);
             }
 
             try {
@@ -811,14 +837,14 @@
 
     var Current = {
         getMovie: function () {
-            if (Tracker.currentMovie) return MetaStore.applyToMovie(CardCache.get(Tracker.currentMovie));
+            if (Tracker.currentMovie) return MetaStore.applyToMovie(CardCache.get(Tracker.currentMovie) || Tracker.currentMovie);
             if (Media.lastCard) return MetaStore.applyToMovie(Media.lastCard);
             try {
                 var a = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
                 if (a) {
-                    if (a.movie) return MetaStore.applyToMovie(CardCache.get(a.movie));
-                    if (a.card) return MetaStore.applyToMovie(CardCache.get(a.card));
-                    if (a.object && a.object.movie) return MetaStore.applyToMovie(CardCache.get(a.object.movie));
+                    if (a.movie) return MetaStore.applyToMovie(CardCache.get(a.movie) || a.movie);
+                    if (a.card) return MetaStore.applyToMovie(CardCache.get(a.card) || a.card);
+                    if (a.object && a.object.movie) return MetaStore.applyToMovie(CardCache.get(a.object.movie) || a.object.movie);
                 }
             } catch (e) {}
             return null;
@@ -876,7 +902,7 @@
                                         });
                                     }
                                     Media.remember(movie);
-                                    movie = MetaStore.applyToMovie(CardCache.get(movie));
+                                    movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
                                     Tracker.currentMovie = movie;
                                     MetaLoader.enrich(movie);
                                 }
@@ -916,7 +942,19 @@
                     if (e.type !== 'complite' && e.type !== 'start' && e.type !== 'complete') return;
 
                     var movie = e.data.movie || (e.object && e.object.card) || null;
+                    if (!movie && e.object) {
+                        movie = {
+                            id: e.object.id,
+                            title: e.object.title,
+                            name: e.object.name,
+                            method: e.object.method
+                        };
+                    }
                     if (!movie) return;
+
+                    if (e.object && !movie.id && e.object.id) {
+                        movie = Object.assign({}, movie, { id: e.object.id });
+                    }
 
                     var cast = null;
                     if (e.data.persons && e.data.persons.cast) cast = e.data.persons.cast;
@@ -930,15 +968,14 @@
                         });
                     }
 
-                    // DOM fallback + persistent store
                     setTimeout(function () {
                         movie = DomMeta.mergeInto(movie);
                         Media.remember(movie);
                         MetaLoader.enrich(movie);
-                        if (self.currentMovie && CardCache.key(self.currentMovie) === CardCache.key(movie)) {
+                        if (self.currentMovie && Media.labelOf(self.currentMovie) === Media.labelOf(movie)) {
                             self.currentMovie = Media.lastCard;
                         }
-                    }, 300);
+                    }, 400);
                 });
             } catch (e) {}
 
@@ -950,12 +987,12 @@
             if (!movie) return;
 
             Media.remember(movie);
-            movie = MetaStore.applyToMovie(CardCache.get(movie));
+            movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
             this.currentMovie = movie;
 
             MetaLoader.enrich(movie, function (rich) {
                 if (rich) {
-                    Tracker.currentMovie = MetaStore.applyToMovie(CardCache.get(rich));
+                    Tracker.currentMovie = MetaStore.applyToMovie(CardCache.get(rich) || rich);
                     Media.remember(rich);
                 }
             });
@@ -963,14 +1000,34 @@
 
         apply: function (time, duration, wallDelta) {
             if (!Settings.collecting()) return;
+
             var movie = this.currentMovie || Current.getMovie() || Media.lastCard;
             if (movie) {
-                movie = CardCache.get(movie);
+                movie = CardCache.get(movie) || movie;
                 movie = MetaStore.applyToMovie(movie);
             }
-            var id = movie ? Media.getId(movie) : 'session:anon';
+
             var meta = Media.metaFrom(movie);
+
+            // тонка картка з плеєра → жанри з lastCard (full/DOM)
+            if (Media.lastCard) {
+                var alt = Media.metaFrom(Media.lastCard);
+                if (alt) {
+                    if ((!meta || !meta.genres || !meta.genres.length) && alt.genres && alt.genres.length) {
+                        meta = meta || {};
+                        meta.genres = alt.genres;
+                    }
+                    if (meta && (!meta.actors || !meta.actors.length) && alt.actors && alt.actors.length) {
+                        meta.actors = alt.actors;
+                    }
+                    if (meta && !meta.year && alt.year) meta.year = alt.year;
+                    if (meta && meta.isEpisode == null) meta.isEpisode = alt.isEpisode;
+                }
+            }
+
+            var id = movie ? Media.getId(movie) : 'session:anon';
             StatsDB.addProgress(id, time, duration, wallDelta, meta);
+
             if (movie && Number.isFinite(duration) && duration > 0 && time / duration >= CONFIG.completion) {
                 StatsDB.markCompleted(Media.getId(movie), meta);
             }
@@ -1043,14 +1100,13 @@
             root.empty();
             root.append('<div class="stv-title">' + LANG.page_title + '</div>');
 
-            // DEBUG
             try {
                 var last = Media.lastCard || Tracker.currentMovie;
-                var mid = last ? (last.id || last.tmdb_id || '?') : 'none';
+                var mid = last ? Media.labelOf(last) : 'none';
                 var rich = last ? MetaStore.applyToMovie(CardCache.get(last) || last) : null;
                 var mg = rich ? Media.genresOf(rich).length : 0;
                 var ma = rich ? Media.actorsOf(rich).length : 0;
-                var stored = last ? MetaStore.load(last.id || last.tmdb_id) : null;
+                var stored = last ? MetaStore.load(last) : null;
                 root.append(
                     '<div style="opacity:0.4;font-size:12px;margin-bottom:12px;word-break:break-all;">' +
                     'meta id=' + mid +
@@ -1297,7 +1353,7 @@
             if (Lampa.Component && Lampa.Component.add) Lampa.Component.add(CONFIG.activity, StatsComponent);
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v9.4 ready');
+            console.log('Lampa stats v9.5 ready');
         } catch (e) {
             console.error('stats init', e);
         }
