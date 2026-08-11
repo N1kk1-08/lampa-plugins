@@ -1823,9 +1823,17 @@
         '.stv-empty{padding:36px;border-radius:12px;background:rgba(255,255,255,0.04);text-align:center;opacity:0.7;margin-bottom:16px;border:2px solid transparent;}' +
         '.stv-disabled{padding:12px 16px;border-radius:8px;background:rgba(255,80,80,0.12);color:#fca5a5;margin-bottom:16px;}' +
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:24px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}' +
-        /* scroll container — щоб колесо миші працювало на всій висоті */
-        '.scroll{height:100%;}' +
-        '.scroll__content{min-height:100%;}';
+        /* Тільки для сторінки статистики — не чіпаємо глобальні .scroll (це ламало балансери) */
+        '.stv-root .scroll,' +
+        '.activity--lampa_ukrainian_stats_view .scroll,' +
+        '.activity--lampa_ukrainian_stats_actor .scroll{' +
+        'height:100%;' +
+        '}' +
+        '.stv-root .scroll__content,' +
+        '.activity--lampa_ukrainian_stats_view .scroll__content,' +
+        '.activity--lampa_ukrainian_stats_actor .scroll__content{' +
+        'min-height:100%;' +
+        '}';
 
     function installCSS() {
         var old = document.getElementById('lampa-stats-v9-style');
@@ -1848,7 +1856,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v10.1 ready');
+            console.log('Lampa stats v10.1 ready (scroll CSS scoped)');
         } catch (e) {
             console.error('stats init', e);
         }
