@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v053) return;
-    window.lampa_ukrainian_stats_v053 = true;
+    if (window.lampa_ukrainian_stats_v054) return;
+    window.lampa_ukrainian_stats_v054 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -11,7 +11,7 @@
         watched: 'ПЕРЕГЛЯНУТО',
         fav_genre: 'УЛЮБЛЕНИЙ ЖАНР',
         fav_actors: 'ВАШІ УЛЮБЛЕНІ АКТОРИ',
-        records: 'РЕКОРДИ',
+        records: 'ЗА МІСЯЦЯМИ',           // змінив
         by_years: 'ВПОДОБАННЯ ЗА РОКАМИ ВИПУСКУ',
         genres_dist: 'РОЗПОДІЛ ЖАНРІВ',
         level_label: 'РІВЕНЬ',
@@ -48,7 +48,7 @@
         menu_action: 'lampa_ukrainian_stats',
         activity: 'lampa_ukrainian_stats_view',
         activity_actor: 'lampa_ukrainian_stats_actor',
-        completion: 0.90,          // було 0.98
+        completion: 0.90,
         interval: 1000,
         tmdb_img: 'https://image.tmdb.org/t/p/w185',
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
@@ -83,7 +83,8 @@
     };
 
     var WEEKDAYS = ['Неділя', 'Понеділок', 'Вівторок', 'Середа', 'Четвер', 'П’ятниця', 'Субота'];
-    var MONTHS = ['Січень', 'Лютий', 'Березень', 'Квітень', 'Травень', 'Червень', 'Липень', 'Серпень', 'Вересень', 'Жовтень', 'Листопад', 'Грудень'];
+    var MONTHS = ['Січ', 'Лют', 'Бер', 'Кві', 'Тра', 'Чер', 'Лип', 'Сер', 'Вер', 'Жов', 'Лис', 'Гру'];
+    // короткі назви, щоб на графіку вміщалися
 
     var DEFAULT_STATS = {
         seconds_watched: 0,
@@ -794,8 +795,6 @@
         },
         markCompleted: function (id, meta, movie) {
             if (!id) return false;
-
-            // Якщо вже є — просто оновлюємо дату
             if (this.data.completed[id]) {
                 this.data.completed[id].date = Date.now();
                 if (meta && meta.title) this.data.completed[id].title = meta.title;
@@ -803,7 +802,6 @@
                 this.save();
                 return false;
             }
-
             var entry = {
                 date: Date.now(),
                 isEpisode: !!(meta && meta.isEpisode),
@@ -811,7 +809,6 @@
                 poster: (meta && meta.poster) || Media.posterOf(movie) || '',
                 tmdb_id: movie && (movie.id || movie.tmdb_id) || ''
             };
-
             if (!entry.poster && movie) {
                 var st = MetaStore.load(movie);
                 if (st && st.poster_path) entry.poster = st.poster_path;
@@ -820,12 +817,9 @@
                 entry.poster = Media.posterOf(Media.lastCard);
                 if (!entry.title) entry.title = Media.titleOf(Media.lastCard);
             }
-
             this.data.completed[id] = entry;
-
             if (entry.isEpisode) this.data.episodes_watched++;
             else this.data.movies_watched++;
-
             if (meta && meta.genres) {
                 meta.genres.forEach(function (g) {
                     var name = typeof g === 'string' ? g : (g && g.name);
@@ -937,32 +931,20 @@
                 .map(function (k) { return { label: k, seconds: buckets[k] }; })
                 .sort(function (a, b) { return a.label.localeCompare(b.label); });
         },
-        bestMonth: function () {
-            var best = -1, sec = -1;
-            Object.keys(this.data.by_month).forEach(function (m) {
-                var s = StatsDB.data.by_month[m] || 0;
-                if (s > sec) { sec = s; best = parseInt(m, 10); }
-            });
-            if (best < 0) return null;
-            return { label: MONTHS[best] || String(best), text: StatsDB.formatHoursOrMin(sec) };
-        },
-        bestWeekday: function () {
-            var best = -1, sec = -1;
-            Object.keys(this.data.by_weekday).forEach(function (d) {
-                var s = StatsDB.data.by_weekday[d] || 0;
-                if (s > sec) { sec = s; best = parseInt(d, 10); }
-            });
-            if (best < 0) return null;
-            return WEEKDAYS[best] || '';
-        },
-        bestHour: function () {
-            var best = -1, sec = -1;
-            Object.keys(this.data.by_hour).forEach(function (h) {
-                var s = StatsDB.data.by_hour[h] || 0;
-                if (s > sec) { sec = s; best = parseInt(h, 10); }
-            });
-            if (best < 0) return null;
-            return (best < 10 ? '0' : '') + best + ':00';
+        // Новий метод для графіка місяців
+        monthList: function () {
+            var list = [];
+            for (var i = 0; i < 12; i++) {
+                var sec = this.data.by_month[i] || 0;
+                if (sec > 0) {
+                    list.push({
+                        index: i,
+                        label: MONTHS[i] || String(i + 1),
+                        seconds: sec
+                    });
+                }
+            }
+            return list;
         }
     };
 
@@ -1070,7 +1052,6 @@
                 }
             } catch (e) {}
 
-            // Зовнішній VLC + внутрішній
             try {
                 if (Lampa.Player && typeof Lampa.Player.callback === 'function') {
                     Lampa.Player.callback(function () {
@@ -1191,7 +1172,6 @@
             if (Number.isFinite(time) && time > 0) {
                 this.apply(time, duration || 0, Math.max(time, 600));
 
-                // Додаткова примусова перевірка завершення
                 if (movie && Number.isFinite(duration) && duration > 30) {
                     var ratio = time / duration;
                     var remaining = duration - time;
@@ -1233,7 +1213,6 @@
             var id = movie ? Media.getId(movie) : 'session:anon';
             StatsDB.addProgress(id, time, duration, wallDelta, meta);
 
-            // М’якша перевірка завершення
             var isNearEnd = false;
             if (movie && Number.isFinite(duration) && duration > 30) {
                 var ratio = time / duration;
@@ -1275,7 +1254,7 @@
         }
     };
 
-    // ===================== Scroll (робоча версія) =====================
+    // ===================== Scroll =====================
     function makeScroll() {
         return new Lampa.Scroll({ mask: true, over: true, step: 150 });
     }
@@ -1462,14 +1441,12 @@
 
         function bottomRow() {
             var row = $('<div class="stv-bottom"></div>');
-            var rec = $('<div class="stv-panel selector"></div>');
-            rec.append('<div class="stv-section-title">' + LANG.records + '</div>');
-            var bm = StatsDB.bestMonth(), bw = StatsDB.bestWeekday(), bh = StatsDB.bestHour(), recHtml = '';
-            if (bm) recHtml += '<div class="stv-rec-line"><b>' + bm.label + '</b> (' + bm.text + ')</div>';
-            if (bw) recHtml += '<div class="stv-rec-line">' + bw + (bh ? ', ' + bh : '') + '</div>';
-            if (!recHtml) recHtml = '<div class="stv-muted">—</div>';
-            rec.append(recHtml);
-            row.append(rec);
+
+            // === НОВИЙ БЛОК: графік за місяцями ===
+            var months = $('<div class="stv-panel selector"></div>');
+            months.append('<div class="stv-section-title">' + LANG.records + '</div>');
+            months.append(monthBars());
+            row.append(months);
 
             var years = $('<div class="stv-panel selector"></div>');
             years.append('<div class="stv-section-title">' + LANG.by_years + '</div>');
@@ -1481,6 +1458,28 @@
             genres.append(genrePie());
             row.append(genres);
             return row;
+        }
+
+        // Графік місяців
+        function monthBars() {
+            var data = StatsDB.monthList();
+            var box = $('<div class="stv-bars"></div>');
+            if (!data.length) {
+                box.append('<div class="stv-muted">—</div>');
+                return box;
+            }
+            var max = 1;
+            data.forEach(function (d) { if (d.seconds > max) max = d.seconds; });
+            data.forEach(function (d) {
+                var h = Math.max(8, Math.round((d.seconds / max) * 100));
+                var col = $('<div class="stv-bar-col"></div>');
+                col.append('<div class="stv-bar" style="height:' + h + '%"></div>');
+                col.append('<div class="stv-bar-label">' + d.label + '</div>');
+                // маленька підказка з часом
+                col.attr('title', StatsDB.formatHoursOrMin(d.seconds));
+                box.append(col);
+            });
+            return box;
         }
 
         function yearBars() {
@@ -1673,11 +1672,10 @@
         '.stv-work-meta{font-size:12px;opacity:0.55;}' +
         '.stv-bottom{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:24px;}' +
         '.stv-panel{flex:1;min-width:200px;padding:16px;border-radius:14px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
-        '.stv-rec-line{font-size:15px;margin-bottom:6px;}' +
-        '.stv-bars{display:flex;align-items:flex-end;gap:8px;height:120px;padding-top:10px;}' +
-        '.stv-bar-col{flex:1;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end;}' +
-        '.stv-bar{width:70%;max-width:28px;background:linear-gradient(180deg,#60a5fa,#2563eb);border-radius:6px 6px 2px 2px;min-height:8px;}' +
-        '.stv-bar-label{font-size:10px;opacity:0.55;margin-top:6px;text-align:center;}' +
+        '.stv-bars{display:flex;align-items:flex-end;gap:6px;height:120px;padding-top:10px;}' +
+        '.stv-bar-col{flex:1;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end;min-width:0;}' +
+        '.stv-bar{width:70%;max-width:22px;background:linear-gradient(180deg,#60a5fa,#2563eb);border-radius:5px 5px 2px 2px;min-height:8px;}' +
+        '.stv-bar-label{font-size:10px;opacity:0.55;margin-top:6px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}' +
         '.stv-pie-wrap{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}' +
         '.stv-pie{width:90px;height:90px;border-radius:50%;flex-shrink:0;}' +
         '.stv-legend{font-size:12px;opacity:0.85;}' +
@@ -1689,14 +1687,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v053-style');
+        var old = document.getElementById('lampa-stats-v054-style');
         if (old) old.remove();
-        ['lampa-stats-v052-style', 'lampa-stats-v051-style', 'lampa-stats-v050-style', 'lampa-stats-v9-style'].forEach(function (id) {
+        ['lampa-stats-v053-style', 'lampa-stats-v052-style', 'lampa-stats-v051-style', 'lampa-stats-v050-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v053-style';
+        s.id = 'lampa-stats-v054-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1713,7 +1711,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.53 ready (completion fixed)');
+            console.log('Lampa stats v0.54 ready (month chart)');
         } catch (e) {
             console.error('stats init', e);
         }
