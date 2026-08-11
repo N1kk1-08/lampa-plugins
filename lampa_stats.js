@@ -81,27 +81,19 @@
     };
 
     function isGarbageGenre(name) {
-    if (!name || typeof name !== 'string') return true;
-    var p = name.trim();
-    if (!p) return true;
-    
-    // Відсікаємо таймкоди типу 01:25
-    if (/^\d{1,2}:\d{2}$/.test(p)) return true;
-    
-    // Відсікаємо тривалість, сезони та серії (тепер і українською)
-    if (/\d/.test(p) && /(хв|год|min|сек|сезон|season|ep|runtime|серія|серії|серій|епізод)/i.test(p)) return true;
-    
-    // Відсікаємо технічну інформацію (якість, роки тощо)
-    if (/^\d{3,4}p$/i.test(p)) return true;
-    if (/^(4k|uhd|hdr|dv|3d|cam|ts|hdrip|webrip|web-dl)$/i.test(p)) return true;
-    if (/^\d+$/.test(p)) return true;
-    if (/^(19|20)\d{2}$/.test(p)) return true;
-    
-    // Занадто короткі або довгі рядки
-    if (p.length < 2 || p.length > 48) return true;
-    
-    return false;
-}
+        if (!name || typeof name !== 'string') return true;
+        var p = name.trim();
+        if (!p) return true;
+        if (/^\d{1,2}:\d{2}$/.test(p)) return true;
+        // ОНОВЛЕНО: додано українські слова серій/епізодів
+        if (/\d/.test(p) && /(хв|год|min|сек|сезон|season|ep|runtime|серія|серії|серій|епізод)/i.test(p)) return true;
+        if (/^\d{3,4}p$/i.test(p)) return true;
+        if (/^(4k|uhd|hdr|dv|3d|cam|ts|hdrip|webrip|web-dl)$/i.test(p)) return true;
+        if (/^\d+$/.test(p)) return true;
+        if (/^(19|20)\d{2}$/.test(p)) return true;
+        if (p.length < 2 || p.length > 48) return true;
+        return false;
+    }
 
     function posterUrl(path) {
         if (!path) return '';
@@ -744,7 +736,6 @@
             if (!row.works) row.works = {};
             if (a.name) row.name = a.name;
             if (a.profile_path) row.profile_path = a.profile_path;
-            // якщо був текстовий id, а прийшов числовий — оновити
             if (a.id && /^\d+$/.test(String(a.id))) row.id = a.id;
             return row;
         },
@@ -1081,6 +1072,8 @@
         initialized: false,
         currentMovie: null,
         lastTickAt: 0,
+        sessionStartWall: 0,
+        lastTimelineWall: 0,
 
         init: function () {
             if (this.initialized) return;
@@ -1193,6 +1186,10 @@
             var movie = Media.normalize(e) || Current.getMovie();
             if (!movie) return;
 
+            var now = Date.now();
+            this.sessionStartWall = now;
+            this.lastTimelineWall = now;
+
             Media.remember(movie);
             movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
             this.currentMovie = movie;
@@ -1257,7 +1254,12 @@
             var time = Number(road.time);
             var duration = Number(road.duration);
             if (!Number.isFinite(time) || time < 0) return;
-            this.apply(time, Number.isFinite(duration) ? duration : 0, 120);
+
+            var now = Date.now();
+            var wallElapsed = (now - (this.lastTimelineWall || this.sessionStartWall || now)) / 1000;
+            this.lastTimelineWall = now;
+            
+            this.apply(time, Number.isFinite(duration) ? duration : 0, Math.max(0, wallElapsed) + 30);
         },
 
         tick: function () {
@@ -1273,10 +1275,14 @@
 
     /* ===================== UI: main ===================== */
     function StatsComponent() {
-        var html = $('<div class="stv-root"></div>');
+        var scroll = new Lampa.Scroll({ mask: true, over: true });
+        var html = scroll.render();
+        html.addClass('stv-root');
+        var content = $('<div class="stv-content"></div>');
 
         this.create = function () {
-            renderAll(html);
+            scroll.append(content);
+            renderAll(content);
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
         this.start = function () {
@@ -1303,7 +1309,7 @@
         };
         this.pause = function () {};
         this.render = function () { return html; };
-        this.destroy = function () { html.remove(); };
+        this.destroy = function () { html.remove(); scroll.destroy(); };
 
         function renderAll(root) {
             root.empty();
@@ -1401,6 +1407,18 @@
                     item.on('hover:enter click', function () {
                         openActorPage(a);
                     });
+
+                    item.on('focus', function () {
+                        var node = this;
+                        var p = node.parentNode;
+                        var padding = 20;
+                        if (node.offsetLeft < p.scrollLeft + padding) {
+                            p.scrollLeft = node.offsetLeft - padding;
+                        } else if (node.offsetLeft + node.offsetWidth > p.scrollLeft + p.clientWidth - padding) {
+                            p.scrollLeft = node.offsetLeft + node.offsetWidth - p.clientWidth + padding;
+                        }
+                    });
+
                     row.append(item);
                 });
             }
@@ -1483,8 +1501,8 @@
                     Lampa.Noty.show(LANG.reset_done);
                     renderAll(root);
                     try {
-                        Lampa.Controller.collectionSet(root);
-                        Lampa.Controller.collectionFocus(false, root);
+                        Lampa.Controller.collectionSet(html);
+                        Lampa.Controller.collectionFocus(false, html);
                     } catch (e) {}
                 }
             });
@@ -1494,11 +1512,15 @@
 
     /* ===================== UI: fallback actor works ===================== */
     function ActorWorksComponent(object) {
-        var html = $('<div class="stv-root"></div>');
+        var scroll = new Lampa.Scroll({ mask: true, over: true });
+        var html = scroll.render();
+        html.addClass('stv-root');
+        var content = $('<div class="stv-content"></div>');
         var key = (object && object.actor_key) || '';
 
         this.create = function () {
-            render();
+            scroll.append(content);
+            render(content);
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
         this.start = function () {
@@ -1525,18 +1547,18 @@
         };
         this.pause = function () {};
         this.render = function () { return html; };
-        this.destroy = function () { html.remove(); };
+        this.destroy = function () { html.remove(); scroll.destroy(); };
 
-        function render() {
-            html.empty();
+        function render(root) {
+            root.empty();
             var actor = StatsDB.data.actors[key];
             var name = (actor && actor.name) || (object && object.title) || LANG.actor_works;
-            html.append('<div class="stv-title">' + name + '</div>');
-            html.append('<div class="stv-section-title">' + LANG.actor_works + '</div>');
+            root.append('<div class="stv-title">' + name + '</div>');
+            root.append('<div class="stv-section-title">' + LANG.actor_works + '</div>');
 
             var works = StatsDB.actorWorks(key);
             if (!works.length) {
-                html.append('<div class="stv-empty selector">' + LANG.no_works + '</div>');
+                root.append('<div class="stv-empty selector">' + LANG.no_works + '</div>');
                 return;
             }
 
@@ -1562,7 +1584,7 @@
                 row.append(info);
                 list.append(row);
             });
-            html.append(list);
+            root.append(list);
         }
     }
 
@@ -1594,12 +1616,28 @@
         init: function () {
             var self = this;
             setTimeout(function () { self.update(); }, 500);
-            var n = 0, t = setInterval(function () { self.update(); if (++n >= 30) clearInterval(t); }, 1000);
+
+            var observer = new MutationObserver(function () {
+                var visible = Settings.menuVisible();
+                var old = document.querySelector('.menu__item[data-action="' + CONFIG.menu_action + '"]');
+                if (visible && !old) {
+                    self.update();
+                }
+            });
+
+            var checkMenu = setInterval(function() {
+                var menuList = document.querySelector('.menu .menu__list');
+                if (menuList) {
+                    observer.observe(menuList, { childList: true, subtree: true });
+                    clearInterval(checkMenu);
+                }
+            }, 1000);
         }
     };
 
     var CSS =
-        '.stv-root{padding:22px 28px 40px;color:#fff;box-sizing:border-box;}' +
+        '.stv-root{position:absolute;top:0;left:0;right:0;bottom:0;color:#fff;}' +
+        '.stv-content{padding:22px 28px 40px;box-sizing:border-box;}' +
         '.stv-title{font-size:28px;font-weight:700;margin-bottom:22px;}' +
         '.stv-cards{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:28px;}' +
         '.stv-card{min-width:220px;flex:1;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,0.06);border:2px solid transparent;}' +
@@ -1621,7 +1659,8 @@
         '.stv-section{margin-bottom:26px;}' +
         '.stv-section-title{font-size:13px;opacity:0.55;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;}' +
         '.stv-actors-scroll{width:100%;overflow:hidden;}' +
-        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding-bottom:8px;-webkit-overflow-scrolling:touch;}' +
+        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding-bottom:8px;scroll-behavior:smooth;-webkit-overflow-scrolling:touch;}' +
+        '.stv-actors::-webkit-scrollbar{display:none;}' +
         '.stv-actor{width:110px;min-width:110px;flex-shrink:0;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;}' +
         '.stv-actor:focus{border-color:rgba(59,130,246,0.7);background:rgba(255,255,255,0.06);}' +
         '.stv-actor-photo{width:68px;height:68px;border-radius:50%;margin:0 auto 8px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.08);}' +
@@ -1673,7 +1712,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v9.8 ready');
+            console.log('Lampa stats ready');
         } catch (e) {
             console.error('stats init', e);
         }
