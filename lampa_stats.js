@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v052) return;
-    window.lampa_ukrainian_stats_v052 = true;
+    if (window.lampa_ukrainian_stats_v053) return;
+    window.lampa_ukrainian_stats_v053 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -48,7 +48,7 @@
         menu_action: 'lampa_ukrainian_stats',
         activity: 'lampa_ukrainian_stats_view',
         activity_actor: 'lampa_ukrainian_stats_actor',
-        completion: 0.98,
+        completion: 0.90,          // було 0.98
         interval: 1000,
         tmdb_img: 'https://image.tmdb.org/t/p/w185',
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
@@ -793,7 +793,17 @@
             if (!skipSave) this.save();
         },
         markCompleted: function (id, meta, movie) {
-            if (!id || this.data.completed[id]) return false;
+            if (!id) return false;
+
+            // Якщо вже є — просто оновлюємо дату
+            if (this.data.completed[id]) {
+                this.data.completed[id].date = Date.now();
+                if (meta && meta.title) this.data.completed[id].title = meta.title;
+                if (meta && meta.poster) this.data.completed[id].poster = meta.poster;
+                this.save();
+                return false;
+            }
+
             var entry = {
                 date: Date.now(),
                 isEpisode: !!(meta && meta.isEpisode),
@@ -801,6 +811,7 @@
                 poster: (meta && meta.poster) || Media.posterOf(movie) || '',
                 tmdb_id: movie && (movie.id || movie.tmdb_id) || ''
             };
+
             if (!entry.poster && movie) {
                 var st = MetaStore.load(movie);
                 if (st && st.poster_path) entry.poster = st.poster_path;
@@ -809,9 +820,12 @@
                 entry.poster = Media.posterOf(Media.lastCard);
                 if (!entry.title) entry.title = Media.titleOf(Media.lastCard);
             }
+
             this.data.completed[id] = entry;
+
             if (entry.isEpisode) this.data.episodes_watched++;
             else this.data.movies_watched++;
+
             if (meta && meta.genres) {
                 meta.genres.forEach(function (g) {
                     var name = typeof g === 'string' ? g : (g && g.name);
@@ -1056,12 +1070,12 @@
                 }
             } catch (e) {}
 
-            // Для зовнішнього VLC
+            // Зовнішній VLC + внутрішній
             try {
                 if (Lampa.Player && typeof Lampa.Player.callback === 'function') {
                     Lampa.Player.callback(function () {
-                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 500);
-                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 2000);
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 400);
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 1600);
                     });
                 }
             } catch (e) {}
@@ -1072,7 +1086,7 @@
                     Lampa.Player.listener.follow('ready', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('external', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('destroy', function () {
-                        [300, 1000, 2500].forEach(function (ms) {
+                        [250, 900, 2200].forEach(function (ms) {
                             setTimeout(function () { self.flushExternal(self.currentMovie); }, ms);
                         });
                         setTimeout(function () { self.currentMovie = null; }, 5000);
@@ -1096,7 +1110,7 @@
                 Lampa.Listener.follow('activity', function (e) {
                     if (!e) return;
                     if (e.type === 'start' || e.type === 'archive' || e.type === 'resume') {
-                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 600);
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 500);
                     }
                 });
             } catch (e) {}
@@ -1149,11 +1163,17 @@
             if (!Settings.collecting()) return;
             movie = movie || this.currentMovie || Media.lastCard;
             if (!movie) return;
+
             var time = 0, duration = 0;
+
             try {
                 var v = Current.getVideoState();
-                if (v) { time = v.time; duration = v.duration; }
+                if (v) {
+                    time = v.time;
+                    duration = v.duration;
+                }
             } catch (e) {}
+
             try {
                 if ((!time || time <= 0) && Lampa.Storage) {
                     var keys = ['player_road_last', 'timeline_last'];
@@ -1167,19 +1187,33 @@
                     }
                 }
             } catch (e) {}
+
             if (Number.isFinite(time) && time > 0) {
                 this.apply(time, duration || 0, Math.max(time, 600));
+
+                // Додаткова примусова перевірка завершення
+                if (movie && Number.isFinite(duration) && duration > 30) {
+                    var ratio = time / duration;
+                    var remaining = duration - time;
+                    if (ratio >= 0.85 || (remaining < 120 && ratio > 0.65)) {
+                        var meta = Media.metaFrom(movie);
+                        StatsDB.markCompleted(Media.getId(movie), meta, movie);
+                    }
+                }
             }
         },
 
         apply: function (time, duration, wallDelta) {
             if (!Settings.collecting()) return;
+
             var movie = this.currentMovie || Current.getMovie() || Media.lastCard;
             if (movie) {
                 movie = CardCache.get(movie) || movie;
                 movie = MetaStore.applyToMovie(movie);
             }
+
             var meta = Media.metaFrom(movie);
+
             if (Media.lastCard) {
                 var alt = Media.metaFrom(Media.lastCard);
                 if (alt) {
@@ -1195,9 +1229,19 @@
                     if (meta && meta.isEpisode == null) meta.isEpisode = alt.isEpisode;
                 }
             }
+
             var id = movie ? Media.getId(movie) : 'session:anon';
             StatsDB.addProgress(id, time, duration, wallDelta, meta);
-            if (movie && Number.isFinite(duration) && duration > 0 && time / duration >= CONFIG.completion) {
+
+            // М’якша перевірка завершення
+            var isNearEnd = false;
+            if (movie && Number.isFinite(duration) && duration > 30) {
+                var ratio = time / duration;
+                var remaining = duration - time;
+                isNearEnd = (ratio >= CONFIG.completion) || (remaining < 90 && ratio > 0.70);
+            }
+
+            if (isNearEnd) {
                 StatsDB.markCompleted(Media.getId(movie), meta, movie);
             }
         },
@@ -1231,7 +1275,7 @@
         }
     };
 
-    // ===================== Scroll (чиста версія) =====================
+    // ===================== Scroll (робоча версія) =====================
     function makeScroll() {
         return new Lampa.Scroll({ mask: true, over: true, step: 150 });
     }
@@ -1306,7 +1350,6 @@
         };
 
         this.start = function () {
-            // Головний ключ до робочого скролу в Lampa
             try {
                 if (typeof scroll.minus === 'function') scroll.minus();
             } catch (e) {}
@@ -1646,14 +1689,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v052-style');
+        var old = document.getElementById('lampa-stats-v053-style');
         if (old) old.remove();
-        ['lampa-stats-v051-style', 'lampa-stats-v050-style', 'lampa-stats-v9-style'].forEach(function (id) {
+        ['lampa-stats-v052-style', 'lampa-stats-v051-style', 'lampa-stats-v050-style', 'lampa-stats-v9-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v052-style';
+        s.id = 'lampa-stats-v053-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1670,7 +1713,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.52 ready');
+            console.log('Lampa stats v0.53 ready (completion fixed)');
         } catch (e) {
             console.error('stats init', e);
         }
