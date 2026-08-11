@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v100) return;
-    window.lampa_ukrainian_stats_v100 = true;
+    if (window.lampa_ukrainian_stats_v101) return;
+    window.lampa_ukrainian_stats_v101 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -54,23 +54,21 @@
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
         max_actors_show: 15,
         max_posters_show: 8,
-        // бонуси XP за завершення на 98%+
-        xp_movie_bonus: 3600,   // +1 год
-        xp_episode_bonus: 900   // +15 хв
+        xp_movie_bonus: 3600,
+        xp_episode_bonus: 900
     };
 
-    // Вищі пороги рівнів (орієнтир у годинах чистого часу + бонуси)
     var LEVELS = [
         { level: 1,  name: 'Новачок',        xp: 0 },
-        { level: 2,  name: 'Глядач',         xp: 7200 },      // ~2 год
-        { level: 3,  name: 'Кіноман',        xp: 36000 },     // ~10 год
-        { level: 4,  name: 'Марафонець',     xp: 108000 },    // ~30 год
-        { level: 5,  name: 'Серіаломан',     xp: 216000 },    // ~60 год
-        { level: 6,  name: 'Експерт екрану', xp: 360000 },    // ~100 год
-        { level: 7,  name: 'Критик',         xp: 540000 },    // ~150 год
-        { level: 8,  name: 'Колекціонер',    xp: 900000 },    // ~250 год
-        { level: 9,  name: 'Легенда кіно',   xp: 1440000 },   // ~400 год
-        { level: 10, name: 'Кінобог',        xp: 2160000 }    // ~600 год
+        { level: 2,  name: 'Глядач',         xp: 7200 },
+        { level: 3,  name: 'Кіноман',        xp: 36000 },
+        { level: 4,  name: 'Марафонець',     xp: 108000 },
+        { level: 5,  name: 'Серіаломан',     xp: 216000 },
+        { level: 6,  name: 'Експерт екрану', xp: 360000 },
+        { level: 7,  name: 'Критик',         xp: 540000 },
+        { level: 8,  name: 'Колекціонер',    xp: 900000 },
+        { level: 9,  name: 'Легенда кіно',   xp: 1440000 },
+        { level: 10, name: 'Кінобог',        xp: 2160000 }
     ];
 
     var GENRE_MAP = {
@@ -1368,7 +1366,33 @@
         }
     };
 
-    /* ===================== UI helpers ===================== */
+    /* ===================== Scroll / Controller ===================== */
+    function makeScroll() {
+        return new Lampa.Scroll({ mask: true, over: true, step: 150 });
+    }
+
+    function bindWheel(scroll) {
+        try {
+            var node = scroll.render();
+            if (!node || node._stv_wheel) return;
+            node._stv_wheel = true;
+
+            var handler = function (e) {
+                var dy = e.deltaY || (e.wheelDelta ? -e.wheelDelta : 0) || 0;
+                if (!dy) return;
+                e.preventDefault();
+                e.stopPropagation();
+                var step = dy > 0 ? 120 : -120;
+                if (typeof scroll.wheel === 'function') scroll.wheel(step);
+                else if (typeof scroll.move === 'function') scroll.move(step);
+            };
+
+            node.addEventListener('wheel', handler, { passive: false });
+            // старі браузери / WebView
+            node.addEventListener('mousewheel', handler, { passive: false });
+        } catch (e) {}
+    }
+
     function bindController(scroll) {
         try {
             Lampa.Controller.add('content', {
@@ -1400,14 +1424,14 @@
     }
 
     function bindFocusScroll(html, scroll) {
-        html.find('.selector').on('hover:focus focus', function () {
+        html.find('.selector').on('hover:focus focus hover:enter', function () {
             try { scroll.update($(this), true); } catch (e) {}
         });
     }
 
     /* ===================== UI: main ===================== */
     function StatsComponent() {
-        var scroll = new Lampa.Scroll({ mask: true, over: true });
+        var scroll = makeScroll();
         var html = $('<div class="stv-root"></div>');
 
         this.create = function () {
@@ -1415,9 +1439,13 @@
             scroll.clear();
             scroll.append(html);
             bindFocusScroll(html, scroll);
+            bindWheel(scroll);
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
-        this.start = function () { bindController(scroll); };
+        this.start = function () {
+            bindController(scroll);
+            bindWheel(scroll);
+        };
         this.pause = function () {};
         this.render = function () { return scroll.render(); };
         this.destroy = function () {
@@ -1619,6 +1647,7 @@
                     scroll.clear();
                     scroll.append(root);
                     bindFocusScroll(root, scroll);
+                    bindWheel(scroll);
                     try {
                         Lampa.Controller.collectionSet(scroll.render());
                         Lampa.Controller.collectionFocus(false, scroll.render());
@@ -1631,7 +1660,7 @@
 
     /* ===================== UI: fallback actor ===================== */
     function ActorWorksComponent(object) {
-        var scroll = new Lampa.Scroll({ mask: true, over: true });
+        var scroll = makeScroll();
         var html = $('<div class="stv-root"></div>');
         var key = (object && object.actor_key) || '';
 
@@ -1640,9 +1669,13 @@
             scroll.clear();
             scroll.append(html);
             bindFocusScroll(html, scroll);
+            bindWheel(scroll);
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
-        this.start = function () { bindController(scroll); };
+        this.start = function () {
+            bindController(scroll);
+            bindWheel(scroll);
+        };
         this.pause = function () {};
         this.render = function () { return scroll.render(); };
         this.destroy = function () {
@@ -1720,8 +1753,22 @@
     };
 
     var CSS =
-        '.stv-root{padding:22px 28px 40px;color:#fff;box-sizing:border-box;min-height:100%;}' +
+        '.stv-root{padding:22px 28px 48px;color:#fff;box-sizing:border-box;min-height:100%;}' +
         '.stv-title{font-size:28px;font-weight:700;margin-bottom:18px;}' +
+        /* lift + highlight for ALL focusable blocks */
+        '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-empty{' +
+        'transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;' +
+        '}' +
+        '.stv-card:focus,.stv-actor:focus,.stv-panel:focus,.stv-reset:focus,.stv-work:focus,.stv-empty:focus,' +
+        '.stv-card.focus,.stv-actor.focus,.stv-panel.focus,.stv-reset.focus,.stv-work.focus,' +
+        '.stv-card.hover,.stv-actor.hover,.stv-panel.hover,.stv-reset.hover{' +
+        'transform:translateY(-6px);' +
+        'box-shadow:0 10px 28px rgba(0,0,0,.45);' +
+        'border-color:rgba(96,165,250,.9)!important;' +
+        'background:rgba(255,255,255,.12)!important;' +
+        'outline:none;' +
+        'z-index:2;' +
+        '}' +
         '.stv-level-card{width:100%;margin-bottom:18px;}' +
         '.stv-level-body{display:flex;flex-direction:column;gap:10px;width:100%;}' +
         '.stv-level-row{display:flex;align-items:baseline;gap:12px;}' +
@@ -1732,7 +1779,6 @@
         '.stv-level-sub{font-size:12px;opacity:0.55;}' +
         '.stv-cards{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:28px;}' +
         '.stv-card{min-width:220px;flex:1;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,0.06);border:2px solid transparent;}' +
-        '.stv-card:focus{border-color:rgba(59,130,246,0.8);background:rgba(255,255,255,0.1);}' +
         '.stv-card-label{font-size:11px;opacity:0.5;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px;}' +
         '.stv-card-body{display:flex;align-items:center;gap:12px;}' +
         '.stv-card-icon{font-size:22px;opacity:0.85;}' +
@@ -1750,22 +1796,19 @@
         '.stv-section{margin-bottom:26px;}' +
         '.stv-section-title{font-size:13px;opacity:0.55;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;}' +
         '.stv-actors-scroll{width:100%;overflow:hidden;}' +
-        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding:4px 0 12px;-webkit-overflow-scrolling:touch;}' +
-        '.stv-actor{width:110px;min-width:110px;flex-shrink:0;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;}' +
-        '.stv-actor:focus{border-color:rgba(59,130,246,0.7);background:rgba(255,255,255,0.06);}' +
+        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding:8px 4px 16px;-webkit-overflow-scrolling:touch;}' +
+        '.stv-actor{width:110px;min-width:110px;flex-shrink:0;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;background:transparent;}' +
         '.stv-actor-photo{width:68px;height:68px;border-radius:50%;margin:0 auto 8px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.08);}' +
         '.stv-actor-ph{display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;}' +
         '.stv-actor-name{font-size:12px;font-weight:600;line-height:1.2;margin-bottom:4px;}' +
         '.stv-actor-meta{font-size:11px;opacity:0.55;}' +
         '.stv-works{display:flex;flex-direction:column;gap:10px;}' +
         '.stv-work{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
-        '.stv-work:focus{border-color:rgba(59,130,246,0.7);background:rgba(255,255,255,0.09);}' +
         '.stv-work-poster{width:48px;height:72px;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.1);flex-shrink:0;}' +
         '.stv-work-title{font-size:16px;font-weight:600;margin-bottom:4px;}' +
         '.stv-work-meta{font-size:12px;opacity:0.55;}' +
         '.stv-bottom{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:24px;}' +
         '.stv-panel{flex:1;min-width:200px;padding:16px;border-radius:14px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
-        '.stv-panel:focus{border-color:rgba(59,130,246,0.7);}' +
         '.stv-rec-line{font-size:15px;margin-bottom:6px;}' +
         '.stv-bars{display:flex;align-items:flex-end;gap:8px;height:120px;padding-top:10px;}' +
         '.stv-bar-col{flex:1;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end;}' +
@@ -1777,13 +1820,16 @@
         '.stv-leg-item{margin-bottom:4px;display:flex;align-items:center;gap:6px;}' +
         '.stv-dot{width:8px;height:8px;border-radius:50%;display:inline-block;}' +
         '.stv-muted{opacity:0.45;font-size:13px;}' +
-        '.stv-empty{padding:36px;border-radius:12px;background:rgba(255,255,255,0.04);text-align:center;opacity:0.7;margin-bottom:16px;}' +
+        '.stv-empty{padding:36px;border-radius:12px;background:rgba(255,255,255,0.04);text-align:center;opacity:0.7;margin-bottom:16px;border:2px solid transparent;}' +
         '.stv-disabled{padding:12px 16px;border-radius:8px;background:rgba(255,80,80,0.12);color:#fca5a5;margin-bottom:16px;}' +
-        '.stv-reset{display:inline-block;margin-top:8px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.75;}' +
-        '.stv-reset:focus{border-color:rgba(255,255,255,0.45);background:rgba(255,255,255,0.1);}';
+        '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:24px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}' +
+        /* scroll container — щоб колесо миші працювало на всій висоті */
+        '.scroll{height:100%;}' +
+        '.scroll__content{min-height:100%;}';
 
     function installCSS() {
-        if (document.getElementById('lampa-stats-v9-style')) return;
+        var old = document.getElementById('lampa-stats-v9-style');
+        if (old) old.remove();
         var s = document.createElement('style');
         s.id = 'lampa-stats-v9-style';
         s.innerHTML = CSS;
@@ -1802,7 +1848,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v10.0 ready');
+            console.log('Lampa stats v10.1 ready');
         } catch (e) {
             console.error('stats init', e);
         }
