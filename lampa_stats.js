@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v101) return;
-    window.lampa_ukrainian_stats_v101 = true;
+    if (window.lampa_ukrainian_stats_v050) return;
+    window.lampa_ukrainian_stats_v050 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1368,15 +1368,7 @@
 
     /* ===================== Scroll / Controller ===================== */
     function makeScroll() {
-        var s = new Lampa.Scroll({ mask: true, over: true, step: 200 });
-        try {
-            var node = s.render();
-            if (node) {
-                // Примусово обмежуємо висоту, щоб з’явився скрол
-                node.style.height = '100%';
-                node.style.maxHeight = '100%';
-            }
-        } catch (e) {}
+        var s = new Lampa.Scroll({ mask: true, over: true, step: 220 });
         return s;
     }
 
@@ -1385,19 +1377,28 @@
             var node = scroll.render();
             if (!node) return;
 
-            node.style.height = '100%';
-            node.style.maxHeight = '100%';
+            // Агресивне обмеження висоти (працює на ПК і ТВ)
+            var h = Math.max(400, (window.innerHeight || 800) - 110);
+            node.style.height = h + 'px';
+            node.style.maxHeight = h + 'px';
+            node.style.overflow = 'hidden';
 
-            // Lampa API: відняти висоту шапки/хедера
+            // Lampa API
             if (typeof scroll.minus === 'function') {
-                scroll.minus();
-            } else if (typeof scroll.height === 'function') {
-                scroll.height();
+                try { scroll.minus(); } catch (e) {}
+            }
+            if (typeof scroll.height === 'function') {
+                try { scroll.height(); } catch (e) {}
+            }
+            if (typeof scroll.resize === 'function') {
+                try { scroll.resize(); } catch (e) {}
             }
 
-            // Додаткове оновлення
-            if (typeof scroll.resize === 'function') scroll.resize();
-            else if (typeof scroll.update === 'function') scroll.update();
+            // Додатково на .scroll__content
+            var content = node.querySelector('.scroll__content');
+            if (content) {
+                content.style.minHeight = '100%';
+            }
         } catch (e) {}
     }
 
@@ -1412,7 +1413,7 @@
                 if (!dy) return;
                 e.preventDefault();
                 e.stopPropagation();
-                var step = dy > 0 ? 160 : -160;
+                var step = dy > 0 ? 180 : -180;
                 if (typeof scroll.wheel === 'function') scroll.wheel(step);
                 else if (typeof scroll.move === 'function') scroll.move(step);
             };
@@ -1438,13 +1439,13 @@
                 },
                 up: function () {
                     if (Navigator.canmove('up')) Navigator.move('up');
-                    else if (typeof scroll.wheel === 'function') scroll.wheel(-250);
-                    else if (typeof scroll.move === 'function') scroll.move(-250);
+                    else if (typeof scroll.wheel === 'function') scroll.wheel(-280);
+                    else if (typeof scroll.move === 'function') scroll.move(-280);
                 },
                 down: function () {
                     if (Navigator.canmove('down')) Navigator.move('down');
-                    else if (typeof scroll.wheel === 'function') scroll.wheel(250);
-                    else if (typeof scroll.move === 'function') scroll.move(250);
+                    else if (typeof scroll.wheel === 'function') scroll.wheel(280);
+                    else if (typeof scroll.move === 'function') scroll.move(280);
                 },
                 back: function () { Lampa.Activity.backward(); }
             });
@@ -1454,7 +1455,9 @@
 
     function bindFocusScroll(html, scroll) {
         html.find('.selector').on('hover:focus focus hover:enter', function () {
-            try { scroll.update($(this), true); } catch (e) {}
+            try {
+                scroll.update($(this), true);
+            } catch (e) {}
         });
     }
 
@@ -1471,9 +1474,9 @@
             bindFocusScroll(html, scroll);
             bindWheel(scroll);
 
-            // Ще раз після невеликої затримки (на випадок анімацій Lampa)
-            setTimeout(function () { forceScrollSize(scroll); }, 100);
-            setTimeout(function () { forceScrollSize(scroll); }, 400);
+            setTimeout(function () { forceScrollSize(scroll); }, 80);
+            setTimeout(function () { forceScrollSize(scroll); }, 300);
+            setTimeout(function () { forceScrollSize(scroll); }, 700);
 
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
@@ -1492,7 +1495,6 @@
         function renderAll(root) {
             root.empty();
             root.append('<div class="stv-title">' + LANG.page_title + '</div>');
-            root.append(levelCard());
 
             if (!Settings.collecting()) root.append('<div class="stv-disabled">' + LANG.disabled_text + '</div>');
 
@@ -1508,40 +1510,48 @@
             root.append(resetBtn(root));
         }
 
-        function levelCard() {
-            var info = LevelSystem.info();
-            var c = $('<div class="stv-card selector stv-level-card"></div>');
-            c.append('<div class="stv-card-label">' + LANG.level_label + '</div>');
-            var body = $('<div class="stv-level-body"></div>');
-            body.append(
-                '<div class="stv-level-row">' +
-                '<span class="stv-level-num">' + info.level + '</span>' +
-                '<span class="stv-level-name">' + info.name + '</span>' +
-                '</div>'
-            );
-            body.append(
-                '<div class="stv-level-bar"><div class="stv-level-fill" style="width:' +
-                Math.round(info.progress * 100) + '%"></div></div>'
-            );
-            var sub = info.max
-                ? LANG.level_max
-                : (LANG.level_to + ' «' + info.nextName + '» — ' + StatsDB.formatTime(info.toNext));
-            body.append('<div class="stv-level-sub">' + sub + '</div>');
-            c.append(body);
-            return c;
-        }
-
         function topCards() {
             var row = $('<div class="stv-cards"></div>');
-            var g = StatsDB.topGenre();
-            row.append(card(LANG.total_time, StatsDB.formatTime(StatsDB.data.seconds_watched), '⏱'));
+            row.append(totalTimeWithLevelCard());
             row.append(watchedCard());
+            var g = StatsDB.topGenre();
             row.append(card(
                 LANG.fav_genre,
                 '<div class="stv-genre-name">' + g.name + '</div><div class="stv-genre-pct">' + g.percent + '%</div>',
                 '◎'
             ));
             return row;
+        }
+
+        // Рівень тепер всередині блоку СУМАРНИЙ ЧАС
+        function totalTimeWithLevelCard() {
+            var info = LevelSystem.info();
+            var c = $('<div class="stv-card selector stv-card-total"></div>');
+            c.append('<div class="stv-card-label">' + LANG.total_time + '</div>');
+
+            var body = $('<div class="stv-card-body stv-total-body"></div>');
+            body.append('<div class="stv-card-val">' + StatsDB.formatTime(StatsDB.data.seconds_watched) + '</div>');
+
+            // Рівень під часом
+            body.append(
+                '<div class="stv-level-inline">' +
+                '<span class="stv-level-num-sm">' + info.level + '</span> ' +
+                '<span class="stv-level-name-sm">' + info.name + '</span>' +
+                '</div>'
+            );
+
+            body.append(
+                '<div class="stv-level-bar stv-level-bar-sm"><div class="stv-level-fill" style="width:' +
+                Math.round(info.progress * 100) + '%"></div></div>'
+            );
+
+            var sub = info.max
+                ? LANG.level_max
+                : (LANG.level_to + ' «' + info.nextName + '» — ' + StatsDB.formatTime(info.toNext));
+            body.append('<div class="stv-level-sub">' + sub + '</div>');
+
+            c.append(body);
+            return c;
         }
 
         function watchedCard() {
@@ -1709,8 +1719,8 @@
             bindFocusScroll(html, scroll);
             bindWheel(scroll);
 
-            setTimeout(function () { forceScrollSize(scroll); }, 100);
-            setTimeout(function () { forceScrollSize(scroll); }, 400);
+            setTimeout(function () { forceScrollSize(scroll); }, 80);
+            setTimeout(function () { forceScrollSize(scroll); }, 300);
 
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
@@ -1796,7 +1806,7 @@
     };
 
     var CSS =
-        '.stv-root{padding:22px 28px 48px;color:#fff;box-sizing:border-box;min-height:100%;}' +
+        '.stv-root{padding:22px 28px 60px;color:#fff;box-sizing:border-box;}' +
         '.stv-title{font-size:28px;font-weight:700;margin-bottom:18px;}' +
         '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-empty{' +
         'transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;' +
@@ -1811,14 +1821,6 @@
         'outline:none;' +
         'z-index:2;' +
         '}' +
-        '.stv-level-card{width:100%;margin-bottom:18px;}' +
-        '.stv-level-body{display:flex;flex-direction:column;gap:10px;width:100%;}' +
-        '.stv-level-row{display:flex;align-items:baseline;gap:12px;}' +
-        '.stv-level-num{font-size:36px;font-weight:800;line-height:1;}' +
-        '.stv-level-name{font-size:20px;font-weight:700;text-transform:uppercase;}' +
-        '.stv-level-bar{height:8px;border-radius:6px;background:rgba(255,255,255,0.1);overflow:hidden;}' +
-        '.stv-level-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,#60a5fa,#a855f7);}' +
-        '.stv-level-sub{font-size:12px;opacity:0.55;}' +
         '.stv-cards{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:28px;}' +
         '.stv-card{min-width:220px;flex:1;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,0.06);border:2px solid transparent;}' +
         '.stv-card-label{font-size:11px;opacity:0.5;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px;}' +
@@ -1829,6 +1831,14 @@
         '.stv-sub{font-size:13px;font-weight:500;opacity:0.7;}' +
         '.stv-genre-name{font-size:18px;font-weight:700;text-transform:uppercase;}' +
         '.stv-genre-pct{font-size:13px;opacity:0.6;margin-top:2px;}' +
+        /* рівень всередині блоку часу */
+        '.stv-total-body{flex-direction:column;align-items:flex-start;gap:8px;}' +
+        '.stv-level-inline{display:flex;align-items:baseline;gap:8px;margin-top:2px;}' +
+        '.stv-level-num-sm{font-size:20px;font-weight:800;}' +
+        '.stv-level-name-sm{font-size:15px;font-weight:700;text-transform:uppercase;opacity:0.9;}' +
+        '.stv-level-bar-sm{height:6px;border-radius:4px;background:rgba(255,255,255,0.12);overflow:hidden;width:100%;max-width:220px;}' +
+        '.stv-level-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,#60a5fa,#a855f7);}' +
+        '.stv-level-sub{font-size:12px;opacity:0.55;line-height:1.3;}' +
         '.stv-watched-body{flex-direction:column;align-items:flex-start;gap:10px;}' +
         '.stv-watched-counts{display:flex;align-items:baseline;gap:4px;}' +
         '.stv-posters{display:flex;flex-wrap:wrap;gap:6px;}' +
@@ -1864,13 +1874,16 @@
         '.stv-muted{opacity:0.45;font-size:13px;}' +
         '.stv-empty{padding:36px;border-radius:12px;background:rgba(255,255,255,0.04);text-align:center;opacity:0.7;margin-bottom:16px;border:2px solid transparent;}' +
         '.stv-disabled{padding:12px 16px;border-radius:8px;background:rgba(255,80,80,0.12);color:#fca5a5;margin-bottom:16px;}' +
-        '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
+        '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:50px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v9-style');
+        var old = document.getElementById('lampa-stats-v050-style');
         if (old) old.remove();
+        // також прибираємо старі стилі
+        var old2 = document.getElementById('lampa-stats-v9-style');
+        if (old2) old2.remove();
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v9-style';
+        s.id = 'lampa-stats-v050-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1887,7 +1900,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v10.1 ready (scroll fixed)');
+            console.log('Lampa stats v0.50 ready');
         } catch (e) {
             console.error('stats init', e);
         }
