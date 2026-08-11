@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v102) return;
-    window.lampa_ukrainian_stats_v102 = true;
+    if (window.lampa_ukrainian_stats_v103) return;
+    window.lampa_ukrainian_stats_v103 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -39,11 +39,8 @@
         film: 'фільм',
         series_ep: 'серія',
         level_up: 'Новий рівень',
-        recent_title: 'Останні перегляди',
-        recent_empty: 'Ще немає збережених переглядів',
         calendar_title: 'Перегляди по днях',
-        calendar_empty: 'Поки немає даних по днях',
-        watched_of: 'з'
+        calendar_empty: 'Поки немає даних по днях'
     };
 
     var CONFIG = {
@@ -53,7 +50,6 @@
         menu_action: 'lampa_ukrainian_stats',
         activity: 'lampa_ukrainian_stats_view',
         activity_actor: 'lampa_ukrainian_stats_actor',
-        activity_time: 'lampa_ukrainian_stats_time',
         activity_records: 'lampa_ukrainian_stats_records',
         completion: 0.98,
         interval: 1000,
@@ -61,8 +57,6 @@
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
         max_actors_show: 15,
         max_posters_show: 8,
-        max_history: 10,
-        history_store: 30,
         calendar_days: 30,
         xp_movie_bonus: 3600,
         xp_episode_bonus: 900
@@ -108,7 +102,6 @@
         by_weekday: {},
         by_hour: {},
         by_day: {},
-        history: [],
         last_level: 1
     };
 
@@ -176,7 +169,6 @@
         });
     }
 
-    /* ===================== CardCache ===================== */
     var CardCache = {
         map: {},
         loading: {},
@@ -189,7 +181,6 @@
         put: function (m) {
             var k = this.key(m);
             if (!k || !m) return;
-
             var prev = this.map[k] || {};
             var next = Object.assign({}, prev, m);
 
@@ -222,7 +213,6 @@
             if (!next.first_air_date && prev.first_air_date) next.first_air_date = prev.first_air_date;
             if (!next.poster_path && prev.poster_path) next.poster_path = prev.poster_path;
             if (!next.img && prev.img) next.img = prev.img;
-
             this.map[k] = next;
         },
 
@@ -245,7 +235,6 @@
         }
     };
 
-    /* ===================== Media ===================== */
     var Media = {
         lastCard: null,
 
@@ -304,7 +293,6 @@
                 else if (Array.isArray(movie.cast)) list = movie.cast;
                 else if (movie.persons && Array.isArray(movie.persons.cast)) list = movie.persons.cast;
             } catch (e) {}
-
             return list.filter(function (p) {
                 if (!p || !(p.id || p.name)) return false;
                 if (p.job && !p.character) return false;
@@ -352,7 +340,6 @@
         }
     };
 
-    /* ===================== MetaStore ===================== */
     var MetaStore = {
         prefix: 'stats_meta_',
 
@@ -412,14 +399,9 @@
             if (!movie) return movie;
             var stored = this.load(movie);
             if (!stored) return movie;
-
             movie = Object.assign({}, movie);
-            if (stored.genres && stored.genres.length && !(movie.genres && movie.genres.length)) {
-                movie.genres = stored.genres;
-            }
-            if (stored.genre_ids && stored.genre_ids.length && !(movie.genre_ids && movie.genre_ids.length)) {
-                movie.genre_ids = stored.genre_ids;
-            }
+            if (stored.genres && stored.genres.length && !(movie.genres && movie.genres.length)) movie.genres = stored.genres;
+            if (stored.genre_ids && stored.genre_ids.length && !(movie.genre_ids && movie.genre_ids.length)) movie.genre_ids = stored.genre_ids;
             if (stored.actors && stored.actors.length) {
                 if (!(movie.credits && movie.credits.cast && movie.credits.cast.length)) {
                     movie.credits = { cast: stored.actors };
@@ -432,7 +414,6 @@
         }
     };
 
-    /* ===================== DomMeta ===================== */
     var DomMeta = {
         scrape: function () {
             var result = { genres: [], year: 0, actors: [], id: null, title: '', poster: '' };
@@ -449,10 +430,8 @@
                         if (hm) result.year = parseInt(hm[0], 10);
                     }
                 }
-
                 var titleEl = document.querySelector('.full-start-new__title, .full-start__title');
                 if (titleEl) result.title = (titleEl.textContent || '').trim();
-
                 var posterEl = document.querySelector('.full-start-new__poster img, .full-start__poster img, .full-start-new__poster, .card__img');
                 if (posterEl) {
                     result.poster = posterEl.getAttribute('src') || posterEl.getAttribute('data-src') ||
@@ -460,17 +439,14 @@
                             ? String(posterEl.style.backgroundImage).replace(/url\(["']?/, '').replace(/["']?\)/, '')
                             : '');
                 }
-
                 var details = document.querySelector('.full-start-new__details, .full-start__details');
                 if (details) {
                     var text = (details.textContent || '').replace(/\s+/g, ' ').trim();
-                    var parts = text.split(/●|•|·|\|/).map(function (s) { return s.trim(); });
-                    parts.forEach(function (p) {
+                    text.split(/●|•|·|\|/).map(function (s) { return s.trim(); }).forEach(function (p) {
                         if (isGarbageGenre(p)) return;
                         result.genres.push({ name: p });
                     });
                 }
-
                 try {
                     var act = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
                     if (act) {
@@ -525,7 +501,6 @@
         this.lastCard = CardCache.get(movie) || movie;
     };
 
-    /* ===================== MetaLoader ===================== */
     var MetaLoader = {
         isTv: function (movie) {
             if (!movie) return false;
@@ -545,18 +520,10 @@
         },
 
         enrich: function (movie, done) {
-            if (!movie) {
-                if (done) done(null);
-                return;
-            }
-
+            if (!movie) { if (done) done(null); return; }
             movie = MetaStore.applyToMovie(movie);
             var id = movie.id || movie.tmdb_id;
-            if (!id) {
-                Media.remember(movie);
-                if (done) done(movie);
-                return;
-            }
+            if (!id) { Media.remember(movie); if (done) done(movie); return; }
 
             if (CardCache.hasRich(movie) || (Media.genresOf(movie).length && Media.actorsOf(movie).length)) {
                 Media.remember(movie);
@@ -565,10 +532,7 @@
             }
 
             var key = String(id);
-            if (CardCache.loading[key]) {
-                if (done) done(CardCache.get(movie) || movie);
-                return;
-            }
+            if (CardCache.loading[key]) { if (done) done(CardCache.get(movie) || movie); return; }
             CardCache.loading[key] = true;
 
             var type = this.isTv(movie) ? 'tv' : 'movie';
@@ -577,12 +541,7 @@
 
             function finish(data) {
                 CardCache.loading[key] = false;
-                if (!data) {
-                    Media.remember(movie);
-                    if (done) done(movie);
-                    return;
-                }
-
+                if (!data) { Media.remember(movie); if (done) done(movie); return; }
                 var merged = Object.assign({}, movie, data);
                 if (data.credits && data.credits.cast) merged.credits = { cast: data.credits.cast };
                 if (data.genres) merged.genres = data.genres;
@@ -590,22 +549,15 @@
                 if (data.release_date) merged.release_date = data.release_date;
                 if (data.first_air_date) merged.first_air_date = data.first_air_date;
                 if (data.poster_path) merged.poster_path = data.poster_path;
-
                 Media.remember(merged);
-
                 if (Tracker.currentMovie && CardCache.key(Tracker.currentMovie) === key) {
                     Tracker.currentMovie = CardCache.get(merged) || merged;
                 }
-
                 try {
                     var watchedId = Media.getId(merged);
                     var last = StatsDB.getLast(watchedId);
-                    if (last > 0) {
-                        var meta = Media.metaFrom(merged);
-                        StatsDB.enrichMetaOnly(Math.min(last, 600), meta);
-                    }
+                    if (last > 0) StatsDB.enrichMetaOnly(Math.min(last, 600), Media.metaFrom(merged));
                 } catch (e) {}
-
                 if (done) done(CardCache.get(merged) || merged);
             }
 
@@ -622,7 +574,6 @@
                     }
                 }
             } catch (e) {}
-
             this.tryNetwork(null, movie, type, id, finish);
         },
 
@@ -630,9 +581,7 @@
             var self = this;
             try {
                 if (!url && Lampa.TMDB && typeof Lampa.TMDB.api === 'function') {
-                    url = Lampa.TMDB.api(
-                        type + '/' + id + '?append_to_response=credits&language=' + encodeURIComponent(this.lang())
-                    );
+                    url = Lampa.TMDB.api(type + '/' + id + '?append_to_response=credits&language=' + encodeURIComponent(this.lang()));
                 }
                 if (url && Lampa.Network && typeof Lampa.Network.silent === 'function') {
                     Lampa.Network.silent(url, function (data) { finish(data); }, function () {
@@ -641,17 +590,13 @@
                     return;
                 }
             } catch (e) {}
-
             try {
                 if (url && typeof fetch === 'function') {
-                    fetch(url)
-                        .then(function (r) { return r.json(); })
-                        .then(function (data) { finish(data); })
+                    fetch(url).then(function (r) { return r.json(); }).then(function (data) { finish(data); })
                         .catch(function () { self.tryApiFull(movie, type, id, finish); });
                     return;
                 }
             } catch (e) {}
-
             this.tryApiFull(movie, type, id, finish);
         },
 
@@ -664,10 +609,7 @@
                             if (data && data.movie) {
                                 var m = data.movie;
                                 if (data.persons && data.persons.cast) {
-                                    m = Object.assign({}, m, {
-                                        credits: { cast: data.persons.cast },
-                                        persons: { cast: data.persons.cast }
-                                    });
+                                    m = Object.assign({}, m, { credits: { cast: data.persons.cast }, persons: { cast: data.persons.cast } });
                                 }
                                 finish(m);
                             } else finish(null);
@@ -681,7 +623,6 @@
         }
     };
 
-    /* ===================== LevelSystem ===================== */
     var LevelSystem = {
         xp: function () {
             var s = StatsDB.data.seconds_watched || 0;
@@ -689,39 +630,21 @@
             var e = StatsDB.data.episodes_watched || 0;
             return Math.floor(s + m * CONFIG.xp_movie_bonus + e * CONFIG.xp_episode_bonus);
         },
-
         info: function () {
             var xp = this.xp();
-            var cur = LEVELS[0];
-            var next = null;
-
+            var cur = LEVELS[0], next = null;
             for (var i = 0; i < LEVELS.length; i++) {
                 if (xp >= LEVELS[i].xp) cur = LEVELS[i];
-                else {
-                    next = LEVELS[i];
-                    break;
-                }
+                else { next = LEVELS[i]; break; }
             }
-
-            var progress = 1;
-            var toNext = 0;
+            var progress = 1, toNext = 0;
             if (next) {
                 var span = next.xp - cur.xp;
                 progress = span > 0 ? Math.min(1, (xp - cur.xp) / span) : 1;
                 toNext = Math.max(0, next.xp - xp);
             }
-
-            return {
-                level: cur.level,
-                name: cur.name,
-                xp: xp,
-                progress: progress,
-                toNext: toNext,
-                nextName: next ? next.name : null,
-                max: !next
-            };
+            return { level: cur.level, name: cur.name, xp: xp, progress: progress, toNext: toNext, nextName: next ? next.name : null, max: !next };
         },
-
         checkLevelUp: function () {
             try {
                 var info = this.info();
@@ -729,9 +652,7 @@
                 if (info.level > prev) {
                     StatsDB.data.last_level = info.level;
                     StatsDB.save();
-                    if (Lampa.Noty) {
-                        Lampa.Noty.show(LANG.level_up + ': ' + info.level + ' — ' + info.name);
-                    }
+                    if (Lampa.Noty) Lampa.Noty.show(LANG.level_up + ': ' + info.level + ' — ' + info.name);
                 } else if (!StatsDB.data.last_level) {
                     StatsDB.data.last_level = info.level;
                     StatsDB.save();
@@ -740,7 +661,6 @@
         }
     };
 
-    /* ===================== StatsDB ===================== */
     var StatsDB = {
         data: null,
 
@@ -756,7 +676,6 @@
             ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour', 'by_day'].forEach(function (k) {
                 if (!StatsDB.data[k] || typeof StatsDB.data[k] !== 'object') StatsDB.data[k] = {};
             });
-            if (!Array.isArray(this.data.history)) this.data.history = [];
             if (!Number.isFinite(this.data.last_level)) this.data.last_level = 1;
             Object.keys(this.data.actors).forEach(function (k) {
                 if (!StatsDB.data.actors[k].works) StatsDB.data.actors[k].works = {};
@@ -768,10 +687,7 @@
         cleanupGenres: function () {
             var changed = false;
             Object.keys(this.data.genres).forEach(function (name) {
-                if (isGarbageGenre(name)) {
-                    delete StatsDB.data.genres[name];
-                    changed = true;
-                }
+                if (isGarbageGenre(name)) { delete StatsDB.data.genres[name]; changed = true; }
             });
             if (changed) this.save();
         },
@@ -806,14 +722,7 @@
             if (!a || !(a.id || a.name)) return null;
             var key = String(a.id || a.name);
             if (!this.data.actors[key]) {
-                this.data.actors[key] = {
-                    id: a.id || a.name,
-                    name: a.name || '',
-                    profile_path: a.profile_path || '',
-                    seconds: 0,
-                    count: 0,
-                    works: {}
-                };
+                this.data.actors[key] = { id: a.id || a.name, name: a.name || '', profile_path: a.profile_path || '', seconds: 0, count: 0, works: {} };
             }
             var row = this.data.actors[key];
             if (!row.works) row.works = {};
@@ -826,17 +735,9 @@
         touchActorWork: function (a, meta, sec, completed) {
             var row = this.ensureActor(a);
             if (!row || !meta) return;
-
             var wid = meta.baseId || meta.watchId || meta.title || 'unknown';
             if (!row.works[wid]) {
-                row.works[wid] = {
-                    title: meta.title || '',
-                    poster: meta.poster || '',
-                    isEpisode: !!meta.isEpisode,
-                    seconds: 0,
-                    completed: false,
-                    date: Date.now()
-                };
+                row.works[wid] = { title: meta.title || '', poster: meta.poster || '', isEpisode: !!meta.isEpisode, seconds: 0, completed: false, date: Date.now() };
             }
             var w = row.works[wid];
             if (meta.title) w.title = meta.title;
@@ -848,61 +749,10 @@
             row.count = Object.keys(row.works).length;
         },
 
-        pushHistory: function (id, meta, addSec, position, duration) {
-            if (!id || !addSec) return;
-            if (!Array.isArray(this.data.history)) this.data.history = [];
-
-            var list = this.data.history;
-            var found = -1;
-            for (var i = 0; i < list.length; i++) {
-                if (list[i].id === id) { found = i; break; }
-            }
-
-            var item;
-            if (found >= 0) {
-                item = list.splice(found, 1)[0];
-            } else {
-                item = {
-                    id: id,
-                    title: '',
-                    poster: '',
-                    isEpisode: false,
-                    seconds: 0,
-                    duration: 0,
-                    position: 0,
-                    date: Date.now()
-                };
-            }
-
-            if (meta) {
-                if (meta.title) item.title = meta.title;
-                if (meta.poster) item.poster = meta.poster;
-                item.isEpisode = !!meta.isEpisode;
-            }
-            item.seconds = (item.seconds || 0) + addSec;
-            if (Number.isFinite(position) && position > 0) item.position = Math.max(item.position || 0, position);
-            if (Number.isFinite(duration) && duration > 0) item.duration = Math.max(item.duration || 0, duration);
-            item.date = Date.now();
-
-            list.unshift(item);
-            if (list.length > CONFIG.history_store) list.length = CONFIG.history_store;
-        },
-
-        recentHistory: function (limit) {
-            if (!Array.isArray(this.data.history)) return [];
-            return this.data.history.slice(0, limit || CONFIG.max_history);
-        },
-
         dayList: function (limit) {
-            var days = Object.keys(this.data.by_day || {}).map(function (k) {
-                return { day: k, seconds: StatsDB.data.by_day[k] || 0 };
-            }).filter(function (d) { return d.seconds > 0; })
-              .sort(function (a, b) { return a.day < b.day ? 1 : -1; });
-
-            // заповнити останні N днів нулями, якщо немає
-            var out = [];
             var map = {};
-            days.forEach(function (d) { map[d.day] = d.seconds; });
+            Object.keys(this.data.by_day || {}).forEach(function (k) { map[k] = StatsDB.data.by_day[k] || 0; });
+            var out = [];
             var now = new Date();
             for (var i = 0; i < (limit || CONFIG.calendar_days); i++) {
                 var d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
@@ -915,11 +765,7 @@
         addProgress: function (id, time, duration, deltaSec, meta) {
             if (!id || !Number.isFinite(time) || time < 0) return 0;
             var prev = this.getLast(id);
-            if (time < prev - 5) {
-                this.setLast(id, time);
-                this.save();
-                return 0;
-            }
+            if (time < prev - 5) { this.setLast(id, time); this.save(); return 0; }
             var raw = Math.max(0, time - prev);
             if (Number.isFinite(deltaSec) && deltaSec >= 0) raw = Math.min(raw, deltaSec + 1.5);
             var maxJump = Number.isFinite(duration) && duration > 0 ? Math.min(duration, 7200) : 600;
@@ -928,7 +774,6 @@
             if (safe > 0) {
                 this.data.seconds_watched += Math.floor(safe);
                 this.enrich(Math.floor(safe), meta);
-                this.pushHistory(id, meta, Math.floor(safe), time, duration);
             }
             this.setLast(id, time);
             this.save();
@@ -950,7 +795,6 @@
 
         enrichMetaOnly: function (sec, meta, skipSave) {
             if (!sec || !meta) return;
-
             if (meta.year) {
                 var y = String(meta.year);
                 if (!this.data.years[y]) this.data.years[y] = { seconds: 0, count: 0 };
@@ -977,7 +821,6 @@
 
         markCompleted: function (id, meta, movie) {
             if (!id || this.data.completed[id]) return false;
-
             var entry = {
                 date: Date.now(),
                 isEpisode: !!(meta && meta.isEpisode),
@@ -985,7 +828,6 @@
                 poster: (meta && meta.poster) || Media.posterOf(movie) || '',
                 tmdb_id: movie && (movie.id || movie.tmdb_id) || ''
             };
-
             if (!entry.poster && movie) {
                 var st = MetaStore.load(movie);
                 if (st && st.poster_path) entry.poster = st.poster_path;
@@ -994,12 +836,9 @@
                 entry.poster = Media.posterOf(Media.lastCard);
                 if (!entry.title) entry.title = Media.titleOf(Media.lastCard);
             }
-
             this.data.completed[id] = entry;
-
             if (entry.isEpisode) this.data.episodes_watched++;
             else this.data.movies_watched++;
-
             if (meta && meta.genres) {
                 meta.genres.forEach(function (g) {
                     var name = typeof g === 'string' ? g : (g && g.name);
@@ -1009,9 +848,7 @@
                 });
             }
             if (meta && meta.actors) {
-                meta.actors.slice(0, 15).forEach(function (a) {
-                    StatsDB.touchActorWork(a, meta, 0, true);
-                });
+                meta.actors.slice(0, 15).forEach(function (a) { StatsDB.touchActorWork(a, meta, 0, true); });
             }
             if (meta && meta.year) {
                 var y = String(meta.year);
@@ -1024,34 +861,23 @@
         },
 
         recentCompleted: function (limit) {
-            var list = Object.keys(this.data.completed).map(function (k) {
+            return Object.keys(this.data.completed).map(function (k) {
                 var c = StatsDB.data.completed[k];
-                return {
-                    id: k,
-                    date: c.date || 0,
-                    isEpisode: !!c.isEpisode,
-                    title: c.title || '',
-                    poster: c.poster || ''
-                };
-            }).sort(function (a, b) { return b.date - a.date; });
-            return list.slice(0, limit || CONFIG.max_posters_show);
+                return { id: k, date: c.date || 0, isEpisode: !!c.isEpisode, title: c.title || '', poster: c.poster || '' };
+            }).sort(function (a, b) { return b.date - a.date; }).slice(0, limit || CONFIG.max_posters_show);
         },
 
         topActors: function (limit) {
-            return Object.keys(this.data.actors)
-                .map(function (k) {
-                    var a = StatsDB.data.actors[k];
-                    if (!a.works) a.works = {};
-                    a.count = Object.keys(a.works).length;
-                    a._key = k;
-                    return a;
-                })
-                .sort(function (a, b) {
-                    var ds = (b.seconds || 0) - (a.seconds || 0);
-                    if (ds !== 0) return ds;
-                    return (b.count || 0) - (a.count || 0);
-                })
-                .slice(0, limit || CONFIG.max_actors_show);
+            return Object.keys(this.data.actors).map(function (k) {
+                var a = StatsDB.data.actors[k];
+                if (!a.works) a.works = {};
+                a.count = Object.keys(a.works).length;
+                a._key = k;
+                return a;
+            }).sort(function (a, b) {
+                var ds = (b.seconds || 0) - (a.seconds || 0);
+                return ds !== 0 ? ds : (b.count || 0) - (a.count || 0);
+            }).slice(0, limit || CONFIG.max_actors_show);
         },
 
         actorWorks: function (key) {
@@ -1059,15 +885,7 @@
             if (!a || !a.works) return [];
             return Object.keys(a.works).map(function (wid) {
                 var w = a.works[wid];
-                return {
-                    id: wid,
-                    title: w.title || wid,
-                    poster: w.poster || '',
-                    isEpisode: !!w.isEpisode,
-                    seconds: w.seconds || 0,
-                    completed: !!w.completed,
-                    date: w.date || 0
-                };
+                return { id: wid, title: w.title || wid, poster: w.poster || '', isEpisode: !!w.isEpisode, seconds: w.seconds || 0, completed: !!w.completed, date: w.date || 0 };
             }).sort(function (x, y) { return y.date - x.date; });
         },
 
@@ -1101,8 +919,7 @@
         },
 
         genreList: function () {
-            return Object.keys(this.data.genres)
-                .filter(function (name) { return !isGarbageGenre(name); })
+            return Object.keys(this.data.genres).filter(function (name) { return !isGarbageGenre(name); })
                 .map(function (name) { return { name: name, seconds: StatsDB.data.genres[name].seconds || 0 }; })
                 .sort(function (a, b) { return b.seconds - a.seconds; });
         },
@@ -1115,8 +932,7 @@
                 var key = Math.floor(year / 10) * 10 + '-ті';
                 buckets[key] = (buckets[key] || 0) + (StatsDB.data.years[y].seconds || 0);
             });
-            return Object.keys(buckets)
-                .map(function (k) { return { label: k, seconds: buckets[k] }; })
+            return Object.keys(buckets).map(function (k) { return { label: k, seconds: buckets[k] }; })
                 .sort(function (a, b) { return a.label.localeCompare(b.label); });
         },
 
@@ -1151,7 +967,6 @@
         }
     };
 
-    /* ===================== Settings / Current / Tracker — same as v10.1 ===================== */
     var Settings = {
         added: false,
         setup: function () {
@@ -1200,7 +1015,6 @@
             } catch (e) {}
             return null;
         },
-
         getVideoState: function () {
             try {
                 var video = null;
@@ -1213,9 +1027,7 @@
                 if (!Number.isFinite(duration) && Number.isFinite(video._duration)) duration = Number(video._duration);
                 if (!Number.isFinite(time) || !Number.isFinite(duration) || duration <= 0) return null;
                 return { time: Math.max(0, time), duration: Math.max(0, duration) };
-            } catch (e) {
-                return null;
-            }
+            } catch (e) { return null; }
         }
     };
 
@@ -1239,18 +1051,8 @@
                             if (data) {
                                 var movie = data.card || data.movie || null;
                                 if (movie) {
-                                    if (data.season != null) {
-                                        movie = Object.assign({}, movie, {
-                                            season_number: data.season,
-                                            season: data.season
-                                        });
-                                    }
-                                    if (data.episode != null) {
-                                        movie = Object.assign({}, movie, {
-                                            episode_number: data.episode,
-                                            episode: data.episode
-                                        });
-                                    }
+                                    if (data.season != null) movie = Object.assign({}, movie, { season_number: data.season, season: data.season });
+                                    if (data.episode != null) movie = Object.assign({}, movie, { episode_number: data.episode, episode: data.episode });
                                     Media.remember(movie);
                                     movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
                                     Tracker.currentMovie = movie;
@@ -1300,33 +1102,14 @@
                 Lampa.Listener.follow('full', function (e) {
                     if (!e || !e.data) return;
                     if (e.type !== 'complite' && e.type !== 'start' && e.type !== 'complete') return;
-
                     var movie = e.data.movie || (e.object && e.object.card) || null;
-                    if (!movie && e.object) {
-                        movie = {
-                            id: e.object.id,
-                            title: e.object.title,
-                            name: e.object.name,
-                            method: e.object.method
-                        };
-                    }
+                    if (!movie && e.object) movie = { id: e.object.id, title: e.object.title, name: e.object.name, method: e.object.method };
                     if (!movie) return;
-
-                    if (e.object && !movie.id && e.object.id) {
-                        movie = Object.assign({}, movie, { id: e.object.id });
-                    }
-
+                    if (e.object && !movie.id && e.object.id) movie = Object.assign({}, movie, { id: e.object.id });
                     var cast = null;
                     if (e.data.persons && e.data.persons.cast) cast = e.data.persons.cast;
                     else if (e.data.credits && e.data.credits.cast) cast = e.data.credits.cast;
-
-                    if (cast && cast.length) {
-                        movie = Object.assign({}, movie, {
-                            credits: { cast: cast },
-                            persons: { cast: cast }
-                        });
-                    }
-
+                    if (cast && cast.length) movie = Object.assign({}, movie, { credits: { cast: cast }, persons: { cast: cast } });
                     setTimeout(function () {
                         movie = DomMeta.mergeInto(movie);
                         Media.remember(movie);
@@ -1344,11 +1127,9 @@
         onStart: function (e) {
             var movie = Media.normalize(e) || Current.getMovie();
             if (!movie) return;
-
             Media.remember(movie);
             movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
             this.currentMovie = movie;
-
             MetaLoader.enrich(movie, function (rich) {
                 if (rich) {
                     Tracker.currentMovie = MetaStore.applyToMovie(CardCache.get(rich) || rich);
@@ -1361,17 +1142,11 @@
             if (!Settings.collecting()) return;
             movie = movie || this.currentMovie || Media.lastCard;
             if (!movie) return;
-
             var time = 0, duration = 0;
-
             try {
                 var v = Current.getVideoState();
-                if (v) {
-                    time = v.time;
-                    duration = v.duration;
-                }
+                if (v) { time = v.time; duration = v.duration; }
             } catch (e) {}
-
             try {
                 if ((!time || time <= 0) && Lampa.Storage) {
                     var last = Lampa.Storage.get('player_road_last') || Lampa.Storage.get('timeline_last');
@@ -1381,23 +1156,17 @@
                     }
                 }
             } catch (e) {}
-
-            if (Number.isFinite(time) && time > 0) {
-                this.apply(time, duration || 0, Math.max(time, 600));
-            }
+            if (Number.isFinite(time) && time > 0) this.apply(time, duration || 0, Math.max(time, 600));
         },
 
         apply: function (time, duration, wallDelta) {
             if (!Settings.collecting()) return;
-
             var movie = this.currentMovie || Current.getMovie() || Media.lastCard;
             if (movie) {
                 movie = CardCache.get(movie) || movie;
                 movie = MetaStore.applyToMovie(movie);
             }
-
             var meta = Media.metaFrom(movie);
-
             if (Media.lastCard) {
                 var alt = Media.metaFrom(Media.lastCard);
                 if (alt) {
@@ -1405,9 +1174,7 @@
                         meta = meta || {};
                         meta.genres = alt.genres;
                     }
-                    if (meta && (!meta.actors || !meta.actors.length) && alt.actors && alt.actors.length) {
-                        meta.actors = alt.actors;
-                    }
+                    if (meta && (!meta.actors || !meta.actors.length) && alt.actors && alt.actors.length) meta.actors = alt.actors;
                     if (meta && !meta.year && alt.year) meta.year = alt.year;
                     if (meta && !meta.poster && alt.poster) meta.poster = alt.poster;
                     if (meta && !meta.title && alt.title) meta.title = alt.title;
@@ -1415,10 +1182,8 @@
                     if (meta && meta.isEpisode == null) meta.isEpisode = alt.isEpisode;
                 }
             }
-
             var id = movie ? Media.getId(movie) : 'session:anon';
             StatsDB.addProgress(id, time, duration, wallDelta, meta);
-
             if (movie && Number.isFinite(duration) && duration > 0 && time / duration >= CONFIG.completion) {
                 StatsDB.markCompleted(Media.getId(movie), meta, movie);
             }
@@ -1453,7 +1218,6 @@
         }
     };
 
-    /* ===================== Scroll helpers ===================== */
     function makeScroll() {
         return new Lampa.Scroll({ mask: true, over: true, step: 150 });
     }
@@ -1513,7 +1277,6 @@
         });
     }
 
-    /* ===================== UI: main ===================== */
     function StatsComponent() {
         var scroll = makeScroll();
         var html = $('<div class="stv-root"></div>');
@@ -1526,10 +1289,7 @@
             bindWheel(scroll);
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
-        this.start = function () {
-            bindController(scroll);
-            bindWheel(scroll);
-        };
+        this.start = function () { bindController(scroll); bindWheel(scroll); };
         this.pause = function () {};
         this.render = function () { return scroll.render(); };
         this.destroy = function () {
@@ -1541,9 +1301,7 @@
             root.empty();
             root.append('<div class="stv-title">' + LANG.page_title + '</div>');
             root.append(levelCard());
-
             if (!Settings.collecting()) root.append('<div class="stv-disabled">' + LANG.disabled_text + '</div>');
-
             var has = StatsDB.data.seconds_watched > 0 || StatsDB.data.movies_watched > 0 || StatsDB.data.episodes_watched > 0;
             if (!has) {
                 root.append('<div class="stv-empty selector">' + LANG.empty_text + '</div>');
@@ -1561,20 +1319,9 @@
             var c = $('<div class="stv-card selector stv-level-card"></div>');
             c.append('<div class="stv-card-label">' + LANG.level_label + '</div>');
             var body = $('<div class="stv-level-body"></div>');
-            body.append(
-                '<div class="stv-level-row">' +
-                '<span class="stv-level-num">' + info.level + '</span>' +
-                '<span class="stv-level-name">' + info.name + '</span>' +
-                '</div>'
-            );
-            body.append(
-                '<div class="stv-level-bar"><div class="stv-level-fill" style="width:' +
-                Math.round(info.progress * 100) + '%"></div></div>'
-            );
-            var sub = info.max
-                ? LANG.level_max
-                : (LANG.level_to + ' «' + info.nextName + '» — ' + StatsDB.formatTime(info.toNext));
-            body.append('<div class="stv-level-sub">' + sub + '</div>');
+            body.append('<div class="stv-level-row"><span class="stv-level-num">' + info.level + '</span><span class="stv-level-name">' + info.name + '</span></div>');
+            body.append('<div class="stv-level-bar"><div class="stv-level-fill" style="width:' + Math.round(info.progress * 100) + '%"></div></div>');
+            body.append('<div class="stv-level-sub">' + (info.max ? LANG.level_max : (LANG.level_to + ' «' + info.nextName + '» — ' + StatsDB.formatTime(info.toNext))) + '</div>');
             c.append(body);
             return c;
         }
@@ -1582,24 +1329,10 @@
         function topCards() {
             var row = $('<div class="stv-cards"></div>');
             var g = StatsDB.topGenre();
-
-            var timeCard = card(LANG.total_time, StatsDB.formatTime(StatsDB.data.seconds_watched), '⏱');
-            timeCard.on('hover:enter click', function () {
-                Lampa.Activity.push({
-                    url: 'stats_time',
-                    title: LANG.recent_title,
-                    component: CONFIG.activity_time,
-                    page: 1
-                });
-            });
-            row.append(timeCard);
-
+            // СУМАРНИЙ ЧАС — без кліку
+            row.append(card(LANG.total_time, StatsDB.formatTime(StatsDB.data.seconds_watched), '⏱'));
             row.append(watchedCard());
-            row.append(card(
-                LANG.fav_genre,
-                '<div class="stv-genre-name">' + g.name + '</div><div class="stv-genre-pct">' + g.percent + '%</div>',
-                '◎'
-            ));
+            row.append(card(LANG.fav_genre, '<div class="stv-genre-name">' + g.name + '</div><div class="stv-genre-pct">' + g.percent + '%</div>', '◎'));
             return row;
         }
 
@@ -1607,21 +1340,13 @@
             var c = $('<div class="stv-card selector stv-card-watched"></div>');
             c.append('<div class="stv-card-label">' + LANG.watched + '</div>');
             var body = $('<div class="stv-card-body stv-watched-body"></div>');
-            body.append(
-                '<div class="stv-watched-counts">' +
-                '<span class="stv-big">' + (StatsDB.data.movies_watched || 0) + '</span>' +
-                '<span class="stv-sub"> ' + LANG.movies + ' / ' + (StatsDB.data.episodes_watched || 0) + ' ' + LANG.episodes + '</span>' +
-                '</div>'
-            );
+            body.append('<div class="stv-watched-counts"><span class="stv-big">' + (StatsDB.data.movies_watched || 0) + '</span><span class="stv-sub"> ' + LANG.movies + ' / ' + (StatsDB.data.episodes_watched || 0) + ' ' + LANG.episodes + '</span></div>');
             var posters = $('<div class="stv-posters"></div>');
             StatsDB.recentCompleted(CONFIG.max_posters_show).forEach(function (item) {
                 var p = $('<div class="stv-poster" title="' + (item.title || '').replace(/"/g, '&quot;') + '"></div>');
                 var url = posterUrl(item.poster);
                 if (url) p.css('background-image', 'url(' + url + ')');
-                else {
-                    p.addClass('stv-poster-empty');
-                    p.text(item.isEpisode ? 'S' : 'F');
-                }
+                else { p.addClass('stv-poster-empty'); p.text(item.isEpisode ? 'S' : 'F'); }
                 if (item.isEpisode) p.append('<span class="stv-poster-badge">EP</span>');
                 posters.append(p);
             });
@@ -1643,21 +1368,15 @@
             var scrollWrap = $('<div class="stv-actors-scroll"></div>');
             var row = $('<div class="stv-actors"></div>');
             var list = StatsDB.topActors(CONFIG.max_actors_show);
-            if (!list.length) {
-                row.append('<div class="stv-muted">' + LANG.no_actors + '</div>');
-            } else {
+            if (!list.length) row.append('<div class="stv-muted">' + LANG.no_actors + '</div>');
+            else {
                 list.forEach(function (a) {
                     var item = $('<div class="stv-actor selector"></div>');
-                    var img = a.profile_path
-                        ? (String(a.profile_path).indexOf('http') === 0 ? a.profile_path : CONFIG.tmdb_img + a.profile_path)
-                        : '';
+                    var img = a.profile_path ? (String(a.profile_path).indexOf('http') === 0 ? a.profile_path : CONFIG.tmdb_img + a.profile_path) : '';
                     if (img) item.append('<div class="stv-actor-photo" style="background-image:url(' + img + ')"></div>');
                     else item.append('<div class="stv-actor-photo stv-actor-ph">' + (a.name || '?').charAt(0) + '</div>');
                     item.append('<div class="stv-actor-name">' + (a.name || '') + '</div>');
-                    item.append(
-                        '<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) +
-                        ', ' + (a.count || 0) + ' ' + LANG.films_short + '</div>'
-                    );
+                    item.append('<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) + ', ' + (a.count || 0) + ' ' + LANG.films_short + '</div>');
                     item.on('hover:enter click', function () { openActorPage(a); });
                     row.append(item);
                 });
@@ -1731,10 +1450,7 @@
             box.append($('<div class="stv-pie" style="background:conic-gradient(' + stops.join(',') + ')"></div>'));
             var legend = $('<div class="stv-legend"></div>');
             list.forEach(function (g, i) {
-                legend.append(
-                    '<div class="stv-leg-item"><span class="stv-dot" style="background:' + colors[i % colors.length] +
-                    '"></span>' + g.name + ' ' + Math.round((g.seconds / total) * 100) + '%</div>'
-                );
+                legend.append('<div class="stv-leg-item"><span class="stv-dot" style="background:' + colors[i % colors.length] + '"></span>' + g.name + ' ' + Math.round((g.seconds / total) * 100) + '%</div>');
             });
             box.append(legend);
             return box;
@@ -1761,95 +1477,6 @@
         }
     }
 
-    /* ===================== UI: recent time detail ===================== */
-    function TimeDetailComponent() {
-        var scroll = makeScroll();
-        var html = $('<div class="stv-root"></div>');
-
-        this.create = function () {
-            render();
-            scroll.clear();
-            scroll.append(html);
-            bindFocusScroll(html, scroll);
-            bindWheel(scroll);
-            try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
-        };
-        this.start = function () {
-            bindController(scroll);
-            bindWheel(scroll);
-        };
-        this.pause = function () {};
-        this.render = function () { return scroll.render(); };
-        this.destroy = function () {
-            try { scroll.destroy(); } catch (e) {}
-            html.remove();
-        };
-
-        function render() {
-            html.empty();
-            html.append('<div class="stv-title">' + LANG.recent_title + '</div>');
-            html.append('<div class="stv-section-title">' + StatsDB.formatTime(StatsDB.data.seconds_watched) + '</div>');
-
-            var list = StatsDB.recentHistory(CONFIG.max_history);
-            if (!list.length) {
-                // fallback: completed
-                list = StatsDB.recentCompleted(CONFIG.max_history).map(function (c) {
-                    return {
-                        id: c.id,
-                        title: c.title,
-                        poster: c.poster,
-                        isEpisode: c.isEpisode,
-                        seconds: 0,
-                        duration: 0,
-                        position: 0,
-                        date: c.date
-                    };
-                });
-            }
-
-            if (!list.length) {
-                html.append('<div class="stv-empty selector">' + LANG.recent_empty + '</div>');
-                return;
-            }
-
-            var wrap = $('<div class="stv-hist"></div>');
-            list.forEach(function (item) {
-                var row = $('<div class="stv-hist-item selector"></div>');
-                var poster = $('<div class="stv-hist-poster"></div>');
-                var url = posterUrl(item.poster);
-                if (url) poster.css('background-image', 'url(' + url + ')');
-                else poster.addClass('stv-poster-empty').text(item.isEpisode ? 'S' : 'F');
-
-                var info = $('<div class="stv-hist-info"></div>');
-                info.append('<div class="stv-hist-title">' + (item.title || item.id || '') + '</div>');
-
-                var pos = item.position || item.seconds || 0;
-                var dur = item.duration || 0;
-                var pct = 0;
-                if (dur > 0) pct = Math.min(100, Math.round((pos / dur) * 100));
-                else if (StatsDB.data.completed[item.id]) pct = 100;
-                else if (item.seconds > 0) pct = Math.min(99, Math.round(item.seconds / 60)); // грубо
-
-                var meta =
-                    StatsDB.formatTime(item.seconds || pos) +
-                    (dur > 0 ? (' ' + LANG.watched_of + ' ' + StatsDB.formatTime(dur)) : '') +
-                    (pct ? (' · ' + pct + '%') : '');
-                info.append('<div class="stv-hist-meta">' + meta + '</div>');
-
-                var bar = $(
-                    '<div class="stv-hist-bar"><div class="stv-hist-fill" style="width:' + pct + '%"></div></div>'
-                );
-                info.append(bar);
-
-                row.append(poster);
-                row.append(info);
-                wrap.append(row);
-            });
-            html.append(wrap);
-        }
-    }
-
-    /* ===================== UI: records calendar ===================== */
     function RecordsDetailComponent() {
         var scroll = makeScroll();
         var html = $('<div class="stv-root"></div>');
@@ -1862,10 +1489,7 @@
             bindWheel(scroll);
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
-        this.start = function () {
-            bindController(scroll);
-            bindWheel(scroll);
-        };
+        this.start = function () { bindController(scroll); bindWheel(scroll); };
         this.pause = function () {};
         this.render = function () { return scroll.render(); };
         this.destroy = function () {
@@ -1876,17 +1500,14 @@
         function render() {
             html.empty();
             html.append('<div class="stv-title">' + LANG.calendar_title + '</div>');
-
             var days = StatsDB.dayList(CONFIG.calendar_days);
             var hasAny = days.some(function (d) { return d.seconds > 0; });
             if (!hasAny) {
                 html.append('<div class="stv-empty selector">' + LANG.calendar_empty + '</div>');
                 return;
             }
-
             var max = 1;
             days.forEach(function (d) { if (d.seconds > max) max = d.seconds; });
-
             var chart = $('<div class="stv-cal selector"></div>');
             days.forEach(function (d) {
                 var h = d.seconds > 0 ? Math.max(6, Math.round((d.seconds / max) * 100)) : 2;
@@ -1894,24 +1515,17 @@
                 var bar = $('<div class="stv-cal-bar" style="height:' + h + '%"></div>');
                 if (d.seconds <= 0) bar.addClass('stv-cal-bar-empty');
                 col.append(bar);
-
-                var label = d.day.slice(5); // MM-DD
-                col.append('<div class="stv-cal-label">' + label + '</div>');
+                col.append('<div class="stv-cal-label">' + d.day.slice(5) + '</div>');
                 col.append('<div class="stv-cal-val">' + (d.seconds > 0 ? Math.round(d.seconds / 60) + "'" : '') + '</div>');
                 chart.append(col);
             });
             html.append(chart);
-
-            // список днів з хвилинами
             var list = $('<div class="stv-cal-list"></div>');
             days.slice().reverse().forEach(function (d) {
                 if (d.seconds <= 0) return;
                 var row = $('<div class="stv-cal-row selector"></div>');
                 var dt = d.date || new Date(d.day);
-                var title =
-                    (WEEKDAYS[dt.getDay()] || '') + ', ' +
-                    dt.getDate() + ' ' + (MONTHS[dt.getMonth()] || '');
-                row.append('<div class="stv-cal-row-day">' + title + '</div>');
+                row.append('<div class="stv-cal-row-day">' + (WEEKDAYS[dt.getDay()] || '') + ', ' + dt.getDate() + ' ' + (MONTHS[dt.getMonth()] || '') + '</div>');
                 row.append('<div class="stv-cal-row-time">' + StatsDB.formatTime(d.seconds) + '</div>');
                 list.append(row);
             });
@@ -1919,7 +1533,6 @@
         }
     }
 
-    /* ===================== Actor works (fallback) ===================== */
     function ActorWorksComponent(object) {
         var scroll = makeScroll();
         var html = $('<div class="stv-root"></div>');
@@ -1933,10 +1546,7 @@
             bindWheel(scroll);
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
-        this.start = function () {
-            bindController(scroll);
-            bindWheel(scroll);
-        };
+        this.start = function () { bindController(scroll); bindWheel(scroll); };
         this.pause = function () {};
         this.render = function () { return scroll.render(); };
         this.destroy = function () {
@@ -1950,13 +1560,11 @@
             var name = (actor && actor.name) || (object && object.title) || LANG.actor_works;
             html.append('<div class="stv-title">' + name + '</div>');
             html.append('<div class="stv-section-title">' + LANG.actor_works + '</div>');
-
             var works = StatsDB.actorWorks(key);
             if (!works.length) {
                 html.append('<div class="stv-empty selector">' + LANG.no_works + '</div>');
                 return;
             }
-
             var list = $('<div class="stv-works"></div>');
             works.forEach(function (w) {
                 var row = $('<div class="stv-work selector"></div>');
@@ -1966,13 +1574,7 @@
                 else poster.addClass('stv-poster-empty').text(w.isEpisode ? 'S' : 'F');
                 var info = $('<div class="stv-work-info"></div>');
                 info.append('<div class="stv-work-title">' + (w.title || '') + '</div>');
-                info.append(
-                    '<div class="stv-work-meta">' +
-                    (w.isEpisode ? LANG.series_ep : LANG.film) +
-                    ' · ' + StatsDB.formatTime(w.seconds) +
-                    (w.completed ? ' · ✓' : '') +
-                    '</div>'
-                );
+                info.append('<div class="stv-work-meta">' + (w.isEpisode ? LANG.series_ep : LANG.film) + ' · ' + StatsDB.formatTime(w.seconds) + (w.completed ? ' · ✓' : '') + '</div>');
                 row.append(poster);
                 row.append(info);
                 list.append(row);
@@ -2016,13 +1618,10 @@
     var CSS =
         '.stv-root{padding:22px 28px 48px;color:#fff;box-sizing:border-box;min-height:100%;}' +
         '.stv-title{font-size:28px;font-weight:700;margin-bottom:18px;}' +
-        '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-empty,.stv-hist-item,.stv-cal-row{' +
+        '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-empty,.stv-cal-row{' +
         'transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;}' +
-        '.stv-card:focus,.stv-actor:focus,.stv-panel:focus,.stv-reset:focus,.stv-work:focus,.stv-empty:focus,' +
-        '.stv-hist-item:focus,.stv-cal-row:focus,.stv-cal:focus,' +
-        '.stv-card.focus,.stv-actor.focus,.stv-panel.focus,.stv-reset.focus{' +
-        'transform:translateY(-6px);box-shadow:0 10px 28px rgba(0,0,0,.45);' +
-        'border-color:rgba(96,165,250,.9)!important;background:rgba(255,255,255,.12)!important;outline:none;z-index:2;}' +
+        '.stv-card:focus,.stv-actor:focus,.stv-panel:focus,.stv-reset:focus,.stv-work:focus,.stv-empty:focus,.stv-cal-row:focus,.stv-cal:focus{' +
+        'transform:translateY(-6px);box-shadow:0 10px 28px rgba(0,0,0,.45);border-color:rgba(96,165,250,.9)!important;background:rgba(255,255,255,.12)!important;outline:none;z-index:2;}' +
         '.stv-level-card{width:100%;margin-bottom:18px;}' +
         '.stv-level-body{display:flex;flex-direction:column;gap:10px;width:100%;}' +
         '.stv-level-row{display:flex;align-items:baseline;gap:12px;}' +
@@ -2032,7 +1631,7 @@
         '.stv-level-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,#60a5fa,#a855f7);}' +
         '.stv-level-sub{font-size:12px;opacity:0.55;}' +
         '.stv-cards{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:28px;}' +
-        '.stv-card{min-width:220px;flex:1;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,0.06);border:2px solid transparent;cursor:pointer;}' +
+        '.stv-card{min-width:220px;flex:1;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,0.06);border:2px solid transparent;}' +
         '.stv-card-label{font-size:11px;opacity:0.5;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px;}' +
         '.stv-card-body{display:flex;align-items:center;gap:12px;}' +
         '.stv-card-icon{font-size:22px;opacity:0.85;}' +
@@ -2077,16 +1676,6 @@
         '.stv-empty{padding:36px;border-radius:12px;background:rgba(255,255,255,0.04);text-align:center;opacity:0.7;margin-bottom:16px;border:2px solid transparent;}' +
         '.stv-disabled{padding:12px 16px;border-radius:8px;background:rgba(255,80,80,0.12);color:#fca5a5;margin-bottom:16px;}' +
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:24px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}' +
-        /* history */
-        '.stv-hist{display:flex;flex-direction:column;gap:12px;}' +
-        '.stv-hist-item{display:flex;gap:14px;padding:12px;border-radius:12px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
-        '.stv-hist-poster{width:52px;height:78px;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.1);flex-shrink:0;}' +
-        '.stv-hist-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;justify-content:center;}' +
-        '.stv-hist-title{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-        '.stv-hist-meta{font-size:12px;opacity:0.55;}' +
-        '.stv-hist-bar{height:6px;border-radius:4px;background:rgba(255,255,255,0.1);overflow:hidden;}' +
-        '.stv-hist-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,#34d399,#3b82f6);}' +
-        /* calendar */
         '.stv-cal{display:flex;align-items:flex-end;gap:4px;height:160px;padding:12px 8px 8px;margin-bottom:20px;border-radius:14px;background:rgba(255,255,255,0.04);border:2px solid transparent;overflow-x:auto;}' +
         '.stv-cal-col{flex:1;min-width:18px;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;}' +
         '.stv-cal-bar{width:70%;max-width:16px;background:linear-gradient(180deg,#a78bfa,#3b82f6);border-radius:4px 4px 2px 2px;min-height:2px;}' +
@@ -2118,12 +1707,11 @@
             if (Lampa.Component && Lampa.Component.add) {
                 Lampa.Component.add(CONFIG.activity, StatsComponent);
                 Lampa.Component.add(CONFIG.activity_actor, ActorWorksComponent);
-                Lampa.Component.add(CONFIG.activity_time, TimeDetailComponent);
                 Lampa.Component.add(CONFIG.activity_records, RecordsDetailComponent);
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v10.2 ready');
+            console.log('Lampa stats v10.3 ready');
         } catch (e) {
             console.error('stats init', e);
         }
