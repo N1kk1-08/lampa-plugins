@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v99) return;
-    window.lampa_ukrainian_stats_v99 = true;
+    if (window.lampa_ukrainian_stats_v100) return;
+    window.lampa_ukrainian_stats_v100 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -14,6 +14,9 @@
         records: 'РЕКОРДИ',
         by_years: 'ВПОДОБАННЯ ЗА РОКАМИ ВИПУСКУ',
         genres_dist: 'РОЗПОДІЛ ЖАНРІВ',
+        level_label: 'РІВЕНЬ',
+        level_max: 'Максимальний рівень',
+        level_to: 'до',
         movies: 'фільмів',
         episodes: 'серій',
         hours: 'год.',
@@ -34,7 +37,8 @@
         actor_works: 'Фільми та серіали',
         no_works: 'Поки немає записів',
         film: 'фільм',
-        series_ep: 'серія'
+        series_ep: 'серія',
+        level_up: 'Новий рівень'
     };
 
     var CONFIG = {
@@ -44,13 +48,30 @@
         menu_action: 'lampa_ukrainian_stats',
         activity: 'lampa_ukrainian_stats_view',
         activity_actor: 'lampa_ukrainian_stats_actor',
-        completion: 0.85,
+        completion: 0.98,
         interval: 1000,
         tmdb_img: 'https://image.tmdb.org/t/p/w185',
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
         max_actors_show: 15,
-        max_posters_show: 8
+        max_posters_show: 8,
+        // бонуси XP за завершення на 98%+
+        xp_movie_bonus: 3600,   // +1 год
+        xp_episode_bonus: 900   // +15 хв
     };
+
+    // Вищі пороги рівнів (орієнтир у годинах чистого часу + бонуси)
+    var LEVELS = [
+        { level: 1,  name: 'Новачок',        xp: 0 },
+        { level: 2,  name: 'Глядач',         xp: 7200 },      // ~2 год
+        { level: 3,  name: 'Кіноман',        xp: 36000 },     // ~10 год
+        { level: 4,  name: 'Марафонець',     xp: 108000 },    // ~30 год
+        { level: 5,  name: 'Серіаломан',     xp: 216000 },    // ~60 год
+        { level: 6,  name: 'Експерт екрану', xp: 360000 },    // ~100 год
+        { level: 7,  name: 'Критик',         xp: 540000 },    // ~150 год
+        { level: 8,  name: 'Колекціонер',    xp: 900000 },    // ~250 год
+        { level: 9,  name: 'Легенда кіно',   xp: 1440000 },   // ~400 год
+        { level: 10, name: 'Кінобог',        xp: 2160000 }    // ~600 год
+    ];
 
     var GENRE_MAP = {
         28: 'Бойовик', 12: 'Пригоди', 16: 'Мультфільм', 35: 'Комедія',
@@ -77,29 +98,21 @@
         years: {},
         by_month: {},
         by_weekday: {},
-        by_hour: {}
+        by_hour: {},
+        last_level: 1
     };
 
     function isGarbageGenre(name) {
         if (!name || typeof name !== 'string') return true;
         var p = name.trim();
         if (!p) return true;
-
-        // Відсікаємо таймкоди типу 01:25
         if (/^\d{1,2}:\d{2}$/.test(p)) return true;
-
-        // Відсікаємо тривалість, сезони та серії (тепер і українською)
         if (/\d/.test(p) && /(хв|год|min|сек|сезон|season|ep|runtime|серія|серії|серій|епізод)/i.test(p)) return true;
-
-        // Відсікаємо технічну інформацію (якість, роки тощо)
         if (/^\d{3,4}p$/i.test(p)) return true;
         if (/^(4k|uhd|hdr|dv|3d|cam|ts|hdrip|webrip|web-dl)$/i.test(p)) return true;
         if (/^\d+$/.test(p)) return true;
         if (/^(19|20)\d{2}$/.test(p)) return true;
-
-        // Занадто короткі або довгі рядки
         if (p.length < 2 || p.length > 48) return true;
-
         return false;
     }
 
@@ -272,7 +285,6 @@
                 if (movie.credits && Array.isArray(movie.credits.cast)) list = movie.credits.cast;
                 else if (Array.isArray(movie.cast)) list = movie.cast;
                 else if (movie.persons && Array.isArray(movie.persons.cast)) list = movie.persons.cast;
-                // НЕ беремо crew / persons.crew
             } catch (e) {}
 
             return list.filter(function (p) {
@@ -402,7 +414,7 @@
         }
     };
 
-    /* ===================== DomMeta (жанри/рік/постер; акторів з DOM НЕ беремо) ===================== */
+    /* ===================== DomMeta ===================== */
     var DomMeta = {
         scrape: function () {
             var result = { genres: [], year: 0, actors: [], id: null, title: '', poster: '' };
@@ -463,7 +475,6 @@
             if (d.title && !movie.title && !movie.name) movie.title = d.title;
             if (d.year && !Media.yearOf(movie)) movie.release_date = String(d.year) + '-01-01';
             if (d.genres.length && !(movie.genres && movie.genres.length)) movie.genres = d.genres;
-            // акторів з DOM не підмішуємо — лише API cast
             if (d.poster && !movie.poster_path && !movie.img) movie.poster_path = d.poster;
             return movie;
         }
@@ -652,6 +663,65 @@
         }
     };
 
+    /* ===================== LevelSystem ===================== */
+    var LevelSystem = {
+        xp: function () {
+            var s = StatsDB.data.seconds_watched || 0;
+            var m = StatsDB.data.movies_watched || 0;
+            var e = StatsDB.data.episodes_watched || 0;
+            return Math.floor(s + m * CONFIG.xp_movie_bonus + e * CONFIG.xp_episode_bonus);
+        },
+
+        info: function () {
+            var xp = this.xp();
+            var cur = LEVELS[0];
+            var next = null;
+
+            for (var i = 0; i < LEVELS.length; i++) {
+                if (xp >= LEVELS[i].xp) cur = LEVELS[i];
+                else {
+                    next = LEVELS[i];
+                    break;
+                }
+            }
+
+            var progress = 1;
+            var toNext = 0;
+            if (next) {
+                var span = next.xp - cur.xp;
+                progress = span > 0 ? Math.min(1, (xp - cur.xp) / span) : 1;
+                toNext = Math.max(0, next.xp - xp);
+            }
+
+            return {
+                level: cur.level,
+                name: cur.name,
+                xp: xp,
+                progress: progress,
+                toNext: toNext,
+                nextName: next ? next.name : null,
+                max: !next
+            };
+        },
+
+        checkLevelUp: function () {
+            try {
+                var info = this.info();
+                var prev = StatsDB.data.last_level || 1;
+                if (info.level > prev) {
+                    StatsDB.data.last_level = info.level;
+                    StatsDB.save();
+                    if (Lampa.Noty) {
+                        Lampa.Noty.show(LANG.level_up + ': ' + info.level + ' — ' + info.name);
+                    }
+                } else if (!StatsDB.data.last_level) {
+                    StatsDB.data.last_level = info.level;
+                    StatsDB.save();
+                }
+            } catch (e) {}
+        }
+    };
+
     /* ===================== StatsDB ===================== */
     var StatsDB = {
         data: null,
@@ -668,6 +738,7 @@
             ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour'].forEach(function (k) {
                 if (!StatsDB.data[k] || typeof StatsDB.data[k] !== 'object') StatsDB.data[k] = {};
             });
+            if (!Number.isFinite(this.data.last_level)) this.data.last_level = 1;
             Object.keys(this.data.actors).forEach(function (k) {
                 if (!StatsDB.data.actors[k].works) StatsDB.data.actors[k].works = {};
             });
@@ -777,6 +848,7 @@
             }
             this.setLast(id, time);
             this.save();
+            LevelSystem.checkLevelUp();
             return Math.floor(safe);
         },
 
@@ -861,6 +933,7 @@
                 this.data.years[y].count += 1;
             }
             this.save();
+            LevelSystem.checkLevelUp();
             return true;
         },
 
@@ -1281,7 +1354,6 @@
             var time = Number(road.time);
             var duration = Number(road.duration);
             if (!Number.isFinite(time) || time < 0) return;
-            // великий delta — повернення з VLC
             this.apply(time, Number.isFinite(duration) ? duration : 0, 600);
         },
 
@@ -1356,6 +1428,7 @@
         function renderAll(root) {
             root.empty();
             root.append('<div class="stv-title">' + LANG.page_title + '</div>');
+            root.append(levelCard());
 
             if (!Settings.collecting()) root.append('<div class="stv-disabled">' + LANG.disabled_text + '</div>');
 
@@ -1369,6 +1442,29 @@
             root.append(actorsBlock());
             root.append(bottomRow());
             root.append(resetBtn(root));
+        }
+
+        function levelCard() {
+            var info = LevelSystem.info();
+            var c = $('<div class="stv-card selector stv-level-card"></div>');
+            c.append('<div class="stv-card-label">' + LANG.level_label + '</div>');
+            var body = $('<div class="stv-level-body"></div>');
+            body.append(
+                '<div class="stv-level-row">' +
+                '<span class="stv-level-num">' + info.level + '</span>' +
+                '<span class="stv-level-name">' + info.name + '</span>' +
+                '</div>'
+            );
+            body.append(
+                '<div class="stv-level-bar"><div class="stv-level-fill" style="width:' +
+                Math.round(info.progress * 100) + '%"></div></div>'
+            );
+            var sub = info.max
+                ? LANG.level_max
+                : (LANG.level_to + ' «' + info.nextName + '» — ' + StatsDB.formatTime(info.toNext));
+            body.append('<div class="stv-level-sub">' + sub + '</div>');
+            c.append(body);
+            return c;
         }
 
         function topCards() {
@@ -1533,7 +1629,7 @@
         }
     }
 
-    /* ===================== UI: fallback actor works ===================== */
+    /* ===================== UI: fallback actor ===================== */
     function ActorWorksComponent(object) {
         var scroll = new Lampa.Scroll({ mask: true, over: true });
         var html = $('<div class="stv-root"></div>');
@@ -1625,7 +1721,15 @@
 
     var CSS =
         '.stv-root{padding:22px 28px 40px;color:#fff;box-sizing:border-box;min-height:100%;}' +
-        '.stv-title{font-size:28px;font-weight:700;margin-bottom:22px;}' +
+        '.stv-title{font-size:28px;font-weight:700;margin-bottom:18px;}' +
+        '.stv-level-card{width:100%;margin-bottom:18px;}' +
+        '.stv-level-body{display:flex;flex-direction:column;gap:10px;width:100%;}' +
+        '.stv-level-row{display:flex;align-items:baseline;gap:12px;}' +
+        '.stv-level-num{font-size:36px;font-weight:800;line-height:1;}' +
+        '.stv-level-name{font-size:20px;font-weight:700;text-transform:uppercase;}' +
+        '.stv-level-bar{height:8px;border-radius:6px;background:rgba(255,255,255,0.1);overflow:hidden;}' +
+        '.stv-level-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,#60a5fa,#a855f7);}' +
+        '.stv-level-sub{font-size:12px;opacity:0.55;}' +
         '.stv-cards{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:28px;}' +
         '.stv-card{min-width:220px;flex:1;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,0.06);border:2px solid transparent;}' +
         '.stv-card:focus{border-color:rgba(59,130,246,0.8);background:rgba(255,255,255,0.1);}' +
@@ -1698,7 +1802,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v9.9 ready');
+            console.log('Lampa stats v10.0 ready');
         } catch (e) {
             console.error('stats init', e);
         }
