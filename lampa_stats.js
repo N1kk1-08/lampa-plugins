@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v101) return;
-    window.lampa_ukrainian_stats_v101 = true;
+    if (window.lampa_ukrainian_stats_v102) return;
+    window.lampa_ukrainian_stats_v102 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -38,7 +38,12 @@
         no_works: 'Поки немає записів',
         film: 'фільм',
         series_ep: 'серія',
-        level_up: 'Новий рівень'
+        level_up: 'Новий рівень',
+        recent_title: 'Останні перегляди',
+        recent_empty: 'Ще немає збережених переглядів',
+        calendar_title: 'Перегляди по днях',
+        calendar_empty: 'Поки немає даних по днях',
+        watched_of: 'з'
     };
 
     var CONFIG = {
@@ -48,12 +53,17 @@
         menu_action: 'lampa_ukrainian_stats',
         activity: 'lampa_ukrainian_stats_view',
         activity_actor: 'lampa_ukrainian_stats_actor',
+        activity_time: 'lampa_ukrainian_stats_time',
+        activity_records: 'lampa_ukrainian_stats_records',
         completion: 0.98,
         interval: 1000,
         tmdb_img: 'https://image.tmdb.org/t/p/w185',
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
         max_actors_show: 15,
         max_posters_show: 8,
+        max_history: 10,
+        history_store: 30,
+        calendar_days: 30,
         xp_movie_bonus: 3600,
         xp_episode_bonus: 900
     };
@@ -97,6 +107,8 @@
         by_month: {},
         by_weekday: {},
         by_hour: {},
+        by_day: {},
+        history: [],
         last_level: 1
     };
 
@@ -119,6 +131,14 @@
         var s = String(path);
         if (s.indexOf('http') === 0) return s;
         return CONFIG.tmdb_poster + s;
+    }
+
+    function dayKey(d) {
+        d = d || new Date();
+        var y = d.getFullYear();
+        var m = d.getMonth() + 1;
+        var day = d.getDate();
+        return y + '-' + (m < 10 ? '0' : '') + m + '-' + (day < 10 ? '0' : '') + day;
     }
 
     function openActorPage(a) {
@@ -733,9 +753,10 @@
                 return;
             }
             this.data = Object.assign(JSON.parse(JSON.stringify(DEFAULT_STATS)), saved);
-            ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour'].forEach(function (k) {
+            ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour', 'by_day'].forEach(function (k) {
                 if (!StatsDB.data[k] || typeof StatsDB.data[k] !== 'object') StatsDB.data[k] = {};
             });
+            if (!Array.isArray(this.data.history)) this.data.history = [];
             if (!Number.isFinite(this.data.last_level)) this.data.last_level = 1;
             Object.keys(this.data.actors).forEach(function (k) {
                 if (!StatsDB.data.actors[k].works) StatsDB.data.actors[k].works = {};
@@ -827,6 +848,70 @@
             row.count = Object.keys(row.works).length;
         },
 
+        pushHistory: function (id, meta, addSec, position, duration) {
+            if (!id || !addSec) return;
+            if (!Array.isArray(this.data.history)) this.data.history = [];
+
+            var list = this.data.history;
+            var found = -1;
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].id === id) { found = i; break; }
+            }
+
+            var item;
+            if (found >= 0) {
+                item = list.splice(found, 1)[0];
+            } else {
+                item = {
+                    id: id,
+                    title: '',
+                    poster: '',
+                    isEpisode: false,
+                    seconds: 0,
+                    duration: 0,
+                    position: 0,
+                    date: Date.now()
+                };
+            }
+
+            if (meta) {
+                if (meta.title) item.title = meta.title;
+                if (meta.poster) item.poster = meta.poster;
+                item.isEpisode = !!meta.isEpisode;
+            }
+            item.seconds = (item.seconds || 0) + addSec;
+            if (Number.isFinite(position) && position > 0) item.position = Math.max(item.position || 0, position);
+            if (Number.isFinite(duration) && duration > 0) item.duration = Math.max(item.duration || 0, duration);
+            item.date = Date.now();
+
+            list.unshift(item);
+            if (list.length > CONFIG.history_store) list.length = CONFIG.history_store;
+        },
+
+        recentHistory: function (limit) {
+            if (!Array.isArray(this.data.history)) return [];
+            return this.data.history.slice(0, limit || CONFIG.max_history);
+        },
+
+        dayList: function (limit) {
+            var days = Object.keys(this.data.by_day || {}).map(function (k) {
+                return { day: k, seconds: StatsDB.data.by_day[k] || 0 };
+            }).filter(function (d) { return d.seconds > 0; })
+              .sort(function (a, b) { return a.day < b.day ? 1 : -1; });
+
+            // заповнити останні N днів нулями, якщо немає
+            var out = [];
+            var map = {};
+            days.forEach(function (d) { map[d.day] = d.seconds; });
+            var now = new Date();
+            for (var i = 0; i < (limit || CONFIG.calendar_days); i++) {
+                var d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+                var key = dayKey(d);
+                out.push({ day: key, seconds: map[key] || 0, date: d });
+            }
+            return out.reverse();
+        },
+
         addProgress: function (id, time, duration, deltaSec, meta) {
             if (!id || !Number.isFinite(time) || time < 0) return 0;
             var prev = this.getLast(id);
@@ -843,6 +928,7 @@
             if (safe > 0) {
                 this.data.seconds_watched += Math.floor(safe);
                 this.enrich(Math.floor(safe), meta);
+                this.pushHistory(id, meta, Math.floor(safe), time, duration);
             }
             this.setLast(id, time);
             this.save();
@@ -856,6 +942,8 @@
             this.data.by_month[now.getMonth()] = (this.data.by_month[now.getMonth()] || 0) + sec;
             this.data.by_weekday[now.getDay()] = (this.data.by_weekday[now.getDay()] || 0) + sec;
             this.data.by_hour[now.getHours()] = (this.data.by_hour[now.getHours()] || 0) + sec;
+            var dk = dayKey(now);
+            this.data.by_day[dk] = (this.data.by_day[dk] || 0) + sec;
             if (!meta) return;
             this.enrichMetaOnly(sec, meta, true);
         },
@@ -1063,7 +1151,7 @@
         }
     };
 
-    /* ===================== Settings ===================== */
+    /* ===================== Settings / Current / Tracker — same as v10.1 ===================== */
     var Settings = {
         added: false,
         setup: function () {
@@ -1131,7 +1219,6 @@
         }
     };
 
-    /* ===================== Tracker ===================== */
     var Tracker = {
         timer: null,
         initialized: false,
@@ -1366,7 +1453,7 @@
         }
     };
 
-    /* ===================== Scroll / Controller ===================== */
+    /* ===================== Scroll helpers ===================== */
     function makeScroll() {
         return new Lampa.Scroll({ mask: true, over: true, step: 150 });
     }
@@ -1376,7 +1463,6 @@
             var node = scroll.render();
             if (!node || node._stv_wheel) return;
             node._stv_wheel = true;
-
             var handler = function (e) {
                 var dy = e.deltaY || (e.wheelDelta ? -e.wheelDelta : 0) || 0;
                 if (!dy) return;
@@ -1386,9 +1472,7 @@
                 if (typeof scroll.wheel === 'function') scroll.wheel(step);
                 else if (typeof scroll.move === 'function') scroll.move(step);
             };
-
             node.addEventListener('wheel', handler, { passive: false });
-            // старі браузери / WebView
             node.addEventListener('mousewheel', handler, { passive: false });
         } catch (e) {}
     }
@@ -1498,7 +1582,18 @@
         function topCards() {
             var row = $('<div class="stv-cards"></div>');
             var g = StatsDB.topGenre();
-            row.append(card(LANG.total_time, StatsDB.formatTime(StatsDB.data.seconds_watched), '⏱'));
+
+            var timeCard = card(LANG.total_time, StatsDB.formatTime(StatsDB.data.seconds_watched), '⏱');
+            timeCard.on('hover:enter click', function () {
+                Lampa.Activity.push({
+                    url: 'stats_time',
+                    title: LANG.recent_title,
+                    component: CONFIG.activity_time,
+                    page: 1
+                });
+            });
+            row.append(timeCard);
+
             row.append(watchedCard());
             row.append(card(
                 LANG.fav_genre,
@@ -1581,6 +1676,14 @@
             if (bw) recHtml += '<div class="stv-rec-line">' + bw + (bh ? ', ' + bh : '') + '</div>';
             if (!recHtml) recHtml = '<div class="stv-muted">—</div>';
             rec.append(recHtml);
+            rec.on('hover:enter click', function () {
+                Lampa.Activity.push({
+                    url: 'stats_records',
+                    title: LANG.calendar_title,
+                    component: CONFIG.activity_records,
+                    page: 1
+                });
+            });
             row.append(rec);
 
             var years = $('<div class="stv-panel selector"></div>');
@@ -1658,7 +1761,165 @@
         }
     }
 
-    /* ===================== UI: fallback actor ===================== */
+    /* ===================== UI: recent time detail ===================== */
+    function TimeDetailComponent() {
+        var scroll = makeScroll();
+        var html = $('<div class="stv-root"></div>');
+
+        this.create = function () {
+            render();
+            scroll.clear();
+            scroll.append(html);
+            bindFocusScroll(html, scroll);
+            bindWheel(scroll);
+            try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
+        };
+        this.start = function () {
+            bindController(scroll);
+            bindWheel(scroll);
+        };
+        this.pause = function () {};
+        this.render = function () { return scroll.render(); };
+        this.destroy = function () {
+            try { scroll.destroy(); } catch (e) {}
+            html.remove();
+        };
+
+        function render() {
+            html.empty();
+            html.append('<div class="stv-title">' + LANG.recent_title + '</div>');
+            html.append('<div class="stv-section-title">' + StatsDB.formatTime(StatsDB.data.seconds_watched) + '</div>');
+
+            var list = StatsDB.recentHistory(CONFIG.max_history);
+            if (!list.length) {
+                // fallback: completed
+                list = StatsDB.recentCompleted(CONFIG.max_history).map(function (c) {
+                    return {
+                        id: c.id,
+                        title: c.title,
+                        poster: c.poster,
+                        isEpisode: c.isEpisode,
+                        seconds: 0,
+                        duration: 0,
+                        position: 0,
+                        date: c.date
+                    };
+                });
+            }
+
+            if (!list.length) {
+                html.append('<div class="stv-empty selector">' + LANG.recent_empty + '</div>');
+                return;
+            }
+
+            var wrap = $('<div class="stv-hist"></div>');
+            list.forEach(function (item) {
+                var row = $('<div class="stv-hist-item selector"></div>');
+                var poster = $('<div class="stv-hist-poster"></div>');
+                var url = posterUrl(item.poster);
+                if (url) poster.css('background-image', 'url(' + url + ')');
+                else poster.addClass('stv-poster-empty').text(item.isEpisode ? 'S' : 'F');
+
+                var info = $('<div class="stv-hist-info"></div>');
+                info.append('<div class="stv-hist-title">' + (item.title || item.id || '') + '</div>');
+
+                var pos = item.position || item.seconds || 0;
+                var dur = item.duration || 0;
+                var pct = 0;
+                if (dur > 0) pct = Math.min(100, Math.round((pos / dur) * 100));
+                else if (StatsDB.data.completed[item.id]) pct = 100;
+                else if (item.seconds > 0) pct = Math.min(99, Math.round(item.seconds / 60)); // грубо
+
+                var meta =
+                    StatsDB.formatTime(item.seconds || pos) +
+                    (dur > 0 ? (' ' + LANG.watched_of + ' ' + StatsDB.formatTime(dur)) : '') +
+                    (pct ? (' · ' + pct + '%') : '');
+                info.append('<div class="stv-hist-meta">' + meta + '</div>');
+
+                var bar = $(
+                    '<div class="stv-hist-bar"><div class="stv-hist-fill" style="width:' + pct + '%"></div></div>'
+                );
+                info.append(bar);
+
+                row.append(poster);
+                row.append(info);
+                wrap.append(row);
+            });
+            html.append(wrap);
+        }
+    }
+
+    /* ===================== UI: records calendar ===================== */
+    function RecordsDetailComponent() {
+        var scroll = makeScroll();
+        var html = $('<div class="stv-root"></div>');
+
+        this.create = function () {
+            render();
+            scroll.clear();
+            scroll.append(html);
+            bindFocusScroll(html, scroll);
+            bindWheel(scroll);
+            try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
+        };
+        this.start = function () {
+            bindController(scroll);
+            bindWheel(scroll);
+        };
+        this.pause = function () {};
+        this.render = function () { return scroll.render(); };
+        this.destroy = function () {
+            try { scroll.destroy(); } catch (e) {}
+            html.remove();
+        };
+
+        function render() {
+            html.empty();
+            html.append('<div class="stv-title">' + LANG.calendar_title + '</div>');
+
+            var days = StatsDB.dayList(CONFIG.calendar_days);
+            var hasAny = days.some(function (d) { return d.seconds > 0; });
+            if (!hasAny) {
+                html.append('<div class="stv-empty selector">' + LANG.calendar_empty + '</div>');
+                return;
+            }
+
+            var max = 1;
+            days.forEach(function (d) { if (d.seconds > max) max = d.seconds; });
+
+            var chart = $('<div class="stv-cal selector"></div>');
+            days.forEach(function (d) {
+                var h = d.seconds > 0 ? Math.max(6, Math.round((d.seconds / max) * 100)) : 2;
+                var col = $('<div class="stv-cal-col"></div>');
+                var bar = $('<div class="stv-cal-bar" style="height:' + h + '%"></div>');
+                if (d.seconds <= 0) bar.addClass('stv-cal-bar-empty');
+                col.append(bar);
+
+                var label = d.day.slice(5); // MM-DD
+                col.append('<div class="stv-cal-label">' + label + '</div>');
+                col.append('<div class="stv-cal-val">' + (d.seconds > 0 ? Math.round(d.seconds / 60) + "'" : '') + '</div>');
+                chart.append(col);
+            });
+            html.append(chart);
+
+            // список днів з хвилинами
+            var list = $('<div class="stv-cal-list"></div>');
+            days.slice().reverse().forEach(function (d) {
+                if (d.seconds <= 0) return;
+                var row = $('<div class="stv-cal-row selector"></div>');
+                var dt = d.date || new Date(d.day);
+                var title =
+                    (WEEKDAYS[dt.getDay()] || '') + ', ' +
+                    dt.getDate() + ' ' + (MONTHS[dt.getMonth()] || '');
+                row.append('<div class="stv-cal-row-day">' + title + '</div>');
+                row.append('<div class="stv-cal-row-time">' + StatsDB.formatTime(d.seconds) + '</div>');
+                list.append(row);
+            });
+            html.append(list);
+        }
+    }
+
+    /* ===================== Actor works (fallback) ===================== */
     function ActorWorksComponent(object) {
         var scroll = makeScroll();
         var html = $('<div class="stv-root"></div>');
@@ -1755,20 +2016,13 @@
     var CSS =
         '.stv-root{padding:22px 28px 48px;color:#fff;box-sizing:border-box;min-height:100%;}' +
         '.stv-title{font-size:28px;font-weight:700;margin-bottom:18px;}' +
-        /* lift + highlight for ALL focusable blocks */
-        '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-empty{' +
-        'transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;' +
-        '}' +
+        '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-empty,.stv-hist-item,.stv-cal-row{' +
+        'transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;}' +
         '.stv-card:focus,.stv-actor:focus,.stv-panel:focus,.stv-reset:focus,.stv-work:focus,.stv-empty:focus,' +
-        '.stv-card.focus,.stv-actor.focus,.stv-panel.focus,.stv-reset.focus,.stv-work.focus,' +
-        '.stv-card.hover,.stv-actor.hover,.stv-panel.hover,.stv-reset.hover{' +
-        'transform:translateY(-6px);' +
-        'box-shadow:0 10px 28px rgba(0,0,0,.45);' +
-        'border-color:rgba(96,165,250,.9)!important;' +
-        'background:rgba(255,255,255,.12)!important;' +
-        'outline:none;' +
-        'z-index:2;' +
-        '}' +
+        '.stv-hist-item:focus,.stv-cal-row:focus,.stv-cal:focus,' +
+        '.stv-card.focus,.stv-actor.focus,.stv-panel.focus,.stv-reset.focus{' +
+        'transform:translateY(-6px);box-shadow:0 10px 28px rgba(0,0,0,.45);' +
+        'border-color:rgba(96,165,250,.9)!important;background:rgba(255,255,255,.12)!important;outline:none;z-index:2;}' +
         '.stv-level-card{width:100%;margin-bottom:18px;}' +
         '.stv-level-body{display:flex;flex-direction:column;gap:10px;width:100%;}' +
         '.stv-level-row{display:flex;align-items:baseline;gap:12px;}' +
@@ -1778,7 +2032,7 @@
         '.stv-level-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,#60a5fa,#a855f7);}' +
         '.stv-level-sub{font-size:12px;opacity:0.55;}' +
         '.stv-cards{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:28px;}' +
-        '.stv-card{min-width:220px;flex:1;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,0.06);border:2px solid transparent;}' +
+        '.stv-card{min-width:220px;flex:1;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,0.06);border:2px solid transparent;cursor:pointer;}' +
         '.stv-card-label{font-size:11px;opacity:0.5;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px;}' +
         '.stv-card-body{display:flex;align-items:center;gap:12px;}' +
         '.stv-card-icon{font-size:22px;opacity:0.85;}' +
@@ -1796,8 +2050,8 @@
         '.stv-section{margin-bottom:26px;}' +
         '.stv-section-title{font-size:13px;opacity:0.55;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;}' +
         '.stv-actors-scroll{width:100%;overflow:hidden;}' +
-        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding:8px 4px 16px;-webkit-overflow-scrolling:touch;}' +
-        '.stv-actor{width:110px;min-width:110px;flex-shrink:0;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;background:transparent;}' +
+        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding:8px 4px 16px;}' +
+        '.stv-actor{width:110px;min-width:110px;flex-shrink:0;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;}' +
         '.stv-actor-photo{width:68px;height:68px;border-radius:50%;margin:0 auto 8px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.08);}' +
         '.stv-actor-ph{display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;}' +
         '.stv-actor-name{font-size:12px;font-weight:600;line-height:1.2;margin-bottom:4px;}' +
@@ -1808,7 +2062,7 @@
         '.stv-work-title{font-size:16px;font-weight:600;margin-bottom:4px;}' +
         '.stv-work-meta{font-size:12px;opacity:0.55;}' +
         '.stv-bottom{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:24px;}' +
-        '.stv-panel{flex:1;min-width:200px;padding:16px;border-radius:14px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
+        '.stv-panel{flex:1;min-width:200px;padding:16px;border-radius:14px;background:rgba(255,255,255,0.05);border:2px solid transparent;cursor:pointer;}' +
         '.stv-rec-line{font-size:15px;margin-bottom:6px;}' +
         '.stv-bars{display:flex;align-items:flex-end;gap:8px;height:120px;padding-top:10px;}' +
         '.stv-bar-col{flex:1;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end;}' +
@@ -1823,7 +2077,26 @@
         '.stv-empty{padding:36px;border-radius:12px;background:rgba(255,255,255,0.04);text-align:center;opacity:0.7;margin-bottom:16px;border:2px solid transparent;}' +
         '.stv-disabled{padding:12px 16px;border-radius:8px;background:rgba(255,80,80,0.12);color:#fca5a5;margin-bottom:16px;}' +
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:24px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}' +
-        /* scroll container — щоб колесо миші працювало на всій висоті */
+        /* history */
+        '.stv-hist{display:flex;flex-direction:column;gap:12px;}' +
+        '.stv-hist-item{display:flex;gap:14px;padding:12px;border-radius:12px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
+        '.stv-hist-poster{width:52px;height:78px;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.1);flex-shrink:0;}' +
+        '.stv-hist-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;justify-content:center;}' +
+        '.stv-hist-title{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+        '.stv-hist-meta{font-size:12px;opacity:0.55;}' +
+        '.stv-hist-bar{height:6px;border-radius:4px;background:rgba(255,255,255,0.1);overflow:hidden;}' +
+        '.stv-hist-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,#34d399,#3b82f6);}' +
+        /* calendar */
+        '.stv-cal{display:flex;align-items:flex-end;gap:4px;height:160px;padding:12px 8px 8px;margin-bottom:20px;border-radius:14px;background:rgba(255,255,255,0.04);border:2px solid transparent;overflow-x:auto;}' +
+        '.stv-cal-col{flex:1;min-width:18px;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;}' +
+        '.stv-cal-bar{width:70%;max-width:16px;background:linear-gradient(180deg,#a78bfa,#3b82f6);border-radius:4px 4px 2px 2px;min-height:2px;}' +
+        '.stv-cal-bar-empty{background:rgba(255,255,255,0.08);}' +
+        '.stv-cal-label{font-size:8px;opacity:0.45;margin-top:4px;transform:rotate(-45deg);white-space:nowrap;}' +
+        '.stv-cal-val{font-size:9px;opacity:0.6;margin-top:2px;}' +
+        '.stv-cal-list{display:flex;flex-direction:column;gap:8px;}' +
+        '.stv-cal-row{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-radius:10px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
+        '.stv-cal-row-day{font-size:14px;}' +
+        '.stv-cal-row-time{font-size:14px;font-weight:600;opacity:0.85;}' +
         '.scroll{height:100%;}' +
         '.scroll__content{min-height:100%;}';
 
@@ -1845,10 +2118,12 @@
             if (Lampa.Component && Lampa.Component.add) {
                 Lampa.Component.add(CONFIG.activity, StatsComponent);
                 Lampa.Component.add(CONFIG.activity_actor, ActorWorksComponent);
+                Lampa.Component.add(CONFIG.activity_time, TimeDetailComponent);
+                Lampa.Component.add(CONFIG.activity_records, RecordsDetailComponent);
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v10.1 ready');
+            console.log('Lampa stats v10.2 ready');
         } catch (e) {
             console.error('stats init', e);
         }
