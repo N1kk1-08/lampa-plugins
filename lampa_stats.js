@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v054) return;
-    window.lampa_ukrainian_stats_v054 = true;
+    if (window.lampa_ukrainian_stats_v055) return;
+    window.lampa_ukrainian_stats_v055 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -11,7 +11,7 @@
         watched: 'ПЕРЕГЛЯНУТО',
         fav_genre: 'УЛЮБЛЕНИЙ ЖАНР',
         fav_actors: 'ВАШІ УЛЮБЛЕНІ АКТОРИ',
-        records: 'ЗА МІСЯЦЯМИ',           // змінив
+        records: 'ЗА МІСЯЦЯМИ',
         by_years: 'ВПОДОБАННЯ ЗА РОКАМИ ВИПУСКУ',
         genres_dist: 'РОЗПОДІЛ ЖАНРІВ',
         level_label: 'РІВЕНЬ',
@@ -84,7 +84,6 @@
 
     var WEEKDAYS = ['Неділя', 'Понеділок', 'Вівторок', 'Середа', 'Четвер', 'П’ятниця', 'Субота'];
     var MONTHS = ['Січ', 'Лют', 'Бер', 'Кві', 'Тра', 'Чер', 'Лип', 'Сер', 'Вер', 'Жов', 'Лис', 'Гру'];
-    // короткі назви, щоб на графіку вміщалися
 
     var DEFAULT_STATS = {
         seconds_watched: 0,
@@ -931,7 +930,6 @@
                 .map(function (k) { return { label: k, seconds: buckets[k] }; })
                 .sort(function (a, b) { return a.label.localeCompare(b.label); });
         },
-        // Новий метод для графіка місяців
         monthList: function () {
             var list = [];
             for (var i = 0; i < 12; i++) {
@@ -1442,7 +1440,6 @@
         function bottomRow() {
             var row = $('<div class="stv-bottom"></div>');
 
-            // === НОВИЙ БЛОК: графік за місяцями ===
             var months = $('<div class="stv-panel selector"></div>');
             months.append('<div class="stv-section-title">' + LANG.records + '</div>');
             months.append(monthBars());
@@ -1460,7 +1457,6 @@
             return row;
         }
 
-        // Графік місяців
         function monthBars() {
             var data = StatsDB.monthList();
             var box = $('<div class="stv-bars"></div>');
@@ -1470,13 +1466,15 @@
             }
             var max = 1;
             data.forEach(function (d) { if (d.seconds > max) max = d.seconds; });
+
             data.forEach(function (d) {
-                var h = Math.max(8, Math.round((d.seconds / max) * 100));
+                var h = Math.max(10, Math.round((d.seconds / max) * 100));
+                var timeText = StatsDB.formatHoursOrMin(d.seconds);
+
                 var col = $('<div class="stv-bar-col"></div>');
+                col.append('<div class="stv-bar-time">' + timeText + '</div>');
                 col.append('<div class="stv-bar" style="height:' + h + '%"></div>');
                 col.append('<div class="stv-bar-label">' + d.label + '</div>');
-                // маленька підказка з часом
-                col.attr('title', StatsDB.formatHoursOrMin(d.seconds));
                 box.append(col);
             });
             return box;
@@ -1672,10 +1670,11 @@
         '.stv-work-meta{font-size:12px;opacity:0.55;}' +
         '.stv-bottom{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:24px;}' +
         '.stv-panel{flex:1;min-width:200px;padding:16px;border-radius:14px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
-        '.stv-bars{display:flex;align-items:flex-end;gap:6px;height:120px;padding-top:10px;}' +
-        '.stv-bar-col{flex:1;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end;min-width:0;}' +
-        '.stv-bar{width:70%;max-width:22px;background:linear-gradient(180deg,#60a5fa,#2563eb);border-radius:5px 5px 2px 2px;min-height:8px;}' +
-        '.stv-bar-label{font-size:10px;opacity:0.55;margin-top:6px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}' +
+        '.stv-bars{display:flex;align-items:flex-end;gap:8px;height:140px;padding-top:8px;}' +
+        '.stv-bar-col{flex:1;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end;min-width:0;position:relative;}' +
+        '.stv-bar{width:70%;max-width:20px;background:linear-gradient(180deg,#60a5fa,#2563eb);border-radius:5px 5px 2px 2px;min-height:10px;}' +
+        '.stv-bar-label{font-size:10px;opacity:0.55;margin-top:6px;text-align:center;white-space:nowrap;}' +
+        '.stv-bar-time{writing-mode:vertical-rl;transform:rotate(180deg);font-size:10px;font-weight:600;opacity:0.75;margin-bottom:6px;letter-spacing:0.3px;white-space:nowrap;line-height:1;}' +
         '.stv-pie-wrap{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}' +
         '.stv-pie{width:90px;height:90px;border-radius:50%;flex-shrink:0;}' +
         '.stv-legend{font-size:12px;opacity:0.85;}' +
@@ -1687,14 +1686,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v054-style');
+        var old = document.getElementById('lampa-stats-v055-style');
         if (old) old.remove();
-        ['lampa-stats-v053-style', 'lampa-stats-v052-style', 'lampa-stats-v051-style', 'lampa-stats-v050-style'].forEach(function (id) {
+        ['lampa-stats-v054-style', 'lampa-stats-v053-style', 'lampa-stats-v052-style', 'lampa-stats-v051-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v054-style';
+        s.id = 'lampa-stats-v055-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1711,7 +1710,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.54 ready (month chart)');
+            console.log('Lampa stats v0.55 ready (vertical month times)');
         } catch (e) {
             console.error('stats init', e);
         }
