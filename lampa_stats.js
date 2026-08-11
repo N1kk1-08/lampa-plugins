@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v98) return;
-    window.lampa_ukrainian_stats_v98 = true;
+    if (window.lampa_ukrainian_stats_v99) return;
+    window.lampa_ukrainian_stats_v99 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -80,28 +80,28 @@
         by_hour: {}
     };
 
-   function isGarbageGenre(name) {
-    if (!name || typeof name !== 'string') return true;
-    var p = name.trim();
-    if (!p) return true;
-    
-    // Відсікаємо таймкоди типу 01:25
-    if (/^\d{1,2}:\d{2}$/.test(p)) return true;
-    
-    // Відсікаємо тривалість, сезони та серії (тепер і українською)
-    if (/\d/.test(p) && /(хв|год|min|сек|сезон|season|ep|runtime|серія|серії|серій|епізод)/i.test(p)) return true;
-    
-    // Відсікаємо технічну інформацію (якість, роки тощо)
-    if (/^\d{3,4}p$/i.test(p)) return true;
-    if (/^(4k|uhd|hdr|dv|3d|cam|ts|hdrip|webrip|web-dl)$/i.test(p)) return true;
-    if (/^\d+$/.test(p)) return true;
-    if (/^(19|20)\d{2}$/.test(p)) return true;
-    
-    // Занадто короткі або довгі рядки
-    if (p.length < 2 || p.length > 48) return true;
-    
-    return false;
-}
+    function isGarbageGenre(name) {
+        if (!name || typeof name !== 'string') return true;
+        var p = name.trim();
+        if (!p) return true;
+
+        // Відсікаємо таймкоди типу 01:25
+        if (/^\d{1,2}:\d{2}$/.test(p)) return true;
+
+        // Відсікаємо тривалість, сезони та серії (тепер і українською)
+        if (/\d/.test(p) && /(хв|год|min|сек|сезон|season|ep|runtime|серія|серії|серій|епізод)/i.test(p)) return true;
+
+        // Відсікаємо технічну інформацію (якість, роки тощо)
+        if (/^\d{3,4}p$/i.test(p)) return true;
+        if (/^(4k|uhd|hdr|dv|3d|cam|ts|hdrip|webrip|web-dl)$/i.test(p)) return true;
+        if (/^\d+$/.test(p)) return true;
+        if (/^(19|20)\d{2}$/.test(p)) return true;
+
+        // Занадто короткі або довгі рядки
+        if (p.length < 2 || p.length > 48) return true;
+
+        return false;
+    }
 
     function posterUrl(path) {
         if (!path) return '';
@@ -181,10 +181,10 @@
 
             if (newCast && newCast.cast) {
                 next.credits = { cast: newCast.cast };
-                if (m.persons) next.persons = m.persons;
+                if (m.persons && m.persons.cast) next.persons = { cast: m.persons.cast };
             } else if (prevCast && prevCast.cast) {
                 next.credits = { cast: prevCast.cast };
-                if (prev.persons) next.persons = prev.persons;
+                if (prev.persons && prev.persons.cast) next.persons = { cast: prev.persons.cast };
             }
 
             if (!next.release_date && prev.release_date) next.release_date = prev.release_date;
@@ -272,9 +272,15 @@
                 if (movie.credits && Array.isArray(movie.credits.cast)) list = movie.credits.cast;
                 else if (Array.isArray(movie.cast)) list = movie.cast;
                 else if (movie.persons && Array.isArray(movie.persons.cast)) list = movie.persons.cast;
-                else if (Array.isArray(movie.persons)) list = movie.persons;
+                // НЕ беремо crew / persons.crew
             } catch (e) {}
-            return list.filter(function (p) { return p && (p.id || p.name); }).slice(0, 15).map(function (p) {
+
+            return list.filter(function (p) {
+                if (!p || !(p.id || p.name)) return false;
+                if (p.job && !p.character) return false;
+                if (p.department && String(p.department).toLowerCase() !== 'acting') return false;
+                return true;
+            }).slice(0, 20).map(function (p) {
                 return {
                     id: p.id || p.name,
                     name: p.name || '',
@@ -396,7 +402,7 @@
         }
     };
 
-    /* ===================== DomMeta ===================== */
+    /* ===================== DomMeta (жанри/рік/постер; акторів з DOM НЕ беремо) ===================== */
     var DomMeta = {
         scrape: function () {
             var result = { genres: [], year: 0, actors: [], id: null, title: '', poster: '' };
@@ -435,25 +441,6 @@
                     });
                 }
 
-                var actorNodes = document.querySelectorAll(
-                    '.full-person__name, .person__name, .full-persons .card__title, .persons .card__title, .full-person .card__title'
-                );
-                actorNodes.forEach(function (el, i) {
-                    if (i > 14) return;
-                    var name = (el.textContent || '').trim();
-                    if (!name) return;
-                    var img = '';
-                    var personId = null;
-                    var root = el.closest('.full-person, .person, .card, .full-persons__item');
-                    if (root) {
-                        var im = root.querySelector('img');
-                        if (im) img = im.getAttribute('src') || im.getAttribute('data-src') || '';
-                        var dataId = root.getAttribute('data-id') || root.getAttribute('data-person') || '';
-                        if (dataId && /^\d+$/.test(dataId)) personId = dataId;
-                    }
-                    result.actors.push({ id: personId || name, name: name, profile_path: img });
-                });
-
                 try {
                     var act = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
                     if (act) {
@@ -476,9 +463,7 @@
             if (d.title && !movie.title && !movie.name) movie.title = d.title;
             if (d.year && !Media.yearOf(movie)) movie.release_date = String(d.year) + '-01-01';
             if (d.genres.length && !(movie.genres && movie.genres.length)) movie.genres = d.genres;
-            if (d.actors.length && !(movie.credits && movie.credits.cast && movie.credits.cast.length)) {
-                movie.credits = { cast: d.actors };
-            }
+            // акторів з DOM не підмішуємо — лише API cast
             if (d.poster && !movie.poster_path && !movie.img) movie.poster_path = d.poster;
             return movie;
         }
@@ -570,7 +555,7 @@
                 }
 
                 var merged = Object.assign({}, movie, data);
-                if (data.credits) merged.credits = data.credits;
+                if (data.credits && data.credits.cast) merged.credits = { cast: data.credits.cast };
                 if (data.genres) merged.genres = data.genres;
                 if (data.genre_ids) merged.genre_ids = data.genre_ids;
                 if (data.release_date) merged.release_date = data.release_date;
@@ -652,7 +637,7 @@
                                 if (data.persons && data.persons.cast) {
                                     m = Object.assign({}, m, {
                                         credits: { cast: data.persons.cast },
-                                        persons: data.persons
+                                        persons: { cast: data.persons.cast }
                                     });
                                 }
                                 finish(m);
@@ -744,7 +729,6 @@
             if (!row.works) row.works = {};
             if (a.name) row.name = a.name;
             if (a.profile_path) row.profile_path = a.profile_path;
-            // якщо був текстовий id, а прийшов числовий — оновити
             if (a.id && /^\d+$/.test(String(a.id))) row.id = a.id;
             return row;
         },
@@ -770,10 +754,7 @@
             w.isEpisode = !!meta.isEpisode;
             if (sec) w.seconds += sec;
             w.date = Date.now();
-
-            if (completed && !w.completed) {
-                w.completed = true;
-            }
+            if (completed) w.completed = true;
             row.count = Object.keys(row.works).length;
         },
 
@@ -906,7 +887,11 @@
                     a._key = k;
                     return a;
                 })
-                .sort(function (a, b) { return (b.seconds || 0) - (a.seconds || 0); })
+                .sort(function (a, b) {
+                    var ds = (b.seconds || 0) - (a.seconds || 0);
+                    if (ds !== 0) return ds;
+                    return (b.count || 0) - (a.count || 0);
+                })
                 .slice(0, limit || CONFIG.max_actors_show);
         },
 
@@ -1126,7 +1111,10 @@
                     Lampa.Player.listener.follow('ready', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('external', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('destroy', function () {
-                        setTimeout(function () { self.currentMovie = null; }, 5000);
+                        [300, 1000, 2500].forEach(function (ms) {
+                            setTimeout(function () { self.flushExternal(self.currentMovie); }, ms);
+                        });
+                        setTimeout(function () { self.currentMovie = null; }, 6000);
                     });
                 }
             } catch (e) {}
@@ -1141,6 +1129,13 @@
                 if (Lampa.Timeline && Lampa.Timeline.listener) {
                     Lampa.Timeline.listener.follow('update', function (e) { self.onTimeline(e); });
                 }
+            } catch (e) {}
+
+            try {
+                Lampa.Listener.follow('activity', function (e) {
+                    if (!e || (e.type !== 'start' && e.type !== 'archive')) return;
+                    setTimeout(function () { self.flushExternal(self.currentMovie); }, 600);
+                });
             } catch (e) {}
 
             try {
@@ -1165,13 +1160,12 @@
 
                     var cast = null;
                     if (e.data.persons && e.data.persons.cast) cast = e.data.persons.cast;
-                    else if (e.data.persons && Array.isArray(e.data.persons)) cast = e.data.persons;
                     else if (e.data.credits && e.data.credits.cast) cast = e.data.credits.cast;
 
                     if (cast && cast.length) {
                         movie = Object.assign({}, movie, {
                             credits: { cast: cast },
-                            persons: e.data.persons || { cast: cast }
+                            persons: { cast: cast }
                         });
                     }
 
@@ -1203,6 +1197,36 @@
                     Media.remember(rich);
                 }
             });
+        },
+
+        flushExternal: function (movie) {
+            if (!Settings.collecting()) return;
+            movie = movie || this.currentMovie || Media.lastCard;
+            if (!movie) return;
+
+            var time = 0, duration = 0;
+
+            try {
+                var v = Current.getVideoState();
+                if (v) {
+                    time = v.time;
+                    duration = v.duration;
+                }
+            } catch (e) {}
+
+            try {
+                if ((!time || time <= 0) && Lampa.Storage) {
+                    var last = Lampa.Storage.get('player_road_last') || Lampa.Storage.get('timeline_last');
+                    if (last && Number.isFinite(Number(last.time))) {
+                        time = Number(last.time);
+                        duration = Number(last.duration) || 0;
+                    }
+                }
+            } catch (e) {}
+
+            if (Number.isFinite(time) && time > 0) {
+                this.apply(time, duration || 0, Math.max(time, 600));
+            }
         },
 
         apply: function (time, duration, wallDelta) {
@@ -1257,7 +1281,8 @@
             var time = Number(road.time);
             var duration = Number(road.duration);
             if (!Number.isFinite(time) || time < 0) return;
-            this.apply(time, Number.isFinite(duration) ? duration : 0, 120);
+            // великий delta — повернення з VLC
+            this.apply(time, Number.isFinite(duration) ? duration : 0, 600);
         },
 
         tick: function () {
@@ -1271,39 +1296,62 @@
         }
     };
 
+    /* ===================== UI helpers ===================== */
+    function bindController(scroll) {
+        try {
+            Lampa.Controller.add('content', {
+                toggle: function () {
+                    Lampa.Controller.collectionSet(scroll.render());
+                    Lampa.Controller.collectionFocus(false, scroll.render());
+                },
+                left: function () {
+                    if (Navigator.canmove('left')) Navigator.move('left');
+                    else Lampa.Controller.toggle('menu');
+                },
+                right: function () {
+                    if (Navigator.canmove('right')) Navigator.move('right');
+                },
+                up: function () {
+                    if (Navigator.canmove('up')) Navigator.move('up');
+                    else if (typeof scroll.wheel === 'function') scroll.wheel(-200);
+                    else if (typeof scroll.move === 'function') scroll.move(-200);
+                },
+                down: function () {
+                    if (Navigator.canmove('down')) Navigator.move('down');
+                    else if (typeof scroll.wheel === 'function') scroll.wheel(200);
+                    else if (typeof scroll.move === 'function') scroll.move(200);
+                },
+                back: function () { Lampa.Activity.backward(); }
+            });
+            Lampa.Controller.toggle('content');
+        } catch (e) {}
+    }
+
+    function bindFocusScroll(html, scroll) {
+        html.find('.selector').on('hover:focus focus', function () {
+            try { scroll.update($(this), true); } catch (e) {}
+        });
+    }
+
     /* ===================== UI: main ===================== */
     function StatsComponent() {
+        var scroll = new Lampa.Scroll({ mask: true, over: true });
         var html = $('<div class="stv-root"></div>');
 
         this.create = function () {
             renderAll(html);
+            scroll.clear();
+            scroll.append(html);
+            bindFocusScroll(html, scroll);
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
-        this.start = function () {
-            try {
-                Lampa.Controller.add('content', {
-                    toggle: function () {
-                        Lampa.Controller.collectionSet(html);
-                        Lampa.Controller.collectionFocus(false, html);
-                    },
-                    left: function () {
-                        if (Navigator.canmove('left')) Navigator.move('left');
-                        else Lampa.Controller.toggle('menu');
-                    },
-                    right: function () { Navigator.move('right'); },
-                    up: function () {
-                        if (Navigator.canmove('up')) Navigator.move('up');
-                        else Lampa.Controller.toggle('head');
-                    },
-                    down: function () { Navigator.move('down'); },
-                    back: function () { Lampa.Activity.backward(); }
-                });
-                Lampa.Controller.toggle('content');
-            } catch (e) {}
-        };
+        this.start = function () { bindController(scroll); };
         this.pause = function () {};
-        this.render = function () { return html; };
-        this.destroy = function () { html.remove(); };
+        this.render = function () { return scroll.render(); };
+        this.destroy = function () {
+            try { scroll.destroy(); } catch (e) {}
+            html.remove();
+        };
 
         function renderAll(root) {
             root.empty();
@@ -1339,7 +1387,6 @@
         function watchedCard() {
             var c = $('<div class="stv-card selector stv-card-watched"></div>');
             c.append('<div class="stv-card-label">' + LANG.watched + '</div>');
-
             var body = $('<div class="stv-card-body stv-watched-body"></div>');
             body.append(
                 '<div class="stv-watched-counts">' +
@@ -1347,22 +1394,18 @@
                 '<span class="stv-sub"> ' + LANG.movies + ' / ' + (StatsDB.data.episodes_watched || 0) + ' ' + LANG.episodes + '</span>' +
                 '</div>'
             );
-
             var posters = $('<div class="stv-posters"></div>');
-            var list = StatsDB.recentCompleted(CONFIG.max_posters_show);
-            if (list.length) {
-                list.forEach(function (item) {
-                    var p = $('<div class="stv-poster" title="' + (item.title || '').replace(/"/g, '&quot;') + '"></div>');
-                    var url = posterUrl(item.poster);
-                    if (url) p.css('background-image', 'url(' + url + ')');
-                    else {
-                        p.addClass('stv-poster-empty');
-                        p.text(item.isEpisode ? 'S' : 'F');
-                    }
-                    if (item.isEpisode) p.append('<span class="stv-poster-badge">EP</span>');
-                    posters.append(p);
-                });
-            }
+            StatsDB.recentCompleted(CONFIG.max_posters_show).forEach(function (item) {
+                var p = $('<div class="stv-poster" title="' + (item.title || '').replace(/"/g, '&quot;') + '"></div>');
+                var url = posterUrl(item.poster);
+                if (url) p.css('background-image', 'url(' + url + ')');
+                else {
+                    p.addClass('stv-poster-empty');
+                    p.text(item.isEpisode ? 'S' : 'F');
+                }
+                if (item.isEpisode) p.append('<span class="stv-poster-badge">EP</span>');
+                posters.append(p);
+            });
             body.append(posters);
             c.append(body);
             return c;
@@ -1378,10 +1421,8 @@
         function actorsBlock() {
             var wrap = $('<div class="stv-section"></div>');
             wrap.append('<div class="stv-section-title">' + LANG.fav_actors + '</div>');
-
             var scrollWrap = $('<div class="stv-actors-scroll"></div>');
             var row = $('<div class="stv-actors"></div>');
-
             var list = StatsDB.topActors(CONFIG.max_actors_show);
             if (!list.length) {
                 row.append('<div class="stv-muted">' + LANG.no_actors + '</div>');
@@ -1398,13 +1439,10 @@
                         '<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) +
                         ', ' + (a.count || 0) + ' ' + LANG.films_short + '</div>'
                     );
-                    item.on('hover:enter click', function () {
-                        openActorPage(a);
-                    });
+                    item.on('hover:enter click', function () { openActorPage(a); });
                     row.append(item);
                 });
             }
-
             scrollWrap.append(row);
             wrap.append(scrollWrap);
             return wrap;
@@ -1482,9 +1520,12 @@
                     StatsDB.reset();
                     Lampa.Noty.show(LANG.reset_done);
                     renderAll(root);
+                    scroll.clear();
+                    scroll.append(root);
+                    bindFocusScroll(root, scroll);
                     try {
-                        Lampa.Controller.collectionSet(root);
-                        Lampa.Controller.collectionFocus(false, root);
+                        Lampa.Controller.collectionSet(scroll.render());
+                        Lampa.Controller.collectionFocus(false, scroll.render());
                     } catch (e) {}
                 }
             });
@@ -1494,38 +1535,24 @@
 
     /* ===================== UI: fallback actor works ===================== */
     function ActorWorksComponent(object) {
+        var scroll = new Lampa.Scroll({ mask: true, over: true });
         var html = $('<div class="stv-root"></div>');
         var key = (object && object.actor_key) || '';
 
         this.create = function () {
             render();
+            scroll.clear();
+            scroll.append(html);
+            bindFocusScroll(html, scroll);
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
-        this.start = function () {
-            try {
-                Lampa.Controller.add('content', {
-                    toggle: function () {
-                        Lampa.Controller.collectionSet(html);
-                        Lampa.Controller.collectionFocus(false, html);
-                    },
-                    left: function () {
-                        if (Navigator.canmove('left')) Navigator.move('left');
-                        else Lampa.Controller.toggle('menu');
-                    },
-                    right: function () { Navigator.move('right'); },
-                    up: function () {
-                        if (Navigator.canmove('up')) Navigator.move('up');
-                        else Lampa.Controller.toggle('head');
-                    },
-                    down: function () { Navigator.move('down'); },
-                    back: function () { Lampa.Activity.backward(); }
-                });
-                Lampa.Controller.toggle('content');
-            } catch (e) {}
-        };
+        this.start = function () { bindController(scroll); };
         this.pause = function () {};
-        this.render = function () { return html; };
-        this.destroy = function () { html.remove(); };
+        this.render = function () { return scroll.render(); };
+        this.destroy = function () {
+            try { scroll.destroy(); } catch (e) {}
+            html.remove();
+        };
 
         function render() {
             html.empty();
@@ -1547,7 +1574,6 @@
                 var url = posterUrl(w.poster);
                 if (url) poster.css('background-image', 'url(' + url + ')');
                 else poster.addClass('stv-poster-empty').text(w.isEpisode ? 'S' : 'F');
-
                 var info = $('<div class="stv-work-info"></div>');
                 info.append('<div class="stv-work-title">' + (w.title || '') + '</div>');
                 info.append(
@@ -1557,7 +1583,6 @@
                     (w.completed ? ' · ✓' : '') +
                     '</div>'
                 );
-
                 row.append(poster);
                 row.append(info);
                 list.append(row);
@@ -1599,7 +1624,7 @@
     };
 
     var CSS =
-        '.stv-root{padding:22px 28px 40px;color:#fff;box-sizing:border-box;}' +
+        '.stv-root{padding:22px 28px 40px;color:#fff;box-sizing:border-box;min-height:100%;}' +
         '.stv-title{font-size:28px;font-weight:700;margin-bottom:22px;}' +
         '.stv-cards{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:28px;}' +
         '.stv-card{min-width:220px;flex:1;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,0.06);border:2px solid transparent;}' +
@@ -1621,7 +1646,7 @@
         '.stv-section{margin-bottom:26px;}' +
         '.stv-section-title{font-size:13px;opacity:0.55;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;}' +
         '.stv-actors-scroll{width:100%;overflow:hidden;}' +
-        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding-bottom:8px;-webkit-overflow-scrolling:touch;}' +
+        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding:4px 0 12px;-webkit-overflow-scrolling:touch;}' +
         '.stv-actor{width:110px;min-width:110px;flex-shrink:0;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;}' +
         '.stv-actor:focus{border-color:rgba(59,130,246,0.7);background:rgba(255,255,255,0.06);}' +
         '.stv-actor-photo{width:68px;height:68px;border-radius:50%;margin:0 auto 8px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.08);}' +
@@ -1673,7 +1698,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v9.8 ready');
+            console.log('Lampa stats v9.9 ready');
         } catch (e) {
             console.error('stats init', e);
         }
