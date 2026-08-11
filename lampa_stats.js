@@ -1368,7 +1368,37 @@
 
     /* ===================== Scroll / Controller ===================== */
     function makeScroll() {
-        return new Lampa.Scroll({ mask: true, over: true, step: 150 });
+        var s = new Lampa.Scroll({ mask: true, over: true, step: 200 });
+        try {
+            var node = s.render();
+            if (node) {
+                // Примусово обмежуємо висоту, щоб з’явився скрол
+                node.style.height = '100%';
+                node.style.maxHeight = '100%';
+            }
+        } catch (e) {}
+        return s;
+    }
+
+    function forceScrollSize(scroll) {
+        try {
+            var node = scroll.render();
+            if (!node) return;
+
+            node.style.height = '100%';
+            node.style.maxHeight = '100%';
+
+            // Lampa API: відняти висоту шапки/хедера
+            if (typeof scroll.minus === 'function') {
+                scroll.minus();
+            } else if (typeof scroll.height === 'function') {
+                scroll.height();
+            }
+
+            // Додаткове оновлення
+            if (typeof scroll.resize === 'function') scroll.resize();
+            else if (typeof scroll.update === 'function') scroll.update();
+        } catch (e) {}
     }
 
     function bindWheel(scroll) {
@@ -1382,13 +1412,12 @@
                 if (!dy) return;
                 e.preventDefault();
                 e.stopPropagation();
-                var step = dy > 0 ? 120 : -120;
+                var step = dy > 0 ? 160 : -160;
                 if (typeof scroll.wheel === 'function') scroll.wheel(step);
                 else if (typeof scroll.move === 'function') scroll.move(step);
             };
 
             node.addEventListener('wheel', handler, { passive: false });
-            // старі браузери / WebView
             node.addEventListener('mousewheel', handler, { passive: false });
         } catch (e) {}
     }
@@ -1409,13 +1438,13 @@
                 },
                 up: function () {
                     if (Navigator.canmove('up')) Navigator.move('up');
-                    else if (typeof scroll.wheel === 'function') scroll.wheel(-200);
-                    else if (typeof scroll.move === 'function') scroll.move(-200);
+                    else if (typeof scroll.wheel === 'function') scroll.wheel(-250);
+                    else if (typeof scroll.move === 'function') scroll.move(-250);
                 },
                 down: function () {
                     if (Navigator.canmove('down')) Navigator.move('down');
-                    else if (typeof scroll.wheel === 'function') scroll.wheel(200);
-                    else if (typeof scroll.move === 'function') scroll.move(200);
+                    else if (typeof scroll.wheel === 'function') scroll.wheel(250);
+                    else if (typeof scroll.move === 'function') scroll.move(250);
                 },
                 back: function () { Lampa.Activity.backward(); }
             });
@@ -1438,11 +1467,18 @@
             renderAll(html);
             scroll.clear();
             scroll.append(html);
+            forceScrollSize(scroll);
             bindFocusScroll(html, scroll);
             bindWheel(scroll);
+
+            // Ще раз після невеликої затримки (на випадок анімацій Lampa)
+            setTimeout(function () { forceScrollSize(scroll); }, 100);
+            setTimeout(function () { forceScrollSize(scroll); }, 400);
+
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
         this.start = function () {
+            forceScrollSize(scroll);
             bindController(scroll);
             bindWheel(scroll);
         };
@@ -1646,6 +1682,7 @@
                     renderAll(root);
                     scroll.clear();
                     scroll.append(root);
+                    forceScrollSize(scroll);
                     bindFocusScroll(root, scroll);
                     bindWheel(scroll);
                     try {
@@ -1668,11 +1705,17 @@
             render();
             scroll.clear();
             scroll.append(html);
+            forceScrollSize(scroll);
             bindFocusScroll(html, scroll);
             bindWheel(scroll);
+
+            setTimeout(function () { forceScrollSize(scroll); }, 100);
+            setTimeout(function () { forceScrollSize(scroll); }, 400);
+
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
         this.start = function () {
+            forceScrollSize(scroll);
             bindController(scroll);
             bindWheel(scroll);
         };
@@ -1755,7 +1798,6 @@
     var CSS =
         '.stv-root{padding:22px 28px 48px;color:#fff;box-sizing:border-box;min-height:100%;}' +
         '.stv-title{font-size:28px;font-weight:700;margin-bottom:18px;}' +
-        /* lift + highlight for ALL focusable blocks */
         '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-empty{' +
         'transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;' +
         '}' +
@@ -1822,18 +1864,7 @@
         '.stv-muted{opacity:0.45;font-size:13px;}' +
         '.stv-empty{padding:36px;border-radius:12px;background:rgba(255,255,255,0.04);text-align:center;opacity:0.7;margin-bottom:16px;border:2px solid transparent;}' +
         '.stv-disabled{padding:12px 16px;border-radius:8px;background:rgba(255,80,80,0.12);color:#fca5a5;margin-bottom:16px;}' +
-        '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:24px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}' +
-        /* Тільки для сторінки статистики — не чіпаємо глобальні .scroll (це ламало балансери) */
-        '.stv-root .scroll,' +
-        '.activity--lampa_ukrainian_stats_view .scroll,' +
-        '.activity--lampa_ukrainian_stats_actor .scroll{' +
-        'height:100%;' +
-        '}' +
-        '.stv-root .scroll__content,' +
-        '.activity--lampa_ukrainian_stats_view .scroll__content,' +
-        '.activity--lampa_ukrainian_stats_actor .scroll__content{' +
-        'min-height:100%;' +
-        '}';
+        '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
         var old = document.getElementById('lampa-stats-v9-style');
@@ -1856,7 +1887,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v10.1 ready (scroll CSS scoped)');
+            console.log('Lampa stats v10.1 ready (scroll fixed)');
         } catch (e) {
             console.error('stats init', e);
         }
