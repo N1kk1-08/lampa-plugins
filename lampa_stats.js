@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v050) return;
-    window.lampa_ukrainian_stats_v050 = true;
+    if (window.lampa_ukrainian_stats_v051) return;
+    window.lampa_ukrainian_stats_v051 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1176,13 +1176,24 @@
                 }
             } catch (e) {}
 
+            // Важливо для зовнішнього VLC / MX / тощо
+            try {
+                if (Lampa.Player && typeof Lampa.Player.callback === 'function') {
+                    Lampa.Player.callback(function () {
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 400);
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 1500);
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 3500);
+                    });
+                }
+            } catch (e) {}
+
             try {
                 if (Lampa.Player && Lampa.Player.listener) {
                     Lampa.Player.listener.follow('start', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('ready', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('external', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('destroy', function () {
-                        [300, 1000, 2500].forEach(function (ms) {
+                        [200, 800, 1800, 3500].forEach(function (ms) {
                             setTimeout(function () { self.flushExternal(self.currentMovie); }, ms);
                         });
                         setTimeout(function () { self.currentMovie = null; }, 6000);
@@ -1204,8 +1215,11 @@
 
             try {
                 Lampa.Listener.follow('activity', function (e) {
-                    if (!e || (e.type !== 'start' && e.type !== 'archive')) return;
-                    setTimeout(function () { self.flushExternal(self.currentMovie); }, 600);
+                    if (!e) return;
+                    if (e.type === 'start' || e.type === 'archive' || e.type === 'resume') {
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 500);
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 1800);
+                    }
                 });
             } catch (e) {}
 
@@ -1285,12 +1299,34 @@
                 }
             } catch (e) {}
 
+            // Для зовнішнього VLC / MX / Vimu тощо
             try {
                 if ((!time || time <= 0) && Lampa.Storage) {
-                    var last = Lampa.Storage.get('player_road_last') || Lampa.Storage.get('timeline_last');
-                    if (last && Number.isFinite(Number(last.time))) {
-                        time = Number(last.time);
-                        duration = Number(last.duration) || 0;
+                    var keys = ['player_road_last', 'timeline_last', 'player_timecode', 'last_timecode'];
+                    for (var i = 0; i < keys.length; i++) {
+                        var last = Lampa.Storage.get(keys[i]);
+                        if (last && Number.isFinite(Number(last.time))) {
+                            time = Number(last.time);
+                            duration = Number(last.duration) || 0;
+                            break;
+                        }
+                    }
+                }
+            } catch (e) {}
+
+            // Спроба через Timeline API
+            try {
+                if ((!time || time <= 0) && Lampa.Timeline && typeof Lampa.Timeline.view === 'function' && movie) {
+                    var hash = null;
+                    try {
+                        if (Lampa.Utils && Lampa.Utils.hash) hash = Lampa.Utils.hash(Media.getId(movie));
+                    } catch (e2) {}
+                    if (hash) {
+                        var road = Lampa.Timeline.view(hash);
+                        if (road && Number.isFinite(Number(road.time))) {
+                            time = Number(road.time);
+                            duration = Number(road.duration) || 0;
+                        }
                     }
                 }
             } catch (e) {}
@@ -1368,8 +1404,7 @@
 
     /* ===================== Scroll / Controller ===================== */
     function makeScroll() {
-        var s = new Lampa.Scroll({ mask: true, over: true, step: 220 });
-        return s;
+        return new Lampa.Scroll({ mask: true, over: true, step: 220 });
     }
 
     function forceScrollSize(scroll) {
@@ -1377,13 +1412,15 @@
             var node = scroll.render();
             if (!node) return;
 
-            // Агресивне обмеження висоти (працює на ПК і ТВ)
-            var h = Math.max(400, (window.innerHeight || 800) - 110);
+            // Головний фікс Lampa — клас layer--wheight
+            node.classList.add('layer--wheight');
+            node.classList.add('layer--height');
+
+            var h = Math.max(420, (window.innerHeight || 900) - 100);
             node.style.height = h + 'px';
             node.style.maxHeight = h + 'px';
-            node.style.overflow = 'hidden';
+            node.style.minHeight = h + 'px';
 
-            // Lampa API
             if (typeof scroll.minus === 'function') {
                 try { scroll.minus(); } catch (e) {}
             }
@@ -1394,10 +1431,13 @@
                 try { scroll.resize(); } catch (e) {}
             }
 
-            // Додатково на .scroll__content
-            var content = node.querySelector('.scroll__content');
+            // Fallback нативний скрол (якщо Lampa.Scroll не рухається)
+            var content = node.querySelector('.scroll__content') || node.querySelector('.scroll__body');
             if (content) {
-                content.style.minHeight = '100%';
+                content.style.overflowY = 'auto';
+                content.style.height = '100%';
+                content.style.maxHeight = '100%';
+                content.style.webkitOverflowScrolling = 'touch';
             }
         } catch (e) {}
     }
@@ -1413,9 +1453,14 @@
                 if (!dy) return;
                 e.preventDefault();
                 e.stopPropagation();
-                var step = dy > 0 ? 180 : -180;
+                var step = dy > 0 ? 200 : -200;
                 if (typeof scroll.wheel === 'function') scroll.wheel(step);
                 else if (typeof scroll.move === 'function') scroll.move(step);
+                else {
+                    // native fallback
+                    var content = node.querySelector('.scroll__content') || node;
+                    if (content) content.scrollTop += step;
+                }
             };
 
             node.addEventListener('wheel', handler, { passive: false });
@@ -1439,13 +1484,13 @@
                 },
                 up: function () {
                     if (Navigator.canmove('up')) Navigator.move('up');
-                    else if (typeof scroll.wheel === 'function') scroll.wheel(-280);
-                    else if (typeof scroll.move === 'function') scroll.move(-280);
+                    else if (typeof scroll.wheel === 'function') scroll.wheel(-300);
+                    else if (typeof scroll.move === 'function') scroll.move(-300);
                 },
                 down: function () {
                     if (Navigator.canmove('down')) Navigator.move('down');
-                    else if (typeof scroll.wheel === 'function') scroll.wheel(280);
-                    else if (typeof scroll.move === 'function') scroll.move(280);
+                    else if (typeof scroll.wheel === 'function') scroll.wheel(300);
+                    else if (typeof scroll.move === 'function') scroll.move(300);
                 },
                 back: function () { Lampa.Activity.backward(); }
             });
@@ -1457,7 +1502,19 @@
         html.find('.selector').on('hover:focus focus hover:enter', function () {
             try {
                 scroll.update($(this), true);
-            } catch (e) {}
+            } catch (e) {
+                // native fallback
+                try {
+                    var node = scroll.render();
+                    var el = this;
+                    if (node && el) {
+                        var content = node.querySelector('.scroll__content') || node;
+                        if (content && el.offsetTop !== undefined) {
+                            content.scrollTop = Math.max(0, el.offsetTop - 120);
+                        }
+                    }
+                } catch (e2) {}
+            }
         });
     }
 
@@ -1474,9 +1531,9 @@
             bindFocusScroll(html, scroll);
             bindWheel(scroll);
 
-            setTimeout(function () { forceScrollSize(scroll); }, 80);
-            setTimeout(function () { forceScrollSize(scroll); }, 300);
-            setTimeout(function () { forceScrollSize(scroll); }, 700);
+            [50, 200, 500, 1000].forEach(function (ms) {
+                setTimeout(function () { forceScrollSize(scroll); }, ms);
+            });
 
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
@@ -1484,6 +1541,7 @@
             forceScrollSize(scroll);
             bindController(scroll);
             bindWheel(scroll);
+            setTimeout(function () { forceScrollSize(scroll); }, 150);
         };
         this.pause = function () {};
         this.render = function () { return scroll.render(); };
@@ -1523,7 +1581,6 @@
             return row;
         }
 
-        // Рівень тепер всередині блоку СУМАРНИЙ ЧАС
         function totalTimeWithLevelCard() {
             var info = LevelSystem.info();
             var c = $('<div class="stv-card selector stv-card-total"></div>');
@@ -1532,7 +1589,6 @@
             var body = $('<div class="stv-card-body stv-total-body"></div>');
             body.append('<div class="stv-card-val">' + StatsDB.formatTime(StatsDB.data.seconds_watched) + '</div>');
 
-            // Рівень під часом
             body.append(
                 '<div class="stv-level-inline">' +
                 '<span class="stv-level-num-sm">' + info.level + '</span> ' +
@@ -1719,8 +1775,9 @@
             bindFocusScroll(html, scroll);
             bindWheel(scroll);
 
-            setTimeout(function () { forceScrollSize(scroll); }, 80);
-            setTimeout(function () { forceScrollSize(scroll); }, 300);
+            [50, 200, 500].forEach(function (ms) {
+                setTimeout(function () { forceScrollSize(scroll); }, ms);
+            });
 
             try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
         };
@@ -1831,7 +1888,6 @@
         '.stv-sub{font-size:13px;font-weight:500;opacity:0.7;}' +
         '.stv-genre-name{font-size:18px;font-weight:700;text-transform:uppercase;}' +
         '.stv-genre-pct{font-size:13px;opacity:0.6;margin-top:2px;}' +
-        /* рівень всередині блоку часу */
         '.stv-total-body{flex-direction:column;align-items:flex-start;gap:8px;}' +
         '.stv-level-inline{display:flex;align-items:baseline;gap:8px;margin-top:2px;}' +
         '.stv-level-num-sm{font-size:20px;font-weight:800;}' +
@@ -1877,13 +1933,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:50px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v050-style');
+        var old = document.getElementById('lampa-stats-v051-style');
         if (old) old.remove();
-        // також прибираємо старі стилі
-        var old2 = document.getElementById('lampa-stats-v9-style');
+        var old2 = document.getElementById('lampa-stats-v050-style');
         if (old2) old2.remove();
+        var old3 = document.getElementById('lampa-stats-v9-style');
+        if (old3) old3.remove();
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v050-style';
+        s.id = 'lampa-stats-v051-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1900,7 +1957,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.50 ready');
+            console.log('Lampa stats v0.51 ready (scroll + external VLC)');
         } catch (e) {
             console.error('stats init', e);
         }
