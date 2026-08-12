@@ -1519,27 +1519,57 @@
             return box;
         }
 
-        function resetBtn(root) {
-            var b = $('<div class="stv-reset selector">' + LANG.reset + '</div>');
-            b.on('hover:enter click', function () {
-                if (confirm(LANG.reset_confirm)) {
-                    StatsDB.reset();
-                    Lampa.Noty.show(LANG.reset_done);
-                    renderAll(root);
-                    scroll.clear();
-                    scroll.append(root);
-                    bindFocusScroll(root, scroll);
-                    bindWheel(scroll);
-                    try {
-                        if (typeof scroll.minus === 'function') scroll.minus();
-                        Lampa.Controller.collectionSet(scroll.render());
-                        Lampa.Controller.collectionFocus(false, scroll.render());
-                    } catch (e) {}
-                }
+       function resetBtn(root) {
+    var b = $('<div class="stv-reset selector">' + LANG.reset + '</div>');
+
+    b.on('hover:enter click', function () {
+        // Використовуємо Lampa.Select замість confirm()
+        if (Lampa.Select && typeof Lampa.Select.show === 'function') {
+            Lampa.Select.show({
+                title: LANG.reset_confirm,
+                items: [
+                    {
+                        title: 'Так, скинути',
+                        confirm: true
+                    },
+                    {
+                        title: 'Скасувати'
+                    }
+                ],
+                onSelect: function (item) {
+                    if (item && item.confirm) {
+                        StatsDB.reset();
+                        if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
+                        renderAll(root);
+                        scroll.clear();
+                        scroll.append(root);
+                        bindFocusScroll(root, scroll);
+                        bindWheel(scroll);
+                        try {
+                            if (typeof scroll.minus === 'function') scroll.minus();
+                            Lampa.Controller.collectionSet(scroll.render());
+                            Lampa.Controller.collectionFocus(false, scroll.render());
+                        } catch (e) {}
+                    }
+                },
+                onBack: function () {}
             });
-            return b;
+        } else {
+            // запасний варіант, якщо Select раптом недоступний
+            if (window.confirm(LANG.reset_confirm)) {
+                StatsDB.reset();
+                if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
+                renderAll(root);
+                scroll.clear();
+                scroll.append(root);
+                bindFocusScroll(root, scroll);
+                bindWheel(scroll);
+            }
         }
-    }
+    });
+
+    return b;
+}
 
     function ActorWorksComponent(object) {
         var scroll = makeScroll();
