@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v057) return;
-    window.lampa_ukrainian_stats_v057 = true;
+    if (window.lampa_ukrainian_stats_v058) return;
+    window.lampa_ukrainian_stats_v058 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1417,23 +1417,51 @@
         function actorsBlock() {
             var wrap = $('<div class="stv-section"></div>');
             wrap.append('<div class="stv-section-title">' + LANG.fav_actors + '</div>');
+
             var scrollWrap = $('<div class="stv-actors-scroll"></div>');
             var row = $('<div class="stv-actors"></div>');
             var list = StatsDB.topActors(CONFIG.max_actors_show);
+
             if (!list.length) {
                 row.append('<div class="stv-muted">' + LANG.no_actors + '</div>');
             } else {
                 list.forEach(function (a) {
                     var item = $('<div class="stv-actor selector"></div>');
-                    var img = a.profile_path ? (String(a.profile_path).indexOf('http') === 0 ? a.profile_path : CONFIG.tmdb_img + a.profile_path) : '';
+                    var img = a.profile_path
+                        ? (String(a.profile_path).indexOf('http') === 0 ? a.profile_path : CONFIG.tmdb_img + a.profile_path)
+                        : '';
+
                     if (img) item.append('<div class="stv-actor-photo" style="background-image:url(' + img + ')"></div>');
                     else item.append('<div class="stv-actor-photo stv-actor-ph">' + (a.name || '?').charAt(0) + '</div>');
+
                     item.append('<div class="stv-actor-name">' + (a.name || '') + '</div>');
                     item.append('<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) + ', ' + (a.count || 0) + ' ' + LANG.films_short + '</div>');
+
+                    // Горизонтальний скрол на ТВ при фокусі
+                    item.on('hover:focus focus', function () {
+                        try {
+                            var el = this;
+                            var container = row[0];
+                            if (!container) return;
+
+                            var itemLeft = el.offsetLeft;
+                            var itemWidth = el.offsetWidth;
+                            var contWidth = container.clientWidth;
+                            var scrollLeft = container.scrollLeft;
+
+                            if (itemLeft < scrollLeft + 10) {
+                                container.scrollLeft = Math.max(0, itemLeft - 20);
+                            } else if (itemLeft + itemWidth > scrollLeft + contWidth - 10) {
+                                container.scrollLeft = itemLeft + itemWidth - contWidth + 30;
+                            }
+                        } catch (e) {}
+                    });
+
                     item.on('hover:enter click', function () { openActorPage(a); });
                     row.append(item);
                 });
             }
+
             scrollWrap.append(row);
             wrap.append(scrollWrap);
             return wrap;
@@ -1542,14 +1570,12 @@
                                 StatsDB.reset();
                                 if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
 
-                                // Перемальовуємо
                                 renderAll(root);
                                 scroll.clear();
                                 scroll.append(root);
                                 bindFocusScroll(root, scroll);
                                 bindWheel(scroll);
 
-                                // Відновлюємо контролер
                                 setTimeout(function () {
                                     try {
                                         if (typeof scroll.minus === 'function') scroll.minus();
@@ -1562,7 +1588,6 @@
                                     }
                                 }, 150);
                             } else {
-                                // Скасували
                                 setTimeout(function () {
                                     try {
                                         Lampa.Controller.toggle('content');
@@ -1719,7 +1744,7 @@
         '.stv-section{margin-bottom:26px;}' +
         '.stv-section-title{font-size:13px;opacity:0.55;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;}' +
         '.stv-actors-scroll{width:100%;overflow:hidden;}' +
-        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding:8px 4px 16px;-webkit-overflow-scrolling:touch;}' +
+        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding:8px 4px 20px;-webkit-overflow-scrolling:touch;scroll-behavior:smooth;}' +
         '.stv-actor{width:110px;min-width:110px;flex-shrink:0;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;background:transparent;}' +
         '.stv-actor-photo{width:68px;height:68px;border-radius:50%;margin:0 auto 8px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.08);}' +
         '.stv-actor-ph{display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;}' +
@@ -1748,14 +1773,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v057-style');
+        var old = document.getElementById('lampa-stats-v058-style');
         if (old) old.remove();
-        ['lampa-stats-v056-style', 'lampa-stats-v055-style', 'lampa-stats-v054-style', 'lampa-stats-v053-style'].forEach(function (id) {
+        ['lampa-stats-v057-style', 'lampa-stats-v056-style', 'lampa-stats-v055-style', 'lampa-stats-v054-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v057-style';
+        s.id = 'lampa-stats-v058-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1772,7 +1797,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.57 ready (reset + controller restore)');
+            console.log('Lampa stats v0.58 ready (horizontal actors scroll)');
         } catch (e) {
             console.error('stats init', e);
         }
