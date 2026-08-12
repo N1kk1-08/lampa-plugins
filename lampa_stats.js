@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v055) return;
-    window.lampa_ukrainian_stats_v055 = true;
+    if (window.lampa_ukrainian_stats_v056) return;
+    window.lampa_ukrainian_stats_v056 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -30,6 +30,8 @@
         settings_title: 'Статистика переглядів',
         reset: 'Скинути статистику',
         reset_confirm: 'Скинути всю статистику переглядів?',
+        reset_yes: 'Так, скинути',
+        reset_no: 'Скасувати',
         reset_done: 'Статистику скинуто.',
         no_genre: '—',
         no_actors: 'Актори з’являться після переглядів',
@@ -1519,25 +1521,44 @@
             return box;
         }
 
-       function resetBtn(root) {
-    var b = $('<div class="stv-reset selector">' + LANG.reset + '</div>');
+        function resetBtn(root) {
+            var b = $('<div class="stv-reset selector">' + LANG.reset + '</div>');
 
-    b.on('hover:enter click', function () {
-        // Використовуємо Lampa.Select замість confirm()
-        if (Lampa.Select && typeof Lampa.Select.show === 'function') {
-            Lampa.Select.show({
-                title: LANG.reset_confirm,
-                items: [
-                    {
-                        title: 'Так, скинути',
-                        confirm: true
-                    },
-                    {
-                        title: 'Скасувати'
-                    }
-                ],
-                onSelect: function (item) {
-                    if (item && item.confirm) {
+            b.on('hover:enter click', function () {
+                // Lampa.Select — працює на ТВ з пультом
+                if (Lampa.Select && typeof Lampa.Select.show === 'function') {
+                    Lampa.Select.show({
+                        title: LANG.reset_confirm,
+                        items: [
+                            {
+                                title: LANG.reset_yes,
+                                confirm: true
+                            },
+                            {
+                                title: LANG.reset_no
+                            }
+                        ],
+                        onSelect: function (item) {
+                            if (item && item.confirm) {
+                                StatsDB.reset();
+                                if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
+                                renderAll(root);
+                                scroll.clear();
+                                scroll.append(root);
+                                bindFocusScroll(root, scroll);
+                                bindWheel(scroll);
+                                try {
+                                    if (typeof scroll.minus === 'function') scroll.minus();
+                                    Lampa.Controller.collectionSet(scroll.render());
+                                    Lampa.Controller.collectionFocus(false, scroll.render());
+                                } catch (e) {}
+                            }
+                        },
+                        onBack: function () {}
+                    });
+                } else {
+                    // запасний варіант
+                    if (window.confirm(LANG.reset_confirm)) {
                         StatsDB.reset();
                         if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
                         renderAll(root);
@@ -1545,31 +1566,13 @@
                         scroll.append(root);
                         bindFocusScroll(root, scroll);
                         bindWheel(scroll);
-                        try {
-                            if (typeof scroll.minus === 'function') scroll.minus();
-                            Lampa.Controller.collectionSet(scroll.render());
-                            Lampa.Controller.collectionFocus(false, scroll.render());
-                        } catch (e) {}
                     }
-                },
-                onBack: function () {}
+                }
             });
-        } else {
-            // запасний варіант, якщо Select раптом недоступний
-            if (window.confirm(LANG.reset_confirm)) {
-                StatsDB.reset();
-                if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
-                renderAll(root);
-                scroll.clear();
-                scroll.append(root);
-                bindFocusScroll(root, scroll);
-                bindWheel(scroll);
-            }
-        }
-    });
 
-    return b;
-}
+            return b;
+        }
+    }
 
     function ActorWorksComponent(object) {
         var scroll = makeScroll();
@@ -1716,14 +1719,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v055-style');
+        var old = document.getElementById('lampa-stats-v056-style');
         if (old) old.remove();
-        ['lampa-stats-v054-style', 'lampa-stats-v053-style', 'lampa-stats-v052-style', 'lampa-stats-v051-style'].forEach(function (id) {
+        ['lampa-stats-v055-style', 'lampa-stats-v054-style', 'lampa-stats-v053-style', 'lampa-stats-v052-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v055-style';
+        s.id = 'lampa-stats-v056-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1740,7 +1743,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.55 ready (vertical month times)');
+            console.log('Lampa stats v0.56 ready (TV reset fix)');
         } catch (e) {
             console.error('stats init', e);
         }
