@@ -1522,57 +1522,90 @@
         }
 
         function resetBtn(root) {
-            var b = $('<div class="stv-reset selector">' + LANG.reset + '</div>');
+    var b = $('<div class="stv-reset selector">' + LANG.reset + '</div>');
 
-            b.on('hover:enter click', function () {
-                // Lampa.Select — працює на ТВ з пультом
-                if (Lampa.Select && typeof Lampa.Select.show === 'function') {
-                    Lampa.Select.show({
-                        title: LANG.reset_confirm,
-                        items: [
-                            {
-                                title: LANG.reset_yes,
-                                confirm: true
-                            },
-                            {
-                                title: LANG.reset_no
-                            }
-                        ],
-                        onSelect: function (item) {
-                            if (item && item.confirm) {
-                                StatsDB.reset();
-                                if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
-                                renderAll(root);
-                                scroll.clear();
-                                scroll.append(root);
-                                bindFocusScroll(root, scroll);
-                                bindWheel(scroll);
-                                try {
-                                    if (typeof scroll.minus === 'function') scroll.minus();
-                                    Lampa.Controller.collectionSet(scroll.render());
-                                    Lampa.Controller.collectionFocus(false, scroll.render());
-                                } catch (e) {}
-                            }
-                        },
-                        onBack: function () {}
-                    });
-                } else {
-                    // запасний варіант
-                    if (window.confirm(LANG.reset_confirm)) {
+    b.on('hover:enter click', function () {
+        if (Lampa.Select && typeof Lampa.Select.show === 'function') {
+            Lampa.Select.show({
+                title: LANG.reset_confirm,
+                items: [
+                    {
+                        title: LANG.reset_yes,
+                        confirm: true
+                    },
+                    {
+                        title: LANG.reset_no
+                    }
+                ],
+                onSelect: function (item) {
+                    if (item && item.confirm) {
                         StatsDB.reset();
                         if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
+
+                        // Перемальовуємо сторінку
                         renderAll(root);
                         scroll.clear();
                         scroll.append(root);
                         bindFocusScroll(root, scroll);
                         bindWheel(scroll);
+
+                        // Важливо: відновлюємо контролер після Select
+                        setTimeout(function () {
+                            try {
+                                if (typeof scroll.minus === 'function') scroll.minus();
+
+                                // Повторно вішаємо контролер
+                                bindController(scroll);
+
+                                Lampa.Controller.toggle('content');
+                                Lampa.Controller.collectionSet(scroll.render());
+                                Lampa.Controller.collectionFocus(false, scroll.render());
+                            } catch (e) {
+                                console.log('reset controller restore error', e);
+                            }
+                        }, 150);
+                    } else {
+                        // Якщо натиснули «Скасувати» — просто повертаємо фокус
+                        setTimeout(function () {
+                            try {
+                                Lampa.Controller.toggle('content');
+                                Lampa.Controller.collectionSet(scroll.render());
+                                Lampa.Controller.collectionFocus(false, scroll.render());
+                            } catch (e) {}
+                        }, 100);
                     }
+                },
+                onBack: function () {
+                    // При натисканні Back на Select
+                    setTimeout(function () {
+                        try {
+                            Lampa.Controller.toggle('content');
+                            Lampa.Controller.collectionSet(scroll.render());
+                            Lampa.Controller.collectionFocus(false, scroll.render());
+                        } catch (e) {}
+                    }, 100);
                 }
             });
-
-            return b;
+        } else {
+            // запасний варіант
+            if (window.confirm(LANG.reset_confirm)) {
+                StatsDB.reset();
+                if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
+                renderAll(root);
+                scroll.clear();
+                scroll.append(root);
+                bindFocusScroll(root, scroll);
+                bindWheel(scroll);
+                setTimeout(function () {
+                    bindController(scroll);
+                    Lampa.Controller.toggle('content');
+                }, 100);
+            }
         }
-    }
+    });
+
+    return b;
+}
 
     function ActorWorksComponent(object) {
         var scroll = makeScroll();
