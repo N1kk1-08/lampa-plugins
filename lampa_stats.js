@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v058) return;
-    window.lampa_ukrainian_stats_v058 = true;
+    if (window.lampa_ukrainian_stats_v059) return;
+    window.lampa_ukrainian_stats_v059 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -264,16 +264,28 @@
                 else if (Array.isArray(movie.cast)) list = movie.cast;
                 else if (movie.persons && Array.isArray(movie.persons.cast)) list = movie.persons.cast;
             } catch (e) {}
-            return list.filter(function (p) {
+
+            // Тільки актори
+            list = list.filter(function (p) {
                 if (!p || !(p.id || p.name)) return false;
                 if (p.job && !p.character) return false;
                 if (p.department && String(p.department).toLowerCase() !== 'acting') return false;
                 return true;
-            }).slice(0, 20).map(function (p) {
+            });
+
+            // Сортування за важливістю ролі (order: 0 = головна)
+            list.sort(function (a, b) {
+                var orderA = Number.isFinite(a.order) ? a.order : 999;
+                var orderB = Number.isFinite(b.order) ? b.order : 999;
+                return orderA - orderB;
+            });
+
+            return list.slice(0, 20).map(function (p) {
                 return {
                     id: p.id || p.name,
                     name: p.name || '',
-                    profile_path: p.profile_path || p.img || p.photo || ''
+                    profile_path: p.profile_path || p.img || p.photo || '',
+                    order: Number.isFinite(p.order) ? p.order : 999
                 };
             });
         },
@@ -1437,7 +1449,7 @@
                     item.append('<div class="stv-actor-name">' + (a.name || '') + '</div>');
                     item.append('<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) + ', ' + (a.count || 0) + ' ' + LANG.films_short + '</div>');
 
-                    // Горизонтальний скрол на ТВ при фокусі
+                    // Горизонтальний скрол на ТВ
                     item.on('hover:focus focus', function () {
                         try {
                             var el = this;
@@ -1773,14 +1785,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v058-style');
+        var old = document.getElementById('lampa-stats-v059-style');
         if (old) old.remove();
-        ['lampa-stats-v057-style', 'lampa-stats-v056-style', 'lampa-stats-v055-style', 'lampa-stats-v054-style'].forEach(function (id) {
+        ['lampa-stats-v058-style', 'lampa-stats-v057-style', 'lampa-stats-v056-style', 'lampa-stats-v055-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v058-style';
+        s.id = 'lampa-stats-v059-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1797,7 +1809,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.58 ready (horizontal actors scroll)');
+            console.log('Lampa stats v0.59 ready (actors sorted by order)');
         } catch (e) {
             console.error('stats init', e);
         }
