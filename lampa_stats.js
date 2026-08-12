@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v056) return;
-    window.lampa_ukrainian_stats_v056 = true;
+    if (window.lampa_ukrainian_stats_v057) return;
+    window.lampa_ukrainian_stats_v057 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1522,90 +1522,86 @@
         }
 
         function resetBtn(root) {
-    var b = $('<div class="stv-reset selector">' + LANG.reset + '</div>');
+            var b = $('<div class="stv-reset selector">' + LANG.reset + '</div>');
 
-    b.on('hover:enter click', function () {
-        if (Lampa.Select && typeof Lampa.Select.show === 'function') {
-            Lampa.Select.show({
-                title: LANG.reset_confirm,
-                items: [
-                    {
-                        title: LANG.reset_yes,
-                        confirm: true
-                    },
-                    {
-                        title: LANG.reset_no
-                    }
-                ],
-                onSelect: function (item) {
-                    if (item && item.confirm) {
+            b.on('hover:enter click', function () {
+                if (Lampa.Select && typeof Lampa.Select.show === 'function') {
+                    Lampa.Select.show({
+                        title: LANG.reset_confirm,
+                        items: [
+                            {
+                                title: LANG.reset_yes,
+                                confirm: true
+                            },
+                            {
+                                title: LANG.reset_no
+                            }
+                        ],
+                        onSelect: function (item) {
+                            if (item && item.confirm) {
+                                StatsDB.reset();
+                                if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
+
+                                // Перемальовуємо
+                                renderAll(root);
+                                scroll.clear();
+                                scroll.append(root);
+                                bindFocusScroll(root, scroll);
+                                bindWheel(scroll);
+
+                                // Відновлюємо контролер
+                                setTimeout(function () {
+                                    try {
+                                        if (typeof scroll.minus === 'function') scroll.minus();
+                                        bindController(scroll);
+                                        Lampa.Controller.toggle('content');
+                                        Lampa.Controller.collectionSet(scroll.render());
+                                        Lampa.Controller.collectionFocus(false, scroll.render());
+                                    } catch (e) {
+                                        console.log('reset controller restore', e);
+                                    }
+                                }, 150);
+                            } else {
+                                // Скасували
+                                setTimeout(function () {
+                                    try {
+                                        Lampa.Controller.toggle('content');
+                                        Lampa.Controller.collectionSet(scroll.render());
+                                        Lampa.Controller.collectionFocus(false, scroll.render());
+                                    } catch (e) {}
+                                }, 100);
+                            }
+                        },
+                        onBack: function () {
+                            setTimeout(function () {
+                                try {
+                                    Lampa.Controller.toggle('content');
+                                    Lampa.Controller.collectionSet(scroll.render());
+                                    Lampa.Controller.collectionFocus(false, scroll.render());
+                                } catch (e) {}
+                            }, 100);
+                        }
+                    });
+                } else {
+                    if (window.confirm(LANG.reset_confirm)) {
                         StatsDB.reset();
                         if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
-
-                        // Перемальовуємо сторінку
                         renderAll(root);
                         scroll.clear();
                         scroll.append(root);
                         bindFocusScroll(root, scroll);
                         bindWheel(scroll);
-
-                        // Важливо: відновлюємо контролер після Select
                         setTimeout(function () {
-                            try {
-                                if (typeof scroll.minus === 'function') scroll.minus();
-
-                                // Повторно вішаємо контролер
-                                bindController(scroll);
-
-                                Lampa.Controller.toggle('content');
-                                Lampa.Controller.collectionSet(scroll.render());
-                                Lampa.Controller.collectionFocus(false, scroll.render());
-                            } catch (e) {
-                                console.log('reset controller restore error', e);
-                            }
-                        }, 150);
-                    } else {
-                        // Якщо натиснули «Скасувати» — просто повертаємо фокус
-                        setTimeout(function () {
-                            try {
-                                Lampa.Controller.toggle('content');
-                                Lampa.Controller.collectionSet(scroll.render());
-                                Lampa.Controller.collectionFocus(false, scroll.render());
-                            } catch (e) {}
+                            bindController(scroll);
+                            Lampa.Controller.toggle('content');
                         }, 100);
                     }
-                },
-                onBack: function () {
-                    // При натисканні Back на Select
-                    setTimeout(function () {
-                        try {
-                            Lampa.Controller.toggle('content');
-                            Lampa.Controller.collectionSet(scroll.render());
-                            Lampa.Controller.collectionFocus(false, scroll.render());
-                        } catch (e) {}
-                    }, 100);
                 }
             });
-        } else {
-            // запасний варіант
-            if (window.confirm(LANG.reset_confirm)) {
-                StatsDB.reset();
-                if (Lampa.Noty) Lampa.Noty.show(LANG.reset_done);
-                renderAll(root);
-                scroll.clear();
-                scroll.append(root);
-                bindFocusScroll(root, scroll);
-                bindWheel(scroll);
-                setTimeout(function () {
-                    bindController(scroll);
-                    Lampa.Controller.toggle('content');
-                }, 100);
-            }
-        }
-    });
 
-    return b;
-}
+            return b;
+        }
+    }
 
     function ActorWorksComponent(object) {
         var scroll = makeScroll();
@@ -1752,14 +1748,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v056-style');
+        var old = document.getElementById('lampa-stats-v057-style');
         if (old) old.remove();
-        ['lampa-stats-v055-style', 'lampa-stats-v054-style', 'lampa-stats-v053-style', 'lampa-stats-v052-style'].forEach(function (id) {
+        ['lampa-stats-v056-style', 'lampa-stats-v055-style', 'lampa-stats-v054-style', 'lampa-stats-v053-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v056-style';
+        s.id = 'lampa-stats-v057-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1776,7 +1772,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.56 ready (TV reset fix)');
+            console.log('Lampa stats v0.57 ready (reset + controller restore)');
         } catch (e) {
             console.error('stats init', e);
         }
