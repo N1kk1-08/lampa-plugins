@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v063) return;
-    window.lampa_ukrainian_stats_v063 = true;
+    if (window.lampa_ukrainian_stats_v059) return;
+    window.lampa_ukrainian_stats_v059 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -99,8 +99,7 @@
         by_month: {},
         by_weekday: {},
         by_hour: {},
-        last_level: 1,
-        meta_credited: {}
+        last_level: 1
     };
 
     function isGarbageGenre(name) {
@@ -261,9 +260,9 @@
             if (!movie) return [];
             var list = [];
             try {
-                if (movie.credits && Array.isArray(movie.credits.cast)) list = movie.credits.cast.slice();
-                else if (Array.isArray(movie.cast)) list = movie.cast.slice();
-                else if (movie.persons && Array.isArray(movie.persons.cast)) list = movie.persons.cast.slice();
+                if (movie.credits && Array.isArray(movie.credits.cast)) list = movie.credits.cast;
+                else if (Array.isArray(movie.cast)) list = movie.cast;
+                else if (movie.persons && Array.isArray(movie.persons.cast)) list = movie.persons.cast;
             } catch (e) {}
 
             // Тільки актори
@@ -274,22 +273,14 @@
                 return true;
             });
 
-            // Сортування за order тільки якщо значення реально різні.
-            // Інакше залишаємо оригінальний порядок (TMDB зазвичай віддає за важливістю ролі).
-            var orderSet = {};
-            list.forEach(function (p) {
-                if (Number.isFinite(p.order)) orderSet[p.order] = true;
+            // Сортування за важливістю ролі (order: 0 = головна)
+            list.sort(function (a, b) {
+                var orderA = Number.isFinite(a.order) ? a.order : 999;
+                var orderB = Number.isFinite(b.order) ? b.order : 999;
+                return orderA - orderB;
             });
-            if (Object.keys(orderSet).length > 1) {
-                list.sort(function (a, b) {
-                    var orderA = Number.isFinite(a.order) ? a.order : 999;
-                    var orderB = Number.isFinite(b.order) ? b.order : 999;
-                    return orderA - orderB;
-                });
-            }
 
-            // Беремо більше акторів, щоб не губити головних при нестандартному касті
-            return list.slice(0, 30).map(function (p) {
+            return list.slice(0, 20).map(function (p) {
                 return {
                     id: p.id || p.name,
                     name: p.name || '',
@@ -540,9 +531,14 @@
                 if (Tracker.currentMovie && CardCache.key(Tracker.currentMovie) === key) {
                     Tracker.currentMovie = CardCache.get(merged) || merged;
                 }
-                // Раніше тут був enrichMetaOnly(last) — він накручував акторів
-                // щоразу при відкритті картки. Більше не робимо.
-                // Атрибуція акторів іде тільки з реального addProgress.
+                try {
+                    var watchedId = Media.getId(merged);
+                    var last = StatsDB.getLast(watchedId);
+                    if (last > 0) {
+                        var meta = Media.metaFrom(merged);
+                        StatsDB.enrichMetaOnly(Math.min(last, 600), meta);
+                    }
+                } catch (e) {}
                 if (done) done(CardCache.get(merged) || merged);
             }
 
@@ -670,7 +666,7 @@
                 return;
             }
             this.data = Object.assign(JSON.parse(JSON.stringify(DEFAULT_STATS)), saved);
-            ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour', 'meta_credited'].forEach(function (k) {
+            ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour'].forEach(function (k) {
                 if (!StatsDB.data[k] || typeof StatsDB.data[k] !== 'object') StatsDB.data[k] = {};
             });
             if (!Number.isFinite(this.data.last_level)) this.data.last_level = 1;
@@ -754,57 +750,18 @@
             if (completed) w.completed = true;
             row.count = Object.keys(row.works).length;
         },
-        addProgress: function (id, time, duration, deltaSec, meta, opts) {
+        addProgress: function (id, time, duration, deltaSec, meta) {
             if (!id || !Number.isFinite(time) || time < 0) return 0;
-            opts = opts || {};
-            var fromExternal = !!opts.fromExternal;
             var prev = this.getLast(id);
-
-            // Внутрішній перший контакт з уже наявним Timeline — seed без нарахування
-            // (історія до встановлення плагіна). Зовнішній перший репорт після seed(0) — рахуємо.
-            if (prev === 0 && time > 10 && !fromExternal) {
-                this.setLast(id, time);
-                if (!this.data.meta_credited) this.data.meta_credited = {};
-                if ((this.data.meta_credited[id] || 0) < time) this.data.meta_credited[id] = time;
-                this.save();
-                return 0;
-            }
-
             if (time < prev - 5) {
                 this.setLast(id, time);
                 this.save();
                 return 0;
             }
-
             var raw = Math.max(0, time - prev);
-            if (raw <= 0) {
-                this.setLast(id, time);
-                return 0;
-            }
-
-            // Seek: стрибок значно більший за реальний wall-time — не рахуємо як перегляд
-            var isSeek = false;
-            if (Number.isFinite(deltaSec) && deltaSec >= 0) {
-                if (raw > deltaSec + 10 && raw > 15) {
-                    isSeek = true;
-                }
-            } else if (!fromExternal && raw > 90) {
-                // без wallDelta великий стрибок всередині Lampa — теж seek
-                isSeek = true;
-            }
-
-            if (isSeek) {
-                this.setLast(id, time);
-                this.save();
-                return 0;
-            }
-
-            // Для живого video обмежуємо стрибок wall-time; для зовнішніх — довіряємо Timeline
-            if (!fromExternal && Number.isFinite(deltaSec) && deltaSec >= 0) {
-                raw = Math.min(raw, deltaSec + 1.5);
-            }
-
-            var maxJump = Number.isFinite(duration) && duration > 0 ? Math.min(duration, 14400) : (fromExternal ? 14400 : 600);
+            if (Number.isFinite(deltaSec) && deltaSec >= 0) raw = Math.min(raw, deltaSec + 1.5);
+            var maxJump = Number.isFinite(duration) && duration > 0 ? Math.min(duration, 7200) : 600;
+            if (prev === 0 && raw > 30) raw = Math.min(raw, 5);
             var safe = Math.min(raw, maxJump);
             if (safe > 0) {
                 this.data.seconds_watched += Math.floor(safe);
@@ -826,22 +783,6 @@
         },
         enrichMetaOnly: function (sec, meta, skipSave) {
             if (!sec || !meta) return;
-            sec = Math.floor(sec);
-            if (sec <= 0) return;
-
-            // Не даємо одному watchId накрутити мету більше, ніж уже записано в last_recorded
-            var wid = meta.watchId || meta.baseId || '';
-            if (wid) {
-                if (!this.data.meta_credited) this.data.meta_credited = {};
-                var credited = this.data.meta_credited[wid] || 0;
-                var cap = this.getLast(wid) || 0;
-                // якщо last ще 0 — дозволяємо sec (свіжий addProgress у тому ж тіку)
-                var room = cap > 0 ? Math.max(0, cap - credited) : sec;
-                if (room <= 0) return;
-                sec = Math.min(sec, room);
-                this.data.meta_credited[wid] = credited + sec;
-            }
-
             if (meta.year) {
                 var y = String(meta.year);
                 if (!this.data.years[y]) this.data.years[y] = { seconds: 0, count: 0 };
@@ -856,7 +797,7 @@
                 });
             }
             if (meta.actors && meta.actors.length) {
-                meta.actors.slice(0, 25).forEach(function (a) {
+                meta.actors.slice(0, 15).forEach(function (a) {
                     var row = StatsDB.ensureActor(a);
                     if (!row) return;
                     row.seconds += sec;
@@ -901,7 +842,7 @@
                 });
             }
             if (meta && meta.actors) {
-                meta.actors.slice(0, 25).forEach(function (a) {
+                meta.actors.slice(0, 15).forEach(function (a) {
                     StatsDB.touchActorWork(a, meta, 0, true);
                 });
             }
@@ -1090,9 +1031,6 @@
         initialized: false,
         currentMovie: null,
         lastTickAt: 0,
-        // Вікно активного перегляду: без нього не рахуємо Timeline/flush (відкриття картки)
-        sessionActive: false,
-        externalUntil: 0,
 
         init: function () {
             if (this.initialized) return;
@@ -1117,7 +1055,6 @@
                                     Media.remember(movie);
                                     movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
                                     Tracker.currentMovie = movie;
-                                    Tracker.sessionActive = true;
                                     MetaLoader.enrich(movie);
                                 }
                             }
@@ -1130,9 +1067,8 @@
             try {
                 if (Lampa.Player && typeof Lampa.Player.callback === 'function') {
                     Lampa.Player.callback(function () {
-                        [300, 800, 1500, 3000, 6000].forEach(function (ms) {
-                            setTimeout(function () { self.flushExternal(self.currentMovie); }, ms);
-                        });
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 400);
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 1600);
                     });
                 }
             } catch (e) {}
@@ -1141,21 +1077,12 @@
                 if (Lampa.Player && Lampa.Player.listener) {
                     Lampa.Player.listener.follow('start', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('ready', function (e) { self.onStart(e); });
-                    Lampa.Player.listener.follow('external', function (e) {
-                        self.sessionActive = true;
-                        self.externalUntil = Date.now() + 60000;
-                        self.onStart(e);
-                    });
+                    Lampa.Player.listener.follow('external', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('destroy', function () {
-                        self.externalUntil = Date.now() + 12000;
-                        // Android external (Just+/VLC) пише Timeline з затримкою — кілька спроб
-                        [200, 600, 1200, 2500, 5000, 8000].forEach(function (ms) {
+                        [250, 900, 2200].forEach(function (ms) {
                             setTimeout(function () { self.flushExternal(self.currentMovie); }, ms);
                         });
-                        setTimeout(function () {
-                            self.sessionActive = false;
-                            self.currentMovie = null;
-                        }, 12000);
+                        setTimeout(function () { self.currentMovie = null; }, 5000);
                     });
                 }
             } catch (e) {}
@@ -1176,19 +1103,8 @@
                 Lampa.Listener.follow('activity', function (e) {
                     if (!e) return;
                     if (e.type === 'start' || e.type === 'archive' || e.type === 'resume') {
-                        [400, 1200, 3000].forEach(function (ms) {
-                            setTimeout(function () { self.flushExternal(self.currentMovie); }, ms);
-                        });
+                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 500);
                     }
-                });
-            } catch (e) {}
-
-            // Глобальні зміни Timeline (після повернення з Android-плеєра)
-            try {
-                Lampa.Listener.follow('state:changed', function (e) {
-                    if (!e || e.target !== 'timeline') return;
-                    setTimeout(function () { self.flushExternal(self.currentMovie); }, 300);
-                    setTimeout(function () { self.flushExternal(self.currentMovie); }, 1500);
                 });
             } catch (e) {}
 
@@ -1222,68 +1138,26 @@
             this.timer = setInterval(function () { self.tick(); }, CONFIG.interval);
         },
 
-        seedPosition: function (movie) {
-            if (!movie || !Settings.collecting()) return;
-            try {
-                var id = Media.getId(movie);
-                if (StatsDB.getLast(id) > 0) return;
-                var t = 0;
-                try {
-                    if (movie.timeline && Number.isFinite(Number(movie.timeline.time))) {
-                        t = Number(movie.timeline.time);
-                    }
-                } catch (e0) {}
-                try {
-                    if (t <= 0 && Lampa.Timeline && typeof Lampa.Timeline.view === 'function') {
-                        var hash = movie.timeline && movie.timeline.hash;
-                        if (!hash && Lampa.Utils && typeof Lampa.Utils.hash === 'function') {
-                            var key = String(movie.id || movie.tmdb_id || '') + ':' + String(movie.original_title || movie.title || movie.name || '');
-                            hash = Lampa.Utils.hash(key);
-                        }
-                        if (hash) {
-                            var road = Lampa.Timeline.view(hash);
-                            if (road && Number.isFinite(Number(road.time))) t = Number(road.time);
-                        }
-                    }
-                } catch (e1) {}
-                if (t > 10) {
-                    StatsDB.setLast(id, t);
-                    // seed = вже «приписано», щоб не накрутити акторів заднім числом
-                    if (!StatsDB.data.meta_credited) StatsDB.data.meta_credited = {};
-                    if ((StatsDB.data.meta_credited[id] || 0) < t) {
-                        StatsDB.data.meta_credited[id] = t;
-                    }
-                    StatsDB.save();
-                }
-            } catch (e) {}
-        },
-
         onStart: function (e) {
             var movie = Media.normalize(e) || Current.getMovie();
             if (!movie) return;
             Media.remember(movie);
             movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
             this.currentMovie = movie;
-            this.sessionActive = true;
-            this.seedPosition(movie);
             MetaLoader.enrich(movie, function (rich) {
                 if (rich) {
                     Tracker.currentMovie = MetaStore.applyToMovie(CardCache.get(rich) || rich);
                     Media.remember(rich);
-                    Tracker.seedPosition(Tracker.currentMovie);
                 }
             });
         },
 
         flushExternal: function (movie) {
             if (!Settings.collecting()) return;
-            // Не рахуємо при простому відкритті картки / resume activity
-            var inWindow = this.sessionActive || (this.externalUntil && Date.now() < this.externalUntil);
-            if (!inWindow) return;
             movie = movie || this.currentMovie || Media.lastCard;
             if (!movie) return;
 
-            var time = 0, duration = 0, fromExternal = false;
+            var time = 0, duration = 0;
 
             try {
                 var v = Current.getVideoState();
@@ -1293,98 +1167,36 @@
                 }
             } catch (e) {}
 
-            // Зовнішні плеєри (Just+, VLC, Android intent) — читаємо Timeline / storage
             try {
                 if ((!time || time <= 0) && Lampa.Storage) {
-                    var keys = [
-                        'player_road_last', 'timeline_last',
-                        'player_timeline_last', 'file_view', 'online_view'
-                    ];
+                    var keys = ['player_road_last', 'timeline_last'];
                     for (var i = 0; i < keys.length; i++) {
                         var last = Lampa.Storage.get(keys[i]);
-                        if (!last) continue;
-                        // іноді це об'єкт road, іноді map
                         if (last && Number.isFinite(Number(last.time))) {
                             time = Number(last.time);
                             duration = Number(last.duration) || 0;
-                            fromExternal = true;
                             break;
                         }
                     }
                 }
             } catch (e) {}
 
-            // Lampa.Timeline.view(hash) — надійне джерело після зовнішнього плеєра
-            try {
-                if (Lampa.Timeline && typeof Lampa.Timeline.view === 'function') {
-                    var hash = null;
-                    try {
-                        if (movie && movie.timeline && movie.timeline.hash) hash = movie.timeline.hash;
-                    } catch (e0) {}
-                    if (!hash && movie) {
-                        var t = movie.original_title || movie.original_name || movie.title || movie.name || '';
-                        var id = movie.id || movie.tmdb_id || '';
-                        if (t || id) {
-                            // спроба через Utils.hash якщо є
-                            if (Lampa.Utils && typeof Lampa.Utils.hash === 'function') {
-                                hash = Lampa.Utils.hash(String(id) + ':' + String(t));
-                            }
-                        }
-                    }
-                    if (hash) {
-                        var road = Lampa.Timeline.view(hash);
-                        if (road && Number.isFinite(Number(road.time)) && Number(road.time) > 0) {
-                            if (!time || Number(road.time) > time) {
-                                time = Number(road.time);
-                                duration = Number(road.duration) || duration || 0;
-                                fromExternal = true;
-                            }
-                        }
-                    }
-                    // fallback: пробігти viewed
-                    if ((!time || time <= 0) && Lampa.Timeline && Lampa.Storage) {
-                        var viewed = Lampa.Storage.get('file_view') || Lampa.Storage.get('online_view') || {};
-                        if (viewed && typeof viewed === 'object') {
-                            var bestT = 0, bestD = 0;
-                            Object.keys(viewed).forEach(function (k) {
-                                var r = viewed[k];
-                                if (r && Number.isFinite(Number(r.time)) && Number(r.time) > bestT) {
-                                    bestT = Number(r.time);
-                                    bestD = Number(r.duration) || 0;
-                                }
-                            });
-                            if (bestT > 0) {
-                                time = bestT;
-                                duration = bestD || duration;
-                                fromExternal = true;
-                            }
-                        }
-                    }
-                }
-            } catch (e) {}
-
             if (Number.isFinite(time) && time > 0) {
-                var widFlush = movie ? Media.getId(movie) : '';
-                var hadTrackBefore = widFlush ? StatsDB.getLast(widFlush) > 15 : false;
-
-                var gained = this.apply(time, duration || 0, Math.max(time, 600), { fromExternal: fromExternal || time > 60 });
+                this.apply(time, duration || 0, Math.max(time, 600));
 
                 if (movie && Number.isFinite(duration) && duration > 30) {
                     var ratio = time / duration;
                     var remaining = duration - time;
-                    // completed: або вже трекали раніше, або реально додивились зараз (gained)
-                    var okComplete = hadTrackBefore || (gained && gained >= 60);
-                    if (okComplete && (ratio >= 0.85 || (remaining < 120 && ratio > 0.65))) {
+                    if (ratio >= 0.85 || (remaining < 120 && ratio > 0.65)) {
                         var meta = Media.metaFrom(movie);
-                        StatsDB.markCompleted(widFlush, meta, movie);
+                        StatsDB.markCompleted(Media.getId(movie), meta, movie);
                     }
                 }
             }
         },
 
-        apply: function (time, duration, wallDelta, opts) {
+        apply: function (time, duration, wallDelta) {
             if (!Settings.collecting()) return;
-            opts = opts || {};
 
             var movie = this.currentMovie || Current.getMovie() || Media.lastCard;
             if (movie) {
@@ -1411,7 +1223,7 @@
             }
 
             var id = movie ? Media.getId(movie) : 'session:anon';
-            var gained = StatsDB.addProgress(id, time, duration, wallDelta, meta, opts);
+            StatsDB.addProgress(id, time, duration, wallDelta, meta);
 
             var isNearEnd = false;
             if (movie && Number.isFinite(duration) && duration > 30) {
@@ -1420,15 +1232,9 @@
                 isNearEnd = (ratio >= CONFIG.completion) || (remaining < 90 && ratio > 0.70);
             }
 
-            // Перемотка в кінець (scrub): wallDelta малий, а time майже duration — не completed
             if (isNearEnd) {
-                var scrubToEnd = Number.isFinite(wallDelta) && wallDelta < 45 && duration > 120 && time >= duration * 0.9;
-                // або майже нічого не набрали зараз — швидше за все seek/старий timeline
-                if (!scrubToEnd && gained >= 30) {
-                    StatsDB.markCompleted(Media.getId(movie), meta, movie);
-                }
+                StatsDB.markCompleted(Media.getId(movie), meta, movie);
             }
-            return gained;
         },
 
         onVideo: function (e) {
@@ -1441,22 +1247,12 @@
 
         onTimeline: function (e) {
             if (!Settings.collecting() || !e || !e.data) return;
-            // Ігноруємо Timeline при перегляді карток без активного плеєра
-            var inWindow = this.sessionActive || (this.externalUntil && Date.now() < this.externalUntil);
-            if (!inWindow) return;
             var road = e.data.road || e.data;
             if (!road) return;
             var time = Number(road.time);
             var duration = Number(road.duration);
             if (!Number.isFinite(time) || time < 0) return;
-            var ext = this.externalUntil && Date.now() < this.externalUntil;
-            // Зовнішній — довіряємо; інакше звичайний seek-aware apply
-            this.apply(
-                time,
-                Number.isFinite(duration) ? duration : 0,
-                ext ? Math.max(time, 600) : 600,
-                { fromExternal: !!ext }
-            );
+            this.apply(time, Number.isFinite(duration) ? duration : 0, 600);
         },
 
         tick: function () {
@@ -1989,14 +1785,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v063-style');
+        var old = document.getElementById('lampa-stats-v059-style');
         if (old) old.remove();
-        ['lampa-stats-v062-style', 'lampa-stats-v061-style', 'lampa-stats-v060-style', 'lampa-stats-v059-style', 'lampa-stats-v058-style', 'lampa-stats-v055-style'].forEach(function (id) {
+        ['lampa-stats-v058-style', 'lampa-stats-v057-style', 'lampa-stats-v056-style', 'lampa-stats-v055-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v063-style';
+        s.id = 'lampa-stats-v059-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2013,7 +1809,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.63 ready (no card-open credit spam)');
+            console.log('Lampa stats v0.59 ready (actors sorted by order)');
         } catch (e) {
             console.error('stats init', e);
         }
