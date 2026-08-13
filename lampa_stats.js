@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v061) return;
-    window.lampa_ukrainian_stats_v061 = true;
+    if (window.lampa_ukrainian_stats_v062) return;
+    window.lampa_ukrainian_stats_v062 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -763,19 +763,50 @@
             opts = opts || {};
             var fromExternal = !!opts.fromExternal;
             var prev = this.getLast(id);
+
+            // Внутрішній перший контакт з уже наявним Timeline — seed без нарахування
+            // (історія до встановлення плагіна). Зовнішній перший репорт після seed(0) — рахуємо.
+            if (prev === 0 && time > 10 && !fromExternal) {
+                this.setLast(id, time);
+                this.save();
+                return 0;
+            }
+
             if (time < prev - 5) {
                 this.setLast(id, time);
                 this.save();
                 return 0;
             }
+
             var raw = Math.max(0, time - prev);
+            if (raw <= 0) {
+                this.setLast(id, time);
+                return 0;
+            }
+
+            // Seek: стрибок значно більший за реальний wall-time — не рахуємо як перегляд
+            var isSeek = false;
+            if (Number.isFinite(deltaSec) && deltaSec >= 0) {
+                if (raw > deltaSec + 10 && raw > 15) {
+                    isSeek = true;
+                }
+            } else if (!fromExternal && raw > 90) {
+                // без wallDelta великий стрибок всередині Lampa — теж seek
+                isSeek = true;
+            }
+
+            if (isSeek) {
+                this.setLast(id, time);
+                this.save();
+                return 0;
+            }
+
             // Для живого video обмежуємо стрибок wall-time; для зовнішніх — довіряємо Timeline
             if (!fromExternal && Number.isFinite(deltaSec) && deltaSec >= 0) {
                 raw = Math.min(raw, deltaSec + 1.5);
             }
+
             var maxJump = Number.isFinite(duration) && duration > 0 ? Math.min(duration, 14400) : (fromExternal ? 14400 : 600);
-            // Старий clamp «перших 5 сек» ламав зовнішні плеєри (Just+/VLC)
-            if (!fromExternal && prev === 0 && raw > 30) raw = Math.min(raw, 5);
             var safe = Math.min(raw, maxJump);
             if (safe > 0) {
                 this.data.seconds_watched += Math.floor(safe);
@@ -1165,16 +1196,49 @@
             this.timer = setInterval(function () { self.tick(); }, CONFIG.interval);
         },
 
+        seedPosition: function (movie) {
+            if (!movie || !Settings.collecting()) return;
+            try {
+                var id = Media.getId(movie);
+                if (StatsDB.getLast(id) > 0) return;
+                var t = 0;
+                try {
+                    if (movie.timeline && Number.isFinite(Number(movie.timeline.time))) {
+                        t = Number(movie.timeline.time);
+                    }
+                } catch (e0) {}
+                try {
+                    if (t <= 0 && Lampa.Timeline && typeof Lampa.Timeline.view === 'function') {
+                        var hash = movie.timeline && movie.timeline.hash;
+                        if (!hash && Lampa.Utils && typeof Lampa.Utils.hash === 'function') {
+                            var key = String(movie.id || movie.tmdb_id || '') + ':' + String(movie.original_title || movie.title || movie.name || '');
+                            hash = Lampa.Utils.hash(key);
+                        }
+                        if (hash) {
+                            var road = Lampa.Timeline.view(hash);
+                            if (road && Number.isFinite(Number(road.time))) t = Number(road.time);
+                        }
+                    }
+                } catch (e1) {}
+                if (t > 10) {
+                    StatsDB.setLast(id, t);
+                    StatsDB.save();
+                }
+            } catch (e) {}
+        },
+
         onStart: function (e) {
             var movie = Media.normalize(e) || Current.getMovie();
             if (!movie) return;
             Media.remember(movie);
             movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
             this.currentMovie = movie;
+            this.seedPosition(movie);
             MetaLoader.enrich(movie, function (rich) {
                 if (rich) {
                     Tracker.currentMovie = MetaStore.applyToMovie(CardCache.get(rich) || rich);
                     Media.remember(rich);
+                    Tracker.seedPosition(Tracker.currentMovie);
                 }
             });
         },
@@ -1265,14 +1329,19 @@
             } catch (e) {}
 
             if (Number.isFinite(time) && time > 0) {
-                this.apply(time, duration || 0, Math.max(time, 600), { fromExternal: fromExternal || time > 60 });
+                var widFlush = movie ? Media.getId(movie) : '';
+                var hadTrackBefore = widFlush ? StatsDB.getLast(widFlush) > 15 : false;
+
+                var gained = this.apply(time, duration || 0, Math.max(time, 600), { fromExternal: fromExternal || time > 60 });
 
                 if (movie && Number.isFinite(duration) && duration > 30) {
                     var ratio = time / duration;
                     var remaining = duration - time;
-                    if (ratio >= 0.85 || (remaining < 120 && ratio > 0.65)) {
+                    // completed: або вже трекали раніше, або реально додивились зараз (gained)
+                    var okComplete = hadTrackBefore || (gained && gained >= 60);
+                    if (okComplete && (ratio >= 0.85 || (remaining < 120 && ratio > 0.65))) {
                         var meta = Media.metaFrom(movie);
-                        StatsDB.markCompleted(Media.getId(movie), meta, movie);
+                        StatsDB.markCompleted(widFlush, meta, movie);
                     }
                 }
             }
@@ -1307,7 +1376,7 @@
             }
 
             var id = movie ? Media.getId(movie) : 'session:anon';
-            StatsDB.addProgress(id, time, duration, wallDelta, meta, opts);
+            var gained = StatsDB.addProgress(id, time, duration, wallDelta, meta, opts);
 
             var isNearEnd = false;
             if (movie && Number.isFinite(duration) && duration > 30) {
@@ -1316,9 +1385,15 @@
                 isNearEnd = (ratio >= CONFIG.completion) || (remaining < 90 && ratio > 0.70);
             }
 
+            // Перемотка в кінець (scrub): wallDelta малий, а time майже duration — не completed
             if (isNearEnd) {
-                StatsDB.markCompleted(Media.getId(movie), meta, movie);
+                var scrubToEnd = Number.isFinite(wallDelta) && wallDelta < 45 && duration > 120 && time >= duration * 0.9;
+                // або майже нічого не набрали зараз — швидше за все seek/старий timeline
+                if (!scrubToEnd && gained >= 30) {
+                    StatsDB.markCompleted(Media.getId(movie), meta, movie);
+                }
             }
+            return gained;
         },
 
         onVideo: function (e) {
@@ -1870,14 +1945,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v061-style');
+        var old = document.getElementById('lampa-stats-v062-style');
         if (old) old.remove();
-        ['lampa-stats-v060-style', 'lampa-stats-v059-style', 'lampa-stats-v058-style', 'lampa-stats-v057-style', 'lampa-stats-v056-style', 'lampa-stats-v055-style'].forEach(function (id) {
+        ['lampa-stats-v061-style', 'lampa-stats-v060-style', 'lampa-stats-v059-style', 'lampa-stats-v058-style', 'lampa-stats-v057-style', 'lampa-stats-v055-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v061-style';
+        s.id = 'lampa-stats-v062-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1894,7 +1969,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.61 ready (external player tracking)');
+            console.log('Lampa stats v0.62 ready (no historical + seek ignore)');
         } catch (e) {
             console.error('stats init', e);
         }
