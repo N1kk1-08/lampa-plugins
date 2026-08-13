@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v062) return;
-    window.lampa_ukrainian_stats_v062 = true;
+    if (window.lampa_ukrainian_stats_v063) return;
+    window.lampa_ukrainian_stats_v063 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -99,7 +99,8 @@
         by_month: {},
         by_weekday: {},
         by_hour: {},
-        last_level: 1
+        last_level: 1,
+        meta_credited: {}
     };
 
     function isGarbageGenre(name) {
@@ -539,14 +540,9 @@
                 if (Tracker.currentMovie && CardCache.key(Tracker.currentMovie) === key) {
                     Tracker.currentMovie = CardCache.get(merged) || merged;
                 }
-                try {
-                    var watchedId = Media.getId(merged);
-                    var last = StatsDB.getLast(watchedId);
-                    if (last > 0) {
-                        var meta = Media.metaFrom(merged);
-                        StatsDB.enrichMetaOnly(Math.min(last, 1800), meta);
-                    }
-                } catch (e) {}
+                // Раніше тут був enrichMetaOnly(last) — він накручував акторів
+                // щоразу при відкритті картки. Більше не робимо.
+                // Атрибуція акторів іде тільки з реального addProgress.
                 if (done) done(CardCache.get(merged) || merged);
             }
 
@@ -674,7 +670,7 @@
                 return;
             }
             this.data = Object.assign(JSON.parse(JSON.stringify(DEFAULT_STATS)), saved);
-            ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour'].forEach(function (k) {
+            ['completed', 'last_recorded', 'genres', 'actors', 'years', 'by_month', 'by_weekday', 'by_hour', 'meta_credited'].forEach(function (k) {
                 if (!StatsDB.data[k] || typeof StatsDB.data[k] !== 'object') StatsDB.data[k] = {};
             });
             if (!Number.isFinite(this.data.last_level)) this.data.last_level = 1;
@@ -768,6 +764,8 @@
             // (історія до встановлення плагіна). Зовнішній перший репорт після seed(0) — рахуємо.
             if (prev === 0 && time > 10 && !fromExternal) {
                 this.setLast(id, time);
+                if (!this.data.meta_credited) this.data.meta_credited = {};
+                if ((this.data.meta_credited[id] || 0) < time) this.data.meta_credited[id] = time;
                 this.save();
                 return 0;
             }
@@ -828,6 +826,22 @@
         },
         enrichMetaOnly: function (sec, meta, skipSave) {
             if (!sec || !meta) return;
+            sec = Math.floor(sec);
+            if (sec <= 0) return;
+
+            // Не даємо одному watchId накрутити мету більше, ніж уже записано в last_recorded
+            var wid = meta.watchId || meta.baseId || '';
+            if (wid) {
+                if (!this.data.meta_credited) this.data.meta_credited = {};
+                var credited = this.data.meta_credited[wid] || 0;
+                var cap = this.getLast(wid) || 0;
+                // якщо last ще 0 — дозволяємо sec (свіжий addProgress у тому ж тіку)
+                var room = cap > 0 ? Math.max(0, cap - credited) : sec;
+                if (room <= 0) return;
+                sec = Math.min(sec, room);
+                this.data.meta_credited[wid] = credited + sec;
+            }
+
             if (meta.year) {
                 var y = String(meta.year);
                 if (!this.data.years[y]) this.data.years[y] = { seconds: 0, count: 0 };
@@ -1076,6 +1090,9 @@
         initialized: false,
         currentMovie: null,
         lastTickAt: 0,
+        // Вікно активного перегляду: без нього не рахуємо Timeline/flush (відкриття картки)
+        sessionActive: false,
+        externalUntil: 0,
 
         init: function () {
             if (this.initialized) return;
@@ -1100,6 +1117,7 @@
                                     Media.remember(movie);
                                     movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
                                     Tracker.currentMovie = movie;
+                                    Tracker.sessionActive = true;
                                     MetaLoader.enrich(movie);
                                 }
                             }
@@ -1123,13 +1141,21 @@
                 if (Lampa.Player && Lampa.Player.listener) {
                     Lampa.Player.listener.follow('start', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('ready', function (e) { self.onStart(e); });
-                    Lampa.Player.listener.follow('external', function (e) { self.onStart(e); });
+                    Lampa.Player.listener.follow('external', function (e) {
+                        self.sessionActive = true;
+                        self.externalUntil = Date.now() + 60000;
+                        self.onStart(e);
+                    });
                     Lampa.Player.listener.follow('destroy', function () {
+                        self.externalUntil = Date.now() + 12000;
                         // Android external (Just+/VLC) пише Timeline з затримкою — кілька спроб
                         [200, 600, 1200, 2500, 5000, 8000].forEach(function (ms) {
                             setTimeout(function () { self.flushExternal(self.currentMovie); }, ms);
                         });
-                        setTimeout(function () { self.currentMovie = null; }, 12000);
+                        setTimeout(function () {
+                            self.sessionActive = false;
+                            self.currentMovie = null;
+                        }, 12000);
                     });
                 }
             } catch (e) {}
@@ -1222,6 +1248,11 @@
                 } catch (e1) {}
                 if (t > 10) {
                     StatsDB.setLast(id, t);
+                    // seed = вже «приписано», щоб не накрутити акторів заднім числом
+                    if (!StatsDB.data.meta_credited) StatsDB.data.meta_credited = {};
+                    if ((StatsDB.data.meta_credited[id] || 0) < t) {
+                        StatsDB.data.meta_credited[id] = t;
+                    }
                     StatsDB.save();
                 }
             } catch (e) {}
@@ -1233,6 +1264,7 @@
             Media.remember(movie);
             movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
             this.currentMovie = movie;
+            this.sessionActive = true;
             this.seedPosition(movie);
             MetaLoader.enrich(movie, function (rich) {
                 if (rich) {
@@ -1245,6 +1277,9 @@
 
         flushExternal: function (movie) {
             if (!Settings.collecting()) return;
+            // Не рахуємо при простому відкритті картки / resume activity
+            var inWindow = this.sessionActive || (this.externalUntil && Date.now() < this.externalUntil);
+            if (!inWindow) return;
             movie = movie || this.currentMovie || Media.lastCard;
             if (!movie) return;
 
@@ -1406,13 +1441,22 @@
 
         onTimeline: function (e) {
             if (!Settings.collecting() || !e || !e.data) return;
+            // Ігноруємо Timeline при перегляді карток без активного плеєра
+            var inWindow = this.sessionActive || (this.externalUntil && Date.now() < this.externalUntil);
+            if (!inWindow) return;
             var road = e.data.road || e.data;
             if (!road) return;
             var time = Number(road.time);
             var duration = Number(road.duration);
             if (!Number.isFinite(time) || time < 0) return;
-            // Timeline update після зовнішнього плеєра — довіряємо повністю
-            this.apply(time, Number.isFinite(duration) ? duration : 0, Math.max(time, 600), { fromExternal: true });
+            var ext = this.externalUntil && Date.now() < this.externalUntil;
+            // Зовнішній — довіряємо; інакше звичайний seek-aware apply
+            this.apply(
+                time,
+                Number.isFinite(duration) ? duration : 0,
+                ext ? Math.max(time, 600) : 600,
+                { fromExternal: !!ext }
+            );
         },
 
         tick: function () {
@@ -1945,14 +1989,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v062-style');
+        var old = document.getElementById('lampa-stats-v063-style');
         if (old) old.remove();
-        ['lampa-stats-v061-style', 'lampa-stats-v060-style', 'lampa-stats-v059-style', 'lampa-stats-v058-style', 'lampa-stats-v057-style', 'lampa-stats-v055-style'].forEach(function (id) {
+        ['lampa-stats-v062-style', 'lampa-stats-v061-style', 'lampa-stats-v060-style', 'lampa-stats-v059-style', 'lampa-stats-v058-style', 'lampa-stats-v055-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v062-style';
+        s.id = 'lampa-stats-v063-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1969,7 +2013,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.62 ready (no historical + seek ignore)');
+            console.log('Lampa stats v0.63 ready (no card-open credit spam)');
         } catch (e) {
             console.error('stats init', e);
         }
