@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v060) return;
-    window.lampa_ukrainian_stats_v060 = true;
+    if (window.lampa_ukrainian_stats_v061) return;
+    window.lampa_ukrainian_stats_v061 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -758,8 +758,10 @@
             if (completed) w.completed = true;
             row.count = Object.keys(row.works).length;
         },
-        addProgress: function (id, time, duration, deltaSec, meta) {
+        addProgress: function (id, time, duration, deltaSec, meta, opts) {
             if (!id || !Number.isFinite(time) || time < 0) return 0;
+            opts = opts || {};
+            var fromExternal = !!opts.fromExternal;
             var prev = this.getLast(id);
             if (time < prev - 5) {
                 this.setLast(id, time);
@@ -767,9 +769,13 @@
                 return 0;
             }
             var raw = Math.max(0, time - prev);
-            if (Number.isFinite(deltaSec) && deltaSec >= 0) raw = Math.min(raw, deltaSec + 1.5);
-            var maxJump = Number.isFinite(duration) && duration > 0 ? Math.min(duration, 7200) : 600;
-            if (prev === 0 && raw > 30) raw = Math.min(raw, 5);
+            // Для живого video обмежуємо стрибок wall-time; для зовнішніх — довіряємо Timeline
+            if (!fromExternal && Number.isFinite(deltaSec) && deltaSec >= 0) {
+                raw = Math.min(raw, deltaSec + 1.5);
+            }
+            var maxJump = Number.isFinite(duration) && duration > 0 ? Math.min(duration, 14400) : (fromExternal ? 14400 : 600);
+            // Старий clamp «перших 5 сек» ламав зовнішні плеєри (Just+/VLC)
+            if (!fromExternal && prev === 0 && raw > 30) raw = Math.min(raw, 5);
             var safe = Math.min(raw, maxJump);
             if (safe > 0) {
                 this.data.seconds_watched += Math.floor(safe);
@@ -1075,8 +1081,9 @@
             try {
                 if (Lampa.Player && typeof Lampa.Player.callback === 'function') {
                     Lampa.Player.callback(function () {
-                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 400);
-                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 1600);
+                        [300, 800, 1500, 3000, 6000].forEach(function (ms) {
+                            setTimeout(function () { self.flushExternal(self.currentMovie); }, ms);
+                        });
                     });
                 }
             } catch (e) {}
@@ -1087,10 +1094,11 @@
                     Lampa.Player.listener.follow('ready', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('external', function (e) { self.onStart(e); });
                     Lampa.Player.listener.follow('destroy', function () {
-                        [250, 900, 2200].forEach(function (ms) {
+                        // Android external (Just+/VLC) пише Timeline з затримкою — кілька спроб
+                        [200, 600, 1200, 2500, 5000, 8000].forEach(function (ms) {
                             setTimeout(function () { self.flushExternal(self.currentMovie); }, ms);
                         });
-                        setTimeout(function () { self.currentMovie = null; }, 5000);
+                        setTimeout(function () { self.currentMovie = null; }, 12000);
                     });
                 }
             } catch (e) {}
@@ -1111,8 +1119,19 @@
                 Lampa.Listener.follow('activity', function (e) {
                     if (!e) return;
                     if (e.type === 'start' || e.type === 'archive' || e.type === 'resume') {
-                        setTimeout(function () { self.flushExternal(self.currentMovie); }, 500);
+                        [400, 1200, 3000].forEach(function (ms) {
+                            setTimeout(function () { self.flushExternal(self.currentMovie); }, ms);
+                        });
                     }
+                });
+            } catch (e) {}
+
+            // Глобальні зміни Timeline (після повернення з Android-плеєра)
+            try {
+                Lampa.Listener.follow('state:changed', function (e) {
+                    if (!e || e.target !== 'timeline') return;
+                    setTimeout(function () { self.flushExternal(self.currentMovie); }, 300);
+                    setTimeout(function () { self.flushExternal(self.currentMovie); }, 1500);
                 });
             } catch (e) {}
 
@@ -1165,7 +1184,7 @@
             movie = movie || this.currentMovie || Media.lastCard;
             if (!movie) return;
 
-            var time = 0, duration = 0;
+            var time = 0, duration = 0, fromExternal = false;
 
             try {
                 var v = Current.getVideoState();
@@ -1175,22 +1194,78 @@
                 }
             } catch (e) {}
 
+            // Зовнішні плеєри (Just+, VLC, Android intent) — читаємо Timeline / storage
             try {
                 if ((!time || time <= 0) && Lampa.Storage) {
-                    var keys = ['player_road_last', 'timeline_last'];
+                    var keys = [
+                        'player_road_last', 'timeline_last',
+                        'player_timeline_last', 'file_view', 'online_view'
+                    ];
                     for (var i = 0; i < keys.length; i++) {
                         var last = Lampa.Storage.get(keys[i]);
+                        if (!last) continue;
+                        // іноді це об'єкт road, іноді map
                         if (last && Number.isFinite(Number(last.time))) {
                             time = Number(last.time);
                             duration = Number(last.duration) || 0;
+                            fromExternal = true;
                             break;
                         }
                     }
                 }
             } catch (e) {}
 
+            // Lampa.Timeline.view(hash) — надійне джерело після зовнішнього плеєра
+            try {
+                if (Lampa.Timeline && typeof Lampa.Timeline.view === 'function') {
+                    var hash = null;
+                    try {
+                        if (movie && movie.timeline && movie.timeline.hash) hash = movie.timeline.hash;
+                    } catch (e0) {}
+                    if (!hash && movie) {
+                        var t = movie.original_title || movie.original_name || movie.title || movie.name || '';
+                        var id = movie.id || movie.tmdb_id || '';
+                        if (t || id) {
+                            // спроба через Utils.hash якщо є
+                            if (Lampa.Utils && typeof Lampa.Utils.hash === 'function') {
+                                hash = Lampa.Utils.hash(String(id) + ':' + String(t));
+                            }
+                        }
+                    }
+                    if (hash) {
+                        var road = Lampa.Timeline.view(hash);
+                        if (road && Number.isFinite(Number(road.time)) && Number(road.time) > 0) {
+                            if (!time || Number(road.time) > time) {
+                                time = Number(road.time);
+                                duration = Number(road.duration) || duration || 0;
+                                fromExternal = true;
+                            }
+                        }
+                    }
+                    // fallback: пробігти viewed
+                    if ((!time || time <= 0) && Lampa.Timeline && Lampa.Storage) {
+                        var viewed = Lampa.Storage.get('file_view') || Lampa.Storage.get('online_view') || {};
+                        if (viewed && typeof viewed === 'object') {
+                            var bestT = 0, bestD = 0;
+                            Object.keys(viewed).forEach(function (k) {
+                                var r = viewed[k];
+                                if (r && Number.isFinite(Number(r.time)) && Number(r.time) > bestT) {
+                                    bestT = Number(r.time);
+                                    bestD = Number(r.duration) || 0;
+                                }
+                            });
+                            if (bestT > 0) {
+                                time = bestT;
+                                duration = bestD || duration;
+                                fromExternal = true;
+                            }
+                        }
+                    }
+                }
+            } catch (e) {}
+
             if (Number.isFinite(time) && time > 0) {
-                this.apply(time, duration || 0, Math.max(time, 600));
+                this.apply(time, duration || 0, Math.max(time, 600), { fromExternal: fromExternal || time > 60 });
 
                 if (movie && Number.isFinite(duration) && duration > 30) {
                     var ratio = time / duration;
@@ -1203,8 +1278,9 @@
             }
         },
 
-        apply: function (time, duration, wallDelta) {
+        apply: function (time, duration, wallDelta, opts) {
             if (!Settings.collecting()) return;
+            opts = opts || {};
 
             var movie = this.currentMovie || Current.getMovie() || Media.lastCard;
             if (movie) {
@@ -1231,7 +1307,7 @@
             }
 
             var id = movie ? Media.getId(movie) : 'session:anon';
-            StatsDB.addProgress(id, time, duration, wallDelta, meta);
+            StatsDB.addProgress(id, time, duration, wallDelta, meta, opts);
 
             var isNearEnd = false;
             if (movie && Number.isFinite(duration) && duration > 30) {
@@ -1260,7 +1336,8 @@
             var time = Number(road.time);
             var duration = Number(road.duration);
             if (!Number.isFinite(time) || time < 0) return;
-            this.apply(time, Number.isFinite(duration) ? duration : 0, 600);
+            // Timeline update після зовнішнього плеєра — довіряємо повністю
+            this.apply(time, Number.isFinite(duration) ? duration : 0, Math.max(time, 600), { fromExternal: true });
         },
 
         tick: function () {
@@ -1793,14 +1870,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v060-style');
+        var old = document.getElementById('lampa-stats-v061-style');
         if (old) old.remove();
-        ['lampa-stats-v059-style', 'lampa-stats-v058-style', 'lampa-stats-v057-style', 'lampa-stats-v056-style', 'lampa-stats-v055-style'].forEach(function (id) {
+        ['lampa-stats-v060-style', 'lampa-stats-v059-style', 'lampa-stats-v058-style', 'lampa-stats-v057-style', 'lampa-stats-v056-style', 'lampa-stats-v055-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v060-style';
+        s.id = 'lampa-stats-v061-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1817,7 +1894,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.60 ready (actors order fix + more cast)');
+            console.log('Lampa stats v0.61 ready (external player tracking)');
         } catch (e) {
             console.error('stats init', e);
         }
