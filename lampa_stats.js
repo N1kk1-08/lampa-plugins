@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v059) return;
-    window.lampa_ukrainian_stats_v059 = true;
+    if (window.lampa_ukrainian_stats_v064) return;
+    window.lampa_ukrainian_stats_v064 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -273,14 +273,20 @@
                 return true;
             });
 
-            // Сортування за важливістю ролі (order: 0 = головна)
-            list.sort(function (a, b) {
-                var orderA = Number.isFinite(a.order) ? a.order : 999;
-                var orderB = Number.isFinite(b.order) ? b.order : 999;
-                return orderA - orderB;
+            // Сортування за order лише якщо значення реально різні (інакше порядок TMDB)
+            var orderSet = {};
+            list.forEach(function (p) {
+                if (Number.isFinite(p.order)) orderSet[p.order] = true;
             });
+            if (Object.keys(orderSet).length > 1) {
+                list.sort(function (a, b) {
+                    var orderA = Number.isFinite(a.order) ? a.order : 999;
+                    var orderB = Number.isFinite(b.order) ? b.order : 999;
+                    return orderA - orderB;
+                });
+            }
 
-            return list.slice(0, 20).map(function (p) {
+            return list.slice(0, 25).map(function (p) {
                 return {
                     id: p.id || p.name,
                     name: p.name || '',
@@ -531,14 +537,7 @@
                 if (Tracker.currentMovie && CardCache.key(Tracker.currentMovie) === key) {
                     Tracker.currentMovie = CardCache.get(merged) || merged;
                 }
-                try {
-                    var watchedId = Media.getId(merged);
-                    var last = StatsDB.getLast(watchedId);
-                    if (last > 0) {
-                        var meta = Media.metaFrom(merged);
-                        StatsDB.enrichMetaOnly(Math.min(last, 600), meta);
-                    }
-                } catch (e) {}
+                // Без backfill: enrichMetaOnly(last) накручував акторів при кожному відкритті картки
                 if (done) done(CardCache.get(merged) || merged);
             }
 
@@ -797,7 +796,7 @@
                 });
             }
             if (meta.actors && meta.actors.length) {
-                meta.actors.slice(0, 15).forEach(function (a) {
+                meta.actors.slice(0, 20).forEach(function (a) {
                     var row = StatsDB.ensureActor(a);
                     if (!row) return;
                     row.seconds += sec;
@@ -842,7 +841,7 @@
                 });
             }
             if (meta && meta.actors) {
-                meta.actors.slice(0, 15).forEach(function (a) {
+                meta.actors.slice(0, 20).forEach(function (a) {
                     StatsDB.touchActorWork(a, meta, 0, true);
                 });
             }
@@ -1785,14 +1784,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v059-style');
+        var old = document.getElementById('lampa-stats-v064-style');
         if (old) old.remove();
-        ['lampa-stats-v058-style', 'lampa-stats-v057-style', 'lampa-stats-v056-style', 'lampa-stats-v055-style'].forEach(function (id) {
+        ['lampa-stats-v063-style','lampa-stats-v062-style','lampa-stats-v061-style','lampa-stats-v060-style','lampa-stats-v059-style','lampa-stats-v058-style','lampa-stats-v057-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v059-style';
+        s.id = 'lampa-stats-v064-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1809,7 +1808,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.59 ready (actors sorted by order)');
+            console.log('Lampa stats v0.64 ready (stable base, no meta backfill spam)');
         } catch (e) {
             console.error('stats init', e);
         }
