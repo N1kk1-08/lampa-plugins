@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v065) return;
-    window.lampa_ukrainian_stats_v065 = true;
+    if (window.lampa_ukrainian_stats_v066) return;
+    window.lampa_ukrainian_stats_v066 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -759,14 +759,20 @@
                 this.save();
                 return 0;
             }
+            // Перший контакт після скидання / нова серія: лише seed позиції (догляд з історії),
+            // без нарахування «фантомних» хвилин з уже збереженого таймкоду Lampa.
+            if (prev === 0 && time > 10 && !fromExternal) {
+                this.setLast(id, time);
+                this.save();
+                return 0;
+            }
+
             var raw = Math.max(0, time - prev);
             // Внутрішній плеєр: обмежуємо wall-time. Зовнішній (VLC): довіряємо дельті Timeline.
             if (!fromExternal && Number.isFinite(deltaSec) && deltaSec >= 0) {
                 raw = Math.min(raw, deltaSec + 1.5);
             }
             var maxJump = Number.isFinite(duration) && duration > 0 ? Math.min(duration, 14400) : (fromExternal ? 14400 : 600);
-            // clamp «перших 5 сек» ламав VLC/зовнішній — лише для внутрішнього
-            if (!fromExternal && prev === 0 && raw > 30) raw = Math.min(raw, 5);
             var safe = Math.min(raw, maxJump);
             if (safe > 0) {
                 this.data.seconds_watched += Math.floor(safe);
@@ -1224,6 +1230,19 @@
             Media.remember(movie);
             movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
             this.currentMovie = movie;
+            // Seed позиції з Timeline (недоглянута серія з історії) — без нарахування
+            try {
+                if (!this.externalActive) {
+                    var id = Media.getId(movie);
+                    if (StatsDB.getLast(id) === 0) {
+                        var t = this.readTimelineTime(movie);
+                        if (t > 10) {
+                            StatsDB.setLast(id, t);
+                            StatsDB.save();
+                        }
+                    }
+                }
+            } catch (eSeed) {}
             MetaLoader.enrich(movie, function (rich) {
                 if (rich) {
                     Tracker.currentMovie = MetaStore.applyToMovie(CardCache.get(rich) || rich);
@@ -1531,7 +1550,7 @@
                     else item.append('<div class="stv-actor-photo stv-actor-ph">' + (a.name || '?').charAt(0) + '</div>');
 
                     item.append('<div class="stv-actor-name">' + (a.name || '') + '</div>');
-                    item.append('<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) + ', ' + (a.count || 0) + ' ' + LANG.films_short + '</div>');
+                    item.append('<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) + '</div>');
 
                     // Горизонтальний скрол на ТВ
                     item.on('hover:focus focus', function () {
@@ -1869,14 +1888,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v065-style');
+        var old = document.getElementById('lampa-stats-v066-style');
         if (old) old.remove();
-        ['lampa-stats-v064-style','lampa-stats-v063-style','lampa-stats-v062-style','lampa-stats-v061-style','lampa-stats-v060-style','lampa-stats-v059-style','lampa-stats-v058-style'].forEach(function (id) {
+        ['lampa-stats-v065-style','lampa-stats-v064-style','lampa-stats-v063-style','lampa-stats-v062-style','lampa-stats-v061-style','lampa-stats-v060-style','lampa-stats-v059-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v065-style';
+        s.id = 'lampa-stats-v066-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -1893,7 +1912,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.65 ready (VLC external count, no historical spam)');
+            console.log('Lampa stats v0.66 ready (actor time only, seed resume no phantom)');
         } catch (e) {
             console.error('stats init', e);
         }
