@@ -112,7 +112,6 @@
             this.injectStyles();
             Lampa.Listener.follow('full', function (e) {
                 if (e.type == 'complite' || e.type == 'complete') {
-                    // НОВЕ: Перевіряємо чи увімкнений Асистент в налаштуваннях
                     if (Lampa.Storage.get('ai_show_assistant_btn', true)) {
                         _this.drawButton(e.object.activity.render(), e.data.movie);
                         _this.preloadTags(e.data.movie);
@@ -653,14 +652,18 @@
     }
 
 
-    // === RANDOM ДЖЕРЕЛО ===
+    // === RANDOM ДЖЕРЕЛО (ВИПРАВЛЕНА ФІЛЬТРАЦІЯ КРАЇН) ===
     var NativeRandomSource = {
         list: function(params, oncomplite, onerror) {
             var type = params.url || 'movie'; 
             var minRate = parseFloat(Lampa.Storage.get('ai_min_rating', '6')); 
             var yearLimit = parseInt(Lampa.Storage.get('ai_year_limit', '0'));
-            var excludeCountries = Lampa.Storage.get('ai_exclude_countries_list', '');
-            var excludeList = excludeCountries ? excludeCountries.split(',') : [];
+            
+            // Нормалізуємо список країн
+            var excludeCountriesRaw = Lampa.Storage.get('ai_exclude_countries_list', '');
+            var excludeList = excludeCountriesRaw 
+                ? excludeCountriesRaw.split(',').map(function(c){ return c.trim().toUpperCase(); }).filter(Boolean) 
+                : [];
             
             if (params.page === 1) {
                 window.plugin_ai_session_ids.clear();
@@ -670,7 +673,7 @@
                     else yearText = ' (' + yearLimit + '-' + (yearLimit + 9) + ')';
                 }
                 var rateText = minRate > 0 ? ' (Рейтинг > ' + minRate + ')' : '';
-                var exclText = excludeCountries ? ' (Без ' + excludeCountries + ')' : '';
+                var exclText = excludeList.length ? ' (Без ' + excludeList.join(',') + ')' : '';
                 updateStatus('🎲 Шукаю' + yearText + rateText + exclText + '...');
             }
 
@@ -692,7 +695,12 @@
             }
 
             if (minRate > 0) { query.push("vote_average.gte=" + minRate); query.push("vote_count.gte=50"); } else { query.push("vote_count.gte=20"); }
-            if (excludeCountries) { query.push('without_origin_country=' + excludeCountries); }
+            
+            // Залишаємо API-фільтр (як додатковий рівень)
+            if (excludeList.length) { 
+                query.push('without_origin_country=' + excludeList.join(',')); 
+            }
+            
             query.push('include_adult=true');
 
             var baseQuery = "&" + query.join('&');
@@ -723,15 +731,38 @@
                         data.results.forEach(function(item) {
                             if (type === 'cartoon' && item.original_language === 'ja') return;
                             if (window.plugin_ai_session_ids.has(item.id)) return;
-                            if (excludeList.length > 0 && item.origin_country && item.origin_country.length) {
-                                var skipCard = false;
-                                for (var i = 0; i < item.origin_country.length; i++) {
-                                    if (excludeList.indexOf(item.origin_country[i].toUpperCase()) !== -1) { skipCard = true; break; }
+
+                            // === НАДІЙНА ПЕРЕВІРКА КРАЇН ===
+                            if (excludeList.length > 0) {
+                                var countries = [];
+
+                                // 1. origin_country
+                                if (item.origin_country && item.origin_country.length) {
+                                    countries = item.origin_country.map(function(c){ return String(c).toUpperCase(); });
                                 }
-                                if (skipCard) return; 
+                                // 2. production_countries (рідше, але буває)
+                                else if (item.production_countries && item.production_countries.length) {
+                                    countries = item.production_countries.map(function(c){ 
+                                        return String(c.iso_3166_1 || c).toUpperCase(); 
+                                    });
+                                }
+                                // 3. Fallback по original_language (як у buildSafeCard)
+                                else if (item.original_language) {
+                                    countries = [String(item.original_language).toUpperCase()];
+                                }
+
+                                // Якщо хоча б одна країна в списку виключень — пропускаємо
+                                var skip = countries.some(function(c){ 
+                                    return excludeList.indexOf(c) !== -1; 
+                                });
+                                if (skip) return;
                             }
+
                             var card = buildSafeCard(item, type);
-                            if (card) { window.plugin_ai_session_ids.add(item.id); accumulatedCards.push(card); }
+                            if (card) { 
+                                window.plugin_ai_session_ids.add(item.id); 
+                                accumulatedCards.push(card); 
+                            }
                         });
                     }
 
@@ -752,7 +783,7 @@
     NativeRandomSource.get = NativeRandomSource.list;
 
 
-    // === AI SEARCH ДЖЕРЕЛО (Використовує Fallback Асистента) ===
+    // === AI SEARCH ДЖЕРЕЛО ===
     var AiSearchSource = {
         discovery: function () {
             return {
@@ -760,14 +791,19 @@
                 search: function (params, done) {
                     var q = decodeURIComponent(params.query || '').trim();
                     var limit = parseInt(Lampa.Storage.get('ai_result_count', '20'));
-                    var excludeCountries = Lampa.Storage.get('ai_exclude_countries_list', '');
+                    var excludeCountriesRaw = Lampa.Storage.get('ai_exclude_countries_list', '');
+                    var excludeList = excludeCountriesRaw 
+                        ? excludeCountriesRaw.split(',').map(function(c){ return c.trim().toUpperCase(); }).filter(Boolean) 
+                        : [];
                     
                     if (!q) return done([]);
                     updateStatus('🤖 Думаю над запитом "' + q + '"...');
                     
                     var prompt = 'Act as a movie expert. Suggest ' + limit + ' distinct movies or TV series based on this request: "' + q + '". ' +
                                  'Context: If the query is vague (e.g. "renovation"), interpret it as a plot topic, not just a keyword. Prioritize popular content. ';
-                    if (excludeCountries) prompt += 'CRITICAL RULE: DO NOT suggest any movies, series, or content produced in countries with these ISO 3166-1 alpha-2 codes: ' + excludeCountries + '. ';
+                    if (excludeList.length) {
+                        prompt += 'CRITICAL RULE: DO NOT suggest any movies, series, or content produced in countries with these ISO 3166-1 alpha-2 codes: ' + excludeList.join(',') + '. ';
+                    }
                     prompt += 'Return strictly a JSON array with no markdown: [{"ru":"Ukrainian Title","orig":"Original Title","year":Year}].';
                     
                     if (window.plugin_ai_assistant_instance) {
@@ -794,8 +830,22 @@
                                     if(t.results && t.results[0]) {
                                         var best = t.results[0];
                                         if(best.media_type === 'movie' || best.media_type === 'tv') {
-                                            var c = buildSafeCard(best, best.media_type);
-                                            if(c) results.push(c);
+                                            // Додаткова клієнтська перевірка країн і для AI-пошуку
+                                            var skipByCountry = false;
+                                            if (excludeList.length > 0) {
+                                                var countries = [];
+                                                if (best.origin_country && best.origin_country.length) {
+                                                    countries = best.origin_country.map(function(c){ return String(c).toUpperCase(); });
+                                                } else if (best.original_language) {
+                                                    countries = [String(best.original_language).toUpperCase()];
+                                                }
+                                                skipByCountry = countries.some(function(c){ return excludeList.indexOf(c) !== -1; });
+                                            }
+                                            
+                                            if (!skipByCountry) {
+                                                var c = buildSafeCard(best, best.media_type);
+                                                if(c) results.push(c);
+                                            }
                                         }
                                     }
                                     active--; next();
@@ -877,13 +927,13 @@
         // 4. Кількість результатів
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_result_count', type: 'select', values: { '10': '10', '20': '20', '30': '30', '50': '50' }, default: '20' }, field: { name: 'Кількість AI результатів' } });
         
-        // 5. Виключення країн
+        // 5. Виключення країн (з нормалізацією)
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_exclude_countries_btn', type: 'trigger' }, field: { name: 'Виключити країни' }, onRender: function(item) {
             var val = Lampa.Storage.get('ai_exclude_countries_list', '');
             item.find('.settings-param__value').text(val ? val : 'Немає').css('color', val ? '#f55':'#fff');
             item.on('hover:enter', function() {
                 function showSelect() {
-                    var selected = Lampa.Storage.get('ai_exclude_countries_list', '').split(',').filter(Boolean);
+                    var selected = Lampa.Storage.get('ai_exclude_countries_list', '').split(',').map(function(c){ return c.trim().toUpperCase(); }).filter(Boolean);
                     var list = [ { title: '🗑️ Очистити вибір', clear: true } ];
                     var available = [
                         { title: 'Росія (RU)', id: 'RU' }, { title: 'СРСР (SU)', id: 'SU' }, { title: 'Індія (IN)', id: 'IN' },
@@ -891,12 +941,21 @@
                         { title: 'Японія (JP)', id: 'JP' }, { title: 'США (US)', id: 'US' }, { title: 'Великобританія (GB)', id: 'GB' },
                         { title: 'Франція (FR)', id: 'FR' }, { title: 'Іспанія (ES)', id: 'ES' }, { title: 'Німеччина (DE)', id: 'DE' }
                     ];
-                    available.forEach(function(c) { var isSel = selected.indexOf(c.id) !== -1; list.push({ title: (isSel ? '✅ ' : '⬜ ') + c.title, id: c.id, selected: isSel }); });
+                    available.forEach(function(c) { 
+                        var isSel = selected.indexOf(c.id) !== -1; 
+                        list.push({ title: (isSel ? '✅ ' : '⬜ ') + c.title, id: c.id, selected: isSel }); 
+                    });
                     Lampa.Select.show({
                         title: 'Виключити країни', items: list,
                         onSelect: function (a) {
-                            if (a.clear) selected = []; else { if (a.selected) selected = selected.filter(function(s) { return s !== a.id; }); else selected.push(a.id); }
-                            var newVal = selected.join(',');
+                            if (a.clear) {
+                                selected = [];
+                            } else {
+                                if (a.selected) selected = selected.filter(function(s) { return s !== a.id; });
+                                else selected.push(a.id);
+                            }
+                            // Завжди зберігаємо у верхньому регістрі без пробілів
+                            var newVal = selected.map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean).join(',');
                             Lampa.Storage.set('ai_exclude_countries_list', newVal);
                             item.find('.settings-param__value').text(newVal ? newVal : 'Немає').css('color', newVal ? '#f55':'#fff');
                             setTimeout(showSelect, 50);
@@ -951,7 +1010,7 @@
             btn('anime', 'Випадкове аніме', 'ai_show_btn_anime');
         }
         addButtons();
-        console.log('AI System: V55 (Toggle Assistant Button) - UA Patched');
+        console.log('AI System: V55.1 (Reliable Country Filter) - UA Patched');
     }
 
     if (!window.plugin_ai_search_ready) {
