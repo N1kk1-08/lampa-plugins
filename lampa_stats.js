@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v067) return;
-    window.lampa_ukrainian_stats_v067 = true;
+    if (window.lampa_ukrainian_stats_v068) return;
+    window.lampa_ukrainian_stats_v068 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -783,6 +783,18 @@
             LevelSystem.checkLevelUp();
             return Math.floor(safe);
         },
+        // Нарахування «живих» секунд від wall-clock таймера сесії
+        addWatchSeconds: function (sec, meta) {
+            sec = Math.floor(Number(sec) || 0);
+            if (sec <= 0) return 0;
+            // захист від божевільних значень (макс 6 год за один commit)
+            sec = Math.min(sec, 21600);
+            this.data.seconds_watched += sec;
+            this.enrich(sec, meta);
+            this.save();
+            LevelSystem.checkLevelUp();
+            return sec;
+        },
         enrich: function (sec, meta) {
             if (!sec) return;
             var now = new Date();
@@ -1037,86 +1049,45 @@
     };
 
     // ===================== Tracker =====================
+
     var Tracker = {
         timer: null,
         initialized: false,
         currentMovie: null,
-        lastTickAt: 0,
-        // true після external / android / torrent без внутрішнього video
-        externalActive: false,
-        externalStartedAt: 0,
-        sessionStartedAt: 0,
         currentTimelineHash: null,
+
+        // Wall-clock session
+        sessionMovie: null,
+        sessionRunning: false,
+        sessionStartedAt: 0,   // last resume timestamp
+        sessionAccumMs: 0,     // paused/accumulated ms
+        sessionHadPlay: false,
+        videoHooked: false,
 
         init: function () {
             if (this.initialized) return;
             this.initialized = true;
             var self = this;
 
+            // ---- Player.play: картка + старт сесії (online + torrent) ----
             try {
                 if (Lampa.Player && typeof Lampa.Player.play === 'function' && !Lampa.Player._stats_play_hooked) {
                     Lampa.Player._stats_play_hooked = true;
                     var _play = Lampa.Player.play.bind(Lampa.Player);
                     Lampa.Player.play = function (data) {
                         try {
-                            if (data) {
-                                var movie = data.card || data.movie || null;
-                                // TorrServe / torrent: element без card — беремо з Activity + season/episode з файлу
-                                if (!movie) {
-                                    try {
-                                        var act = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
-                                        if (act) {
-                                            movie = act.movie || act.card || null;
-                                            if (!movie && act.object) movie = act.object.movie || act.object.card || null;
-                                        }
-                                    } catch (eA) {}
+                            var movie = self.resolveMovieFromPlay(data);
+                            if (movie) {
+                                Media.remember(movie);
+                                movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
+                                self.currentMovie = movie;
+                                if (data && data.timeline && data.timeline.hash) {
+                                    self.currentTimelineHash = data.timeline.hash;
+                                } else if (movie.timeline && movie.timeline.hash) {
+                                    self.currentTimelineHash = movie.timeline.hash;
                                 }
-                                if (!movie && (data.title || data.fname || data.original_title)) {
-                                    movie = {
-                                        title: data.title || data.fname || data.original_title || '',
-                                        name: data.name || data.title || data.fname || '',
-                                        original_title: data.original_title || '',
-                                        id: data.id || data.tmdb_id || ''
-                                    };
-                                    try {
-                                        var act2 = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
-                                        if (act2 && (act2.id || (act2.card && act2.card.id))) {
-                                            movie.id = act2.id || act2.card.id;
-                                            if (act2.card) movie = Object.assign({}, act2.card, movie);
-                                        }
-                                    } catch (eB) {}
-                                }
-                                if (movie) {
-                                    if (data.season != null) {
-                                        movie = Object.assign({}, movie, { season_number: data.season, season: data.season });
-                                    }
-                                    if (data.episode != null) {
-                                        movie = Object.assign({}, movie, { episode_number: data.episode, episode: data.episode });
-                                    }
-                                    if (data.timeline) {
-                                        movie = Object.assign({}, movie, { timeline: data.timeline });
-                                    }
-                                    Media.remember(movie);
-                                    movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
-                                    Tracker.currentMovie = movie;
-                                    Tracker.sessionStartedAt = Date.now();
-                                    Tracker.currentTimelineHash = (data.timeline && data.timeline.hash) || (movie.timeline && movie.timeline.hash) || null;
-                                    // Торрент / android-шлях часто без події external — позначимо сесію
-                                    if (data.torrent_hash || data.Timeline || data.timeline || data.url) {
-                                        // не ставимо externalActive одразу; seed + flush по callback/timeline
-                                    }
-                                    MetaLoader.enrich(movie);
-                                    try {
-                                        var id0 = Media.getId(movie);
-                                        if (StatsDB.getLast(id0) === 0) {
-                                            var t0 = Tracker.readTimelineTime(movie);
-                                            if (t0 > 10) {
-                                                StatsDB.setLast(id0, t0);
-                                                StatsDB.save();
-                                            }
-                                        }
-                                    } catch (eSeed0) {}
-                                }
+                                MetaLoader.enrich(movie);
+                                self.beginSession(movie);
                             }
                         } catch (err) {}
                         return _play(data);
@@ -1127,60 +1098,70 @@
             try {
                 if (Lampa.Player && typeof Lampa.Player.callback === 'function') {
                     Lampa.Player.callback(function () {
-                        // TorrServe + VLC: іноді немає події external — flush якщо є currentMovie
-                        if (!self.currentMovie && !self.externalActive) return;
-                        [500, 1500, 3500, 6000, 10000].forEach(function (ms) {
-                            setTimeout(function () { self.flushExternal(self.currentMovie, true); }, ms);
-                        });
+                        setTimeout(function () { self.endSession('callback'); }, 300);
+                        setTimeout(function () { self.endSession('callback-late'); }, 2000);
                     });
                 }
             } catch (e) {}
 
             try {
                 if (Lampa.Player && Lampa.Player.listener) {
-                    Lampa.Player.listener.follow('start', function (e) { self.onStart(e); });
-                    Lampa.Player.listener.follow('ready', function (e) { self.onStart(e); });
+                    Lampa.Player.listener.follow('start', function (e) {
+                        self.onPlayerStart(e);
+                    });
+                    Lampa.Player.listener.follow('ready', function (e) {
+                        self.onPlayerStart(e);
+                        self.hookVideoElement();
+                    });
                     Lampa.Player.listener.follow('external', function (e) {
-                        self.externalActive = true;
-                        self.externalStartedAt = Date.now();
-                        if (!self.sessionStartedAt) self.sessionStartedAt = Date.now();
-                        self.onStart(e);
-                        setTimeout(function () { self.seedExternalPosition(self.currentMovie); }, 300);
+                        self.onPlayerStart(e);
+                        // Зовнішній: таймер йде wall-clock до закриття (паузу MX/VLC не бачимо)
+                        self.beginSession(self.currentMovie || self.resolveMovieFromPlay(e));
                     });
                     Lampa.Player.listener.follow('destroy', function () {
-                        [400, 1000, 2000, 4000, 7000, 12000].forEach(function (ms) {
-                            setTimeout(function () { self.flushExternal(self.currentMovie, true); }, ms);
-                        });
+                        self.endSession('destroy');
+                        setTimeout(function () { self.endSession('destroy-late'); }, 1500);
                         setTimeout(function () {
-                            self.externalActive = false;
-                            self.currentTimelineHash = null;
                             self.currentMovie = null;
-                            self.sessionStartedAt = 0;
-                        }, 15000);
+                            self.currentTimelineHash = null;
+                        }, 5000);
                     });
+                    // pause / play якщо є
+                    try {
+                        Lampa.Player.listener.follow('pause', function () { self.pauseSession(); });
+                        Lampa.Player.listener.follow('play', function () { self.resumeSession(); });
+                    } catch (e2) {}
                 }
             } catch (e) {}
 
             try {
                 if (Lampa.PlayerVideo && Lampa.PlayerVideo.listener) {
-                    Lampa.PlayerVideo.listener.follow('timeupdate', function (e) { self.onVideo(e); });
+                    Lampa.PlayerVideo.listener.follow('play', function () {
+                        self.hookVideoElement();
+                        self.resumeSession();
+                    });
+                    Lampa.PlayerVideo.listener.follow('pause', function () {
+                        self.pauseSession();
+                    });
+                    Lampa.PlayerVideo.listener.follow('ended', function () {
+                        self.endSession('ended');
+                    });
+                    Lampa.PlayerVideo.listener.follow('timeupdate', function () {
+                        // лише для підчеплення video element, не для нарахування
+                        self.hookVideoElement();
+                    });
                 }
             } catch (e) {}
 
-            try {
-                if (Lampa.Timeline && Lampa.Timeline.listener) {
-                    Lampa.Timeline.listener.follow('update', function (e) { self.onTimeline(e); });
-                }
-            } catch (e) {}
+            // Timeline більше НЕ нараховує час (лише completion-підказка не потрібна)
+            // onTimeline прибрано навмисно
 
             try {
                 Lampa.Listener.follow('activity', function (e) {
                     if (!e) return;
-                    if (!self.currentMovie && !self.externalActive) return;
                     if (e.type === 'start' || e.type === 'archive' || e.type === 'resume') {
-                        [600, 2000, 4500].forEach(function (ms) {
-                            setTimeout(function () { self.flushExternal(self.currentMovie, true); }, ms);
-                        });
+                        // повернення з зовнішнього — закрити сесію якщо ще відкрита
+                        setTimeout(function () { self.endSession('activity'); }, 400);
                     }
                 });
             } catch (e) {}
@@ -1205,290 +1186,205 @@
                         movie = DomMeta.mergeInto(movie);
                         Media.remember(movie);
                         MetaLoader.enrich(movie);
-                        if (self.currentMovie && Media.labelOf(self.currentMovie) === Media.labelOf(movie)) {
-                            self.currentMovie = Media.lastCard;
-                        }
                     }, 400);
                 });
             } catch (e) {}
 
-            this.timer = setInterval(function () { self.tick(); }, CONFIG.interval);
+            // Резервний тік: якщо video грає — сесія running; якщо на паузі — pause
+            this.timer = setInterval(function () { self.watchdog(); }, 2000);
         },
 
-        seedExternalPosition: function (movie) {
-            if (!movie || !Settings.collecting()) return;
-            try {
-                var id = Media.getId(movie);
-                var t = this.readTimelineTime(movie);
-                if (t > 10 && StatsDB.getLast(id) === 0) {
-                    StatsDB.setLast(id, t);
-                    StatsDB.save();
-                } else if (t > 10) {
-                    // вже є last — не чіпаємо (не накручуємо)
-                }
-            } catch (e) {}
-        },
-
-        readTimelineTime: function (movie) {
-            var time = 0, duration = 0;
-            try {
-                if (movie && movie.timeline && Number.isFinite(Number(movie.timeline.time))) {
-                    time = Number(movie.timeline.time);
-                    duration = Number(movie.timeline.duration) || 0;
-                }
-            } catch (e0) {}
-            try {
-                if (Lampa.Timeline && typeof Lampa.Timeline.view === 'function') {
-                    var hashes = [];
-                    if (this.currentTimelineHash) hashes.push(this.currentTimelineHash);
-                    try { if (movie && movie.timeline && movie.timeline.hash) hashes.push(movie.timeline.hash); } catch (e1) {}
-                    // Типові хеші Lampa: title / season+episode+title / id
-                    if (movie && Lampa.Utils && typeof Lampa.Utils.hash === 'function') {
-                        var ot = movie.original_title || movie.original_name || movie.title || movie.name || '';
-                        var season = movie.season_number || movie.season;
-                        var episode = movie.episode_number || movie.episode;
-                        if (season != null && episode != null && ot) {
-                            hashes.push(Lampa.Utils.hash([season, episode, ot].join('')));
-                        }
-                        if (ot) hashes.push(Lampa.Utils.hash(String(ot)));
-                        var idk = String(movie.id || movie.tmdb_id || '');
-                        if (idk) hashes.push(Lampa.Utils.hash(idk + ':' + String(ot)));
+        resolveMovieFromPlay: function (data) {
+            if (!data) data = {};
+            var movie = data.card || data.movie || null;
+            if (!movie) {
+                try {
+                    var act = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
+                    if (act) {
+                        movie = act.movie || act.card || null;
+                        if (!movie && act.object) movie = act.object.movie || act.object.card || null;
                     }
-                    for (var hi = 0; hi < hashes.length; hi++) {
-                        var h = hashes[hi];
-                        if (!h) continue;
-                        var road = Lampa.Timeline.view(h);
-                        if (road && Number.isFinite(Number(road.time)) && Number(road.time) > time) {
-                            time = Number(road.time);
-                            duration = Number(road.duration) || duration;
-                        }
+                } catch (e) {}
+            }
+            if (!movie && (data.title || data.fname || data.original_title)) {
+                movie = {
+                    title: data.title || data.fname || data.original_title || '',
+                    name: data.name || data.title || data.fname || '',
+                    original_title: data.original_title || '',
+                    id: data.id || data.tmdb_id || ''
+                };
+                try {
+                    var act2 = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
+                    if (act2) {
+                        if (act2.card) movie = Object.assign({}, act2.card, movie);
+                        else if (act2.movie) movie = Object.assign({}, act2.movie, movie);
+                        if (act2.id && !movie.id) movie.id = act2.id;
                     }
-                }
-            } catch (e2) {}
-            try {
-                if (Lampa.Storage) {
-                    var keys = ['player_road_last', 'timeline_last'];
-                    for (var i = 0; i < keys.length; i++) {
-                        var last = Lampa.Storage.get(keys[i]);
-                        if (last && Number.isFinite(Number(last.time)) && Number(last.time) > time) {
-                            time = Number(last.time);
-                            duration = Number(last.duration) || duration;
-                        }
-                    }
-                    // file_view / file_view_{profile} — повна карта прогресу (торренти)
-                    var fvKeys = ['file_view', 'online_view'];
-                    try {
-                        if (Lampa.Storage.field) {
-                            // profile-aware ім'я, якщо доступне через Timeline
-                        }
-                    } catch (eP) {}
-                    fvKeys.forEach(function (fk) {
-                        try {
-                            var map = Lampa.Storage.get(fk);
-                            if (!map || typeof map !== 'object') return;
-                            Object.keys(map).forEach(function (k) {
-                                var r = map[k];
-                                if (r && Number.isFinite(Number(r.time)) && Number(r.time) > time) {
-                                    // беремо найбільший свіжий time лише якщо є current hash match або один кандидат
-                                    if (Tracker.currentTimelineHash && k === Tracker.currentTimelineHash) {
-                                        time = Number(r.time);
-                                        duration = Number(r.duration) || duration;
-                                    }
-                                }
-                            });
-                            if (Tracker.currentTimelineHash && map[Tracker.currentTimelineHash]) {
-                                var rr = map[Tracker.currentTimelineHash];
-                                if (rr && Number.isFinite(Number(rr.time))) {
-                                    time = Math.max(time, Number(rr.time));
-                                    duration = Number(rr.duration) || duration;
-                                }
-                            }
-                        } catch (eFv) {}
-                    });
-                }
-            } catch (e3) {}
-            return time;
+                } catch (e2) {}
+            }
+            if (!movie) {
+                try {
+                    movie = Current.getMovie();
+                } catch (e3) {}
+            }
+            if (!movie) return null;
+            if (data.season != null) {
+                movie = Object.assign({}, movie, { season_number: data.season, season: data.season });
+            }
+            if (data.episode != null) {
+                movie = Object.assign({}, movie, { episode_number: data.episode, episode: data.episode });
+            }
+            if (data.timeline) {
+                movie = Object.assign({}, movie, { timeline: data.timeline });
+            }
+            return movie;
         },
 
-        readTimelineDuration: function (movie) {
-            var duration = 0;
-            try {
-                if (movie && movie.timeline && Number.isFinite(Number(movie.timeline.duration))) {
-                    duration = Number(movie.timeline.duration);
-                }
-            } catch (e) {}
-            try {
-                if (this.currentTimelineHash && Lampa.Timeline && typeof Lampa.Timeline.view === 'function') {
-                    var road = Lampa.Timeline.view(this.currentTimelineHash);
-                    if (road && Number.isFinite(Number(road.duration))) duration = Number(road.duration) || duration;
-                }
-            } catch (e2) {}
-            return duration;
-        },
-
-        onStart: function (e) {
-            var movie = Media.normalize(e) || Current.getMovie();
+        onPlayerStart: function (e) {
+            var movie = this.resolveMovieFromPlay(e) || this.currentMovie || Current.getMovie();
             if (!movie) return;
             Media.remember(movie);
             movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
             this.currentMovie = movie;
-            // Seed позиції з Timeline (недоглянута серія з історії) — без нарахування
-            try {
-                if (!this.externalActive) {
-                    var id = Media.getId(movie);
-                    if (StatsDB.getLast(id) === 0) {
-                        var t = this.readTimelineTime(movie);
-                        if (t > 10) {
-                            StatsDB.setLast(id, t);
-                            StatsDB.save();
-                        }
-                    }
-                }
-            } catch (eSeed) {}
+            this.beginSession(movie);
             MetaLoader.enrich(movie, function (rich) {
                 if (rich) {
                     Tracker.currentMovie = MetaStore.applyToMovie(CardCache.get(rich) || rich);
                     Media.remember(rich);
+                    if (Tracker.sessionMovie) {
+                        Tracker.sessionMovie = Tracker.currentMovie;
+                    }
                 }
             });
+            this.hookVideoElement();
         },
 
-        flushExternal: function (movie, forceSession) {
+        beginSession: function (movie) {
             if (!Settings.collecting()) return;
-            // external подія АБО сесія play (торрент/VLC без external)
-            if (!this.externalActive && !forceSession) return;
-            if (!this.externalActive && forceSession && !this.currentMovie && !this.sessionStartedAt) return;
-            movie = movie || this.currentMovie || Media.lastCard;
+            movie = movie || this.currentMovie;
             if (!movie) return;
 
-            var time = 0, duration = 0;
-
-            try {
-                var v = Current.getVideoState();
-                if (v) {
-                    time = v.time;
-                    duration = v.duration;
+            var id = Media.getId(movie);
+            // Новий файл/серія в торренті — закрити попередню сесію
+            if (this.sessionMovie && this.sessionHadPlay) {
+                var prevId = Media.getId(this.sessionMovie);
+                if (prevId !== id) {
+                    this.endSession('switch');
                 }
-            } catch (e) {}
+            }
 
-            var t2 = this.readTimelineTime(movie);
-            if (t2 > time) time = t2;
-            var d2 = this.readTimelineDuration(movie);
-            if (d2 > duration) duration = d2;
+            this.sessionMovie = movie;
+            this.currentMovie = movie;
+            this.sessionHadPlay = true;
 
-            if (Number.isFinite(time) && time > 0) {
-                var id = Media.getId(movie);
-                var prev = StatsDB.getLast(id);
-                if (time <= prev + 5) return;
-
-                // Обмежуємо wall-time сесії — щоб старий торрент-таймкод не накрутив години
-                var wallCap = 14400;
-                if (this.sessionStartedAt) {
-                    wallCap = Math.max(60, (Date.now() - this.sessionStartedAt) / 1000 + 45);
+            if (!this.sessionRunning) {
+                // нова або після паузи
+                if (!this.sessionStartedAt && this.sessionAccumMs === 0) {
+                    // чистий старт
+                    this.sessionAccumMs = 0;
                 }
-                var delta = Math.min(Math.max(0, time - prev), wallCap);
-
-                this.apply(prev + delta, duration || 0, Math.max(delta, 60), { fromExternal: true });
-
-                if (movie && Number.isFinite(duration) && duration > 30) {
-                    var ratio = time / duration;
-                    var remaining = duration - time;
-                    if (ratio >= 0.85 || (remaining < 120 && ratio > 0.65)) {
-                        var meta = Media.metaFrom(movie);
-                        StatsDB.markCompleted(id, meta, movie);
-                    }
-                }
+                this.sessionStartedAt = Date.now();
+                this.sessionRunning = true;
             }
         },
 
-        apply: function (time, duration, wallDelta, opts) {
-            if (!Settings.collecting()) return;
-            opts = opts || {};
+        pauseSession: function () {
+            if (!this.sessionRunning || !this.sessionStartedAt) return;
+            var dt = Date.now() - this.sessionStartedAt;
+            if (dt > 0) this.sessionAccumMs += dt;
+            this.sessionStartedAt = 0;
+            this.sessionRunning = false;
+        },
 
-            var movie = this.currentMovie || Current.getMovie() || Media.lastCard;
-            if (movie) {
-                movie = CardCache.get(movie) || movie;
-                movie = MetaStore.applyToMovie(movie);
+        resumeSession: function () {
+            if (!Settings.collecting()) return;
+            if (!this.sessionMovie && this.currentMovie) this.sessionMovie = this.currentMovie;
+            if (!this.sessionMovie) return;
+            if (this.sessionRunning) return;
+            this.sessionStartedAt = Date.now();
+            this.sessionRunning = true;
+            this.sessionHadPlay = true;
+        },
+
+        endSession: function (reason) {
+            if (!this.sessionHadPlay && !this.sessionRunning && this.sessionAccumMs === 0) return;
+
+            // зупинити running
+            if (this.sessionRunning && this.sessionStartedAt) {
+                var dt = Date.now() - this.sessionStartedAt;
+                if (dt > 0) this.sessionAccumMs += dt;
             }
+            this.sessionRunning = false;
+            this.sessionStartedAt = 0;
+
+            var ms = this.sessionAccumMs;
+            this.sessionAccumMs = 0;
+            this.sessionHadPlay = false;
+
+            var movie = this.sessionMovie || this.currentMovie;
+            this.sessionMovie = null;
+
+            if (!movie || !Settings.collecting()) return;
+
+            // мінімум 15 сек — відсікаємо випадкові відкриття/закриття
+            var sec = Math.floor(ms / 1000);
+            if (sec < 15) return;
 
             var meta = Media.metaFrom(movie);
+            StatsDB.addWatchSeconds(sec, meta);
 
-            if (Media.lastCard) {
-                var alt = Media.metaFrom(Media.lastCard);
-                if (alt) {
-                    if ((!meta || !meta.genres || !meta.genres.length) && alt.genres && alt.genres.length) {
-                        meta = meta || {};
-                        meta.genres = alt.genres;
-                    }
-                    if (meta && (!meta.actors || !meta.actors.length) && alt.actors && alt.actors.length) meta.actors = alt.actors;
-                    if (meta && !meta.year && alt.year) meta.year = alt.year;
-                    if (meta && !meta.poster && alt.poster) meta.poster = alt.poster;
-                    if (meta && !meta.title && alt.title) meta.title = alt.title;
-                    if (meta && !meta.baseId && alt.baseId) meta.baseId = alt.baseId;
-                    if (meta && meta.isEpisode == null) meta.isEpisode = alt.isEpisode;
+            // completed: якщо по Timeline майже кінець — опційно
+            try {
+                var t = 0, d = 0;
+                if (movie.timeline) {
+                    t = Number(movie.timeline.time) || 0;
+                    d = Number(movie.timeline.duration) || 0;
                 }
-            }
-
-            var id = movie ? Media.getId(movie) : 'session:anon';
-            StatsDB.addProgress(id, time, duration, wallDelta, meta, opts);
-
-            var isNearEnd = false;
-            if (movie && Number.isFinite(duration) && duration > 30) {
-                var ratio = time / duration;
-                var remaining = duration - time;
-                isNearEnd = (ratio >= CONFIG.completion) || (remaining < 90 && ratio > 0.70);
-            }
-
-            if (isNearEnd) {
-                StatsDB.markCompleted(Media.getId(movie), meta, movie);
-            }
+                if (d > 60 && t / d >= 0.9) {
+                    StatsDB.markCompleted(Media.getId(movie), meta, movie);
+                }
+            } catch (e) {}
         },
 
-        onVideo: function (e) {
-            if (!Settings.collecting() || !e) return;
-            var time = Number(e.current !== undefined ? e.current : e.time);
-            var duration = Number(e.duration);
-            if (!Number.isFinite(time) || time < 0) return;
-            this.apply(time, Number.isFinite(duration) ? duration : 0, 2);
+        hookVideoElement: function () {
+            var self = this;
+            try {
+                var video = null;
+                if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.video === 'function') {
+                    video = Lampa.PlayerVideo.video();
+                }
+                if (!video) video = document.querySelector('.player video') || document.querySelector('video');
+                if (!video || video._stats_clock_hooked) return;
+                video._stats_clock_hooked = true;
+                video.addEventListener('play', function () { self.resumeSession(); });
+                video.addEventListener('playing', function () { self.resumeSession(); });
+                video.addEventListener('pause', function () { self.pauseSession(); });
+                video.addEventListener('ended', function () { self.endSession('video-ended'); });
+                // якщо вже грає
+                if (!video.paused && !video.ended) {
+                    self.resumeSession();
+                }
+            } catch (e) {}
         },
 
-        onTimeline: function (e) {
-            if (!Settings.collecting() || !e || !e.data) return;
-            var road = e.data.road || e.data;
-            if (!road) return;
-            var time = Number(road.time);
-            var duration = Number(road.duration);
-            if (!Number.isFinite(time) || time < 0) return;
-            if (road.hash) this.currentTimelineHash = road.hash;
-
-            var noInternalVideo = false;
-            try { noInternalVideo = !Current.getVideoState(); } catch (eV) { noInternalVideo = true; }
-
-            if (this.externalActive || (this.sessionStartedAt && noInternalVideo)) {
-                var prev = 0;
-                try {
-                    var m = this.currentMovie || Current.getMovie() || Media.lastCard;
-                    if (m) prev = StatsDB.getLast(Media.getId(m));
-                } catch (eP) {}
-                var wallCap = this.sessionStartedAt
-                    ? Math.max(60, (Date.now() - this.sessionStartedAt) / 1000 + 45)
-                    : 600;
-                var delta = Math.min(Math.max(0, time - prev), wallCap);
-                // передаємо «віртуальний» time = prev+delta щоб не з'їсти seed-логіку неправильно
-                this.apply(prev + delta, Number.isFinite(duration) ? duration : 0, Math.max(delta, 30), { fromExternal: true });
-            } else {
-                this.apply(time, Number.isFinite(duration) ? duration : 0, 600);
-            }
-        },
-
-        tick: function () {
+        watchdog: function () {
             if (!Settings.collecting()) return;
-            var video = Current.getVideoState();
-            if (!video) return;
-            var now = Date.now();
-            var wall = this.lastTickAt ? Math.max(0, (now - this.lastTickAt) / 1000) : 1;
-            this.lastTickAt = now;
-            this.apply(video.time, video.duration, wall + 1);
+            try {
+                var video = null;
+                if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.video === 'function') {
+                    video = Lampa.PlayerVideo.video();
+                }
+                if (!video) video = document.querySelector('.player video') || document.querySelector('video');
+                if (video && !video.paused && !video.ended) {
+                    if (this.currentMovie || this.sessionMovie) {
+                        if (!this.sessionRunning) this.resumeSession();
+                    }
+                    this.hookVideoElement();
+                } else if (video && video.paused && this.sessionRunning) {
+                    // внутрішній на паузі
+                    this.pauseSession();
+                }
+            } catch (e) {}
         }
     };
 
@@ -2011,14 +1907,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v067-style');
+        var old = document.getElementById('lampa-stats-v068-style');
         if (old) old.remove();
-        ['lampa-stats-v066-style','lampa-stats-v065-style','lampa-stats-v064-style','lampa-stats-v063-style','lampa-stats-v062-style','lampa-stats-v061-style','lampa-stats-v060-style'].forEach(function (id) {
+        ['lampa-stats-v067-style','lampa-stats-v066-style','lampa-stats-v065-style','lampa-stats-v064-style','lampa-stats-v063-style','lampa-stats-v062-style','lampa-stats-v061-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v067-style';
+        s.id = 'lampa-stats-v068-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2035,7 +1931,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.67 ready (TorrServe/torrent + external timeline)');
+            console.log('Lampa stats v0.68 ready (wall-clock session timer)');
         } catch (e) {
             console.error('stats init', e);
         }
