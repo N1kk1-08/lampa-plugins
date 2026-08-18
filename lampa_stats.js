@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v070) return;
-    window.lampa_ukrainian_stats_v070 = true;
+    if (window.lampa_ukrainian_stats_v071) return;
+    window.lampa_ukrainian_stats_v071 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1079,6 +1079,9 @@
                     Lampa.Player.play = function (data) {
                         try {
                             var movie = self.resolveMovieFromPlay(data);
+                            if (!movie) {
+                                try { movie = Current.getMovie(); } catch (e0) {}
+                            }
                             if (movie) {
                                 Media.remember(movie);
                                 movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
@@ -1090,7 +1093,23 @@
                                 }
                                 MetaLoader.enrich(movie);
                                 self.beginSession(movie);
+                            } else {
+                                // online інколи віддає картку пізніше
+                                setTimeout(function () {
+                                    var m2 = self.resolveMovieFromPlay(data) || Current.getMovie();
+                                    if (m2) {
+                                        self.currentMovie = m2;
+                                        self.beginSession(m2);
+                                    }
+                                }, 800);
                             }
+                            // Android external player setting
+                            try {
+                                var ext = Lampa.Storage.get('player') || Lampa.Storage.field('player');
+                                if (ext && String(ext).toLowerCase() !== 'inner' && String(ext).toLowerCase() !== 'lampa') {
+                                    self.sessionIsExternal = true;
+                                }
+                            } catch (eP) {}
                         } catch (err) {}
                         return _play(data);
                     };
@@ -1100,9 +1119,21 @@
             try {
                 if (Lampa.Player && typeof Lampa.Player.callback === 'function') {
                     Lampa.Player.callback(function () {
-                        // Timeline з Android інколи пишеться із затримкою
-                        [500, 1500, 3500, 6000].forEach(function (ms) {
-                            setTimeout(function () { self.endSession('callback'); }, ms);
+                        // callback при старті external — ігноруємо якщо сесія ще «коротка»
+                        // реальний commit при поверненні в activity
+                        setTimeout(function () {
+                            if (self.sessionIsExternal) {
+                                var lived = self.sessionAccumMs;
+                                if (self.sessionRunning && self.sessionStartedAt) {
+                                    lived += Date.now() - self.sessionStartedAt;
+                                }
+                                // якщо менше 30с — це старт плеєра, не кінець перегляду
+                                if (lived < 30000) return;
+                            }
+                            self.endSession('callback');
+                        }, 600);
+                        [3000, 7000, 12000].forEach(function (ms) {
+                            setTimeout(function () { self.endSession('callback-late'); }, ms);
                         });
                     });
                 }
@@ -1120,16 +1151,26 @@
                     Lampa.Player.listener.follow('external', function (e) {
                         self.sessionIsExternal = true;
                         self.onPlayerStart(e);
-                        self.beginSession(self.currentMovie || self.resolveMovieFromPlay(e));
+                        var m = self.currentMovie || self.resolveMovieFromPlay(e) || Current.getMovie();
+                        if (m) self.beginSession(m);
+                        // гарантія: external-сесія running (навіть якщо destroy прийде слідом)
+                        self.sessionIsExternal = true;
+                        if (!self.sessionRunning) {
+                            self.sessionStartedAt = Date.now();
+                            self.sessionRunning = true;
+                            self.sessionHadPlay = true;
+                        }
                     });
                     Lampa.Player.listener.follow('destroy', function () {
-                        [400, 1200, 3000, 6000].forEach(function (ms) {
+                        // При запуску VLC/MX Lampa часто шле destroy ОДРАЗУ —
+                        // сесію не закриваємо, інакше таймер зупиняється на 0.5с.
+                        if (self.sessionIsExternal) {
+                            // лише «заморозити» UI-стан, таймер external продовжує wall-clock
+                            return;
+                        }
+                        [500, 2000, 5000].forEach(function (ms) {
                             setTimeout(function () { self.endSession('destroy'); }, ms);
                         });
-                        setTimeout(function () {
-                            self.currentMovie = null;
-                            self.currentTimelineHash = null;
-                        }, 10000);
                     });
                     // pause / play якщо є
                     try {
@@ -1165,8 +1206,10 @@
                 Lampa.Listener.follow('activity', function (e) {
                     if (!e) return;
                     if (e.type === 'start' || e.type === 'archive' || e.type === 'resume') {
-                        // повернення з зовнішнього — закрити сесію якщо ще відкрита
-                        setTimeout(function () { self.endSession('activity'); }, 400);
+                        // Головна точка фіксації після VLC/MX
+                        [800, 2500, 5000, 9000].forEach(function (ms) {
+                            setTimeout(function () { self.endSession('activity'); }, ms);
+                        });
                     }
                 });
             } catch (e) {}
@@ -1455,6 +1498,7 @@
             if (this._sessionCommitted) return;
             if (!this.sessionHadPlay && !this.sessionRunning && this.sessionAccumMs === 0) return;
 
+            // зняти поточний відрізок у accum
             if (this.sessionRunning && this.sessionStartedAt) {
                 var dt = Date.now() - this.sessionStartedAt;
                 if (dt > 0) this.sessionAccumMs += dt;
@@ -1463,14 +1507,27 @@
             this.sessionStartedAt = 0;
 
             var ms = this.sessionAccumMs;
-            var movie = this.sessionMovie || this.currentMovie;
+            var movie = this.sessionMovie || this.currentMovie || Media.lastCard;
             var seed = this.sessionSeedTime || 0;
             var wasExternal = this.sessionIsExternal;
 
-            if (!movie || !Settings.collecting()) return;
+            if (!Settings.collecting()) return;
+            if (!movie) {
+                // спроба відновити картку
+                try { movie = Current.getMovie(); } catch (eM) {}
+            }
+            if (!movie) return;
 
             var wallSec = Math.floor(ms / 1000);
-            if (wallSec < 15) return;
+
+            // Занадто рано (типовий destroy/callback при старті VLC) —
+            // НЕ комітимо і ПРОДОВЖУЄМО таймер
+            if (wallSec < 20) {
+                this.sessionRunning = true;
+                this.sessionStartedAt = Date.now();
+                this.sessionHadPlay = true;
+                return;
+            }
 
             var tNow = this.readTimelineTime(movie);
             var tlDuration = this._lastTimelineDuration || 0;
@@ -1502,21 +1559,6 @@
             }
 
             sec = Math.min(sec, 21600);
-
-            // Для external без дельти timeline — не комітимо занадто рано (чекаємо delayed)
-            if (wasExternal && tlDelta < 15 && wallSec >= 120) {
-                // якщо вже є runtime — можемо комітити з cap
-                if (runtimeSec < 300 && (reason === 'callback' || reason === 'destroy')) {
-                    // ще рано і немає runtime — почекати наступний delayed
-                    if (reason !== 'callback' && reason !== 'destroy') { /* fallthrough */ }
-                    else {
-                        // дозволяємо коміт з wall+cap лише на пізніх спробах
-                        var late = (reason === 'callback' || reason === 'destroy');
-                        // multiple timeouts — use wall after 3s delays by checking wallSec already includes full time
-                        // commit with runtime cap if available, else wall
-                    }
-                }
-            }
 
             if (sec < 15) return;
 
@@ -2112,14 +2154,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v070-style');
+        var old = document.getElementById('lampa-stats-v071-style');
         if (old) old.remove();
-        ['lampa-stats-v069-style','lampa-stats-v068-style','lampa-stats-v067-style','lampa-stats-v066-style','lampa-stats-v065-style','lampa-stats-v064-style','lampa-stats-v063-style'].forEach(function (id) {
+        ['lampa-stats-v070-style','lampa-stats-v069-style','lampa-stats-v068-style','lampa-stats-v067-style','lampa-stats-v066-style','lampa-stats-v065-style','lampa-stats-v064-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v070-style';
+        s.id = 'lampa-stats-v071-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2136,7 +2178,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.70 ready (runtime cap + robust completed)');
+            console.log('Lampa stats v0.71 ready (external session not killed on destroy)');
         } catch (e) {
             console.error('stats init', e);
         }
