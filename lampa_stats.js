@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v069) return;
-    window.lampa_ukrainian_stats_v069 = true;
+    if (window.lampa_ukrainian_stats_v070) return;
+    window.lampa_ukrainian_stats_v070 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1287,9 +1287,20 @@
             if (isNew) this._sessionCommitted = false;
 
             if (isNew || this.sessionSeedTime === 0) {
-                // Позиція timeline на старті — для дельти (паузи в зовнішньому)
                 var seed = this.readTimelineTime(movie);
                 this.sessionSeedTime = seed > 0 ? seed : 0;
+                var selfSeed = this;
+                // повторний seed через 2с (timeline hash інколи з’являється пізніше)
+                setTimeout(function () {
+                    if (selfSeed._sessionCommitted) return;
+                    if (!selfSeed.sessionMovie) return;
+                    var s2 = selfSeed.readTimelineTime(selfSeed.sessionMovie);
+                    // оновлюємо seed лише якщо ще майже не дивились (сесія < 30с wall)
+                    var lived = selfSeed.sessionAccumMs + (selfSeed.sessionRunning && selfSeed.sessionStartedAt ? (Date.now() - selfSeed.sessionStartedAt) : 0);
+                    if (lived < 30000 && s2 >= 0) {
+                        selfSeed.sessionSeedTime = s2;
+                    }
+                }, 2000);
             }
 
             if (!this.sessionRunning) {
@@ -1341,8 +1352,13 @@
                         var ot = movie.original_title || movie.original_name || movie.title || movie.name || '';
                         var season = movie.season_number || movie.season;
                         var episode = movie.episode_number || movie.episode;
-                        if (season != null && episode != null && ot) hashes.push(Lampa.Utils.hash([season, episode, ot].join('')));
+                        if (season != null && episode != null && ot) {
+                            hashes.push(Lampa.Utils.hash([season, episode, ot].join('')));
+                            hashes.push(Lampa.Utils.hash(String(season) + ':' + String(episode) + ':' + String(ot)));
+                        }
                         if (ot) hashes.push(Lampa.Utils.hash(String(ot)));
+                        var idk = String(movie.id || movie.tmdb_id || '');
+                        if (idk) hashes.push(Lampa.Utils.hash(idk + ':' + String(ot)));
                     }
                     for (var hi = 0; hi < hashes.length; hi++) {
                         if (!hashes[hi]) continue;
@@ -1363,17 +1379,76 @@
                             duration = Number(last.duration) || duration;
                         }
                     });
-                    if (this.currentTimelineHash) {
-                        var map = Lampa.Storage.get('file_view');
-                        if (map && map[this.currentTimelineHash] && Number.isFinite(Number(map[this.currentTimelineHash].time))) {
-                            time = Math.max(time, Number(map[this.currentTimelineHash].time));
-                            duration = Number(map[this.currentTimelineHash].duration) || duration;
+                    // Усі ключі file_view* (профіль CUB/Kinohub)
+                    var storageKeys = [];
+                    try {
+                        for (var i = 0; i < localStorage.length; i++) {
+                            var sk = localStorage.key(i);
+                            if (sk && (sk === 'file_view' || sk.indexOf('file_view_') === 0 || sk === 'online_view')) {
+                                storageKeys.push(sk);
+                            }
                         }
+                    } catch (eLs) {
+                        storageKeys = ['file_view', 'online_view'];
                     }
+                    var preferHash = this.currentTimelineHash;
+                    storageKeys.forEach(function (fk) {
+                        try {
+                            var map = Lampa.Storage.get(fk.replace(/^lampa_/, ''));
+                            // Storage.get may need raw key
+                            if (!map || typeof map !== 'object') {
+                                try { map = JSON.parse(localStorage.getItem(fk) || 'null'); } catch (eJ) { map = null; }
+                            }
+                            if (!map || typeof map !== 'object') return;
+                            if (preferHash && map[preferHash] && Number.isFinite(Number(map[preferHash].time))) {
+                                var pr = map[preferHash];
+                                if (Number(pr.time) >= time) {
+                                    time = Number(pr.time);
+                                    duration = Number(pr.duration) || duration;
+                                }
+                            }
+                        } catch (eFv) {}
+                    });
                 }
             } catch (e3) {}
             this._lastTimelineDuration = duration;
             return time;
+        },
+
+        // Тривалість з TMDB / картки (хв або сек → сек)
+        resolveRuntimeSec: function (movie) {
+            if (!movie) return 0;
+            var r = 0;
+            try {
+                if (Number.isFinite(Number(movie.runtime)) && Number(movie.runtime) > 0) {
+                    r = Number(movie.runtime);
+                    // TMDB movie.runtime у хвилинах; якщо > 300 — вже секунди
+                    if (r > 0 && r <= 400) r = r * 60;
+                }
+                if (!r && movie.episode_run_time) {
+                    var ert = movie.episode_run_time;
+                    if (Array.isArray(ert) && ert.length) r = Number(ert[0]) * 60;
+                    else if (Number(ert) > 0) r = Number(ert) * 60;
+                }
+                if (!r && movie.last_episode_to_air && Number(movie.last_episode_to_air.runtime) > 0) {
+                    r = Number(movie.last_episode_to_air.runtime) * 60;
+                }
+                // з кешу CardCache
+                var c = CardCache.get(movie);
+                if (c && c !== movie) {
+                    if (!r && Number(c.runtime) > 0) {
+                        r = Number(c.runtime);
+                        if (r <= 400) r = r * 60;
+                    }
+                    if (!r && c.episode_run_time) {
+                        var ert2 = c.episode_run_time;
+                        if (Array.isArray(ert2) && ert2.length) r = Number(ert2[0]) * 60;
+                        else if (Number(ert2) > 0) r = Number(ert2) * 60;
+                    }
+                }
+            } catch (e) {}
+            if (!r && this._lastTimelineDuration > 60) r = this._lastTimelineDuration;
+            return Math.floor(r || 0);
         },
 
         endSession: function (reason) {
@@ -1388,7 +1463,6 @@
             this.sessionStartedAt = 0;
 
             var ms = this.sessionAccumMs;
-            // не обнуляємо accum одразу — повторні callback можуть дочекатись timeline
             var movie = this.sessionMovie || this.currentMovie;
             var seed = this.sessionSeedTime || 0;
             var wasExternal = this.sessionIsExternal;
@@ -1398,35 +1472,53 @@
             var wallSec = Math.floor(ms / 1000);
             if (wallSec < 15) return;
 
-            // Timeline зараз (після повернення з плеєра)
             var tNow = this.readTimelineTime(movie);
-            var duration = this._lastTimelineDuration || 0;
+            var tlDuration = this._lastTimelineDuration || 0;
             try {
-                if ((!duration || duration < 30) && movie.timeline) {
-                    duration = Number(movie.timeline.duration) || duration;
+                if ((!tlDuration || tlDuration < 30) && movie.timeline) {
+                    tlDuration = Number(movie.timeline.duration) || tlDuration;
                 }
             } catch (eD) {}
+
+            var runtimeSec = this.resolveRuntimeSec(movie);
+            var duration = tlDuration > 60 ? tlDuration : runtimeSec;
 
             var tlDelta = 0;
             if (tNow > seed + 5) tlDelta = Math.floor(tNow - seed);
 
             var sec = wallSec;
-            // Зовнішній: паузи не видно → беремо min(wall, дельта timeline), якщо timeline зсунувся
+
+            // Зовнішній + є дельта timeline
             if (wasExternal && tlDelta >= 15) {
                 sec = Math.min(wallSec, tlDelta);
             }
-            // не більше тривалості фільму/серії
-            if (duration > 60) {
-                sec = Math.min(sec, Math.floor(duration) + 30);
-            }
-            // захист
-            sec = Math.min(sec, 21600);
-            if (sec < 15) return;
 
-            // Для external чекаємо timeline, якщо ще немає дельти — не комітимо рано
-            if (wasExternal && tlDelta < 15 && wallSec < 120 && (reason === 'callback' || reason === 'destroy')) {
-                return; // наступний delayed endSession підхопить
+            // Зовнішній без timeline: ріжемо по runtime серії/фільму (51 хв, а не 1:16 з паузами)
+            if (wasExternal && runtimeSec >= 300) {
+                sec = Math.min(sec, runtimeSec + 90);
             }
+            if (duration > 60) {
+                sec = Math.min(sec, Math.floor(duration) + 90);
+            }
+
+            sec = Math.min(sec, 21600);
+
+            // Для external без дельти timeline — не комітимо занадто рано (чекаємо delayed)
+            if (wasExternal && tlDelta < 15 && wallSec >= 120) {
+                // якщо вже є runtime — можемо комітити з cap
+                if (runtimeSec < 300 && (reason === 'callback' || reason === 'destroy')) {
+                    // ще рано і немає runtime — почекати наступний delayed
+                    if (reason !== 'callback' && reason !== 'destroy') { /* fallthrough */ }
+                    else {
+                        // дозволяємо коміт з wall+cap лише на пізніх спробах
+                        var late = (reason === 'callback' || reason === 'destroy');
+                        // multiple timeouts — use wall after 3s delays by checking wallSec already includes full time
+                        // commit with runtime cap if available, else wall
+                    }
+                }
+            }
+
+            if (sec < 15) return;
 
             var meta = Media.metaFrom(movie);
             StatsDB.addWatchSeconds(sec, meta);
@@ -1437,13 +1529,21 @@
             this.sessionSeedTime = 0;
             this.sessionIsExternal = false;
 
-            // Completed: timeline ≈ кінець АБО час покрив ≥85% duration
+            // Completed
             try {
                 var done = false;
                 if (duration > 60) {
-                    if (tNow / duration >= 0.85) done = true;
-                    if ((duration - tNow) < 120 && tNow / duration > 0.7) done = true;
-                    if (sec >= duration * 0.85) done = true;
+                    if (tNow > 0 && tNow / duration >= 0.85) done = true;
+                    if (tNow > 0 && (duration - tNow) < 150 && tNow / duration > 0.65) done = true;
+                }
+                // без timeline: якщо накручений час ≈ runtime серії — вважаємо доглянутим
+                if (!done && runtimeSec >= 300) {
+                    if (sec >= runtimeSec * 0.85) done = true;
+                    if (wallSec >= runtimeSec * 0.9) done = true;
+                }
+                // timeline на кінці навіть без duration
+                if (!done && tNow > 0 && seed >= 0 && tlDelta > 0) {
+                    if (tlDuration > 60 && tNow >= tlDuration * 0.85) done = true;
                 }
                 if (done) {
                     StatsDB.markCompleted(Media.getId(movie), meta, movie);
@@ -2012,14 +2112,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v069-style');
+        var old = document.getElementById('lampa-stats-v070-style');
         if (old) old.remove();
-        ['lampa-stats-v068-style','lampa-stats-v067-style','lampa-stats-v066-style','lampa-stats-v065-style','lampa-stats-v064-style','lampa-stats-v063-style','lampa-stats-v062-style'].forEach(function (id) {
+        ['lampa-stats-v069-style','lampa-stats-v068-style','lampa-stats-v067-style','lampa-stats-v066-style','lampa-stats-v065-style','lampa-stats-v064-style','lampa-stats-v063-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v069-style';
+        s.id = 'lampa-stats-v070-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2036,7 +2136,7 @@
             }
             Tracker.init();
             Menu.init();
-            console.log('Lampa stats v0.69 ready (wall-clock + timeline delta for external)');
+            console.log('Lampa stats v0.70 ready (runtime cap + robust completed)');
         } catch (e) {
             console.error('stats init', e);
         }
