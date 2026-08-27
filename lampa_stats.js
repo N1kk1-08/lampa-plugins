@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v073) return;
-    window.lampa_ukrainian_stats_v073 = true;
+    if (window.lampa_ukrainian_stats_v074) return;
+    window.lampa_ukrainian_stats_v074 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1066,6 +1066,7 @@
         sessionSeedTime: 0,    // timeline position at session start
         sessionIsExternal: false,
         sessionLastTl: 0,
+        lastPartialFlushAt: 0,
         videoHooked: false,
 
         init: function () {
@@ -1186,7 +1187,9 @@
                 if (Lampa.PlayerVideo && Lampa.PlayerVideo.listener) {
                     Lampa.PlayerVideo.listener.follow('play', function () {
                         self.hookVideoElement();
-                        self.resumeSession();
+                        var m = self.currentMovie || Current.getMovie() || Media.lastCard;
+                        if (m && !self.sessionHadPlay) self.beginSession(m);
+                        else self.resumeSession();
                     });
                     Lampa.PlayerVideo.listener.follow('pause', function () {
                         self.pauseSession();
@@ -1293,19 +1296,25 @@
 
         resolveMovieFromPlay: function (data) {
             if (!data) data = {};
-            var movie = data.card || data.movie || null;
+            var movie = data.card || data.movie || data.element || null;
+            if (movie && movie.card) movie = movie.card;
             if (!movie) {
                 try {
                     var act = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
                     if (act) {
                         movie = act.movie || act.card || null;
-                        if (!movie && act.object) movie = act.object.movie || act.object.card || null;
+                        if (!movie && act.object) movie = act.object.movie || act.object.card || act.object || null;
+                        if (!movie && act.component === 'full' && act.card) movie = act.card;
                     }
                 } catch (e) {}
             }
-            if (!movie && (data.title || data.fname || data.original_title)) {
+            // online балансир: інколи лише title/url у data, картка в Media.lastCard
+            if (!movie && Media.lastCard) {
+                movie = Media.lastCard;
+            }
+            if (!movie && (data.title || data.fname || data.original_title || data.name)) {
                 movie = {
-                    title: data.title || data.fname || data.original_title || '',
+                    title: data.title || data.fname || data.original_title || data.name || '',
                     name: data.name || data.title || data.fname || '',
                     original_title: data.original_title || '',
                     id: data.id || data.tmdb_id || ''
@@ -1320,20 +1329,19 @@
                 } catch (e2) {}
             }
             if (!movie) {
-                try {
-                    movie = Current.getMovie();
-                } catch (e3) {}
+                try { movie = Current.getMovie(); } catch (e3) {}
             }
             if (!movie) return null;
+            movie = Object.assign({}, movie);
             if (data.season != null) {
-                movie = Object.assign({}, movie, { season_number: data.season, season: data.season });
+                movie.season_number = data.season;
+                movie.season = data.season;
             }
             if (data.episode != null) {
-                movie = Object.assign({}, movie, { episode_number: data.episode, episode: data.episode });
+                movie.episode_number = data.episode;
+                movie.episode = data.episode;
             }
-            if (data.timeline) {
-                movie = Object.assign({}, movie, { timeline: data.timeline });
-            }
+            if (data.timeline) movie.timeline = data.timeline;
             return movie;
         },
 
@@ -1706,6 +1714,32 @@
             return Math.floor(r || 0);
         },
 
+        // Внутрішній плеєр: періодично скидати час у статистику (не чекати закриття)
+        flushPartial: function () {
+            if (!Settings.collecting()) return;
+            if (this.sessionIsExternal) return;
+            if (this._sessionCommitted) return;
+            if (!this.sessionHadPlay && !this.sessionRunning) return;
+
+            if (this.sessionRunning && this.sessionStartedAt) {
+                var dt = Date.now() - this.sessionStartedAt;
+                if (dt > 0) this.sessionAccumMs += dt;
+                this.sessionStartedAt = Date.now();
+            }
+
+            var sec = Math.floor((this.sessionAccumMs || 0) / 1000);
+            if (sec < 30) return;
+
+            var movie = this.sessionMovie || this.currentMovie || Current.getMovie() || Media.lastCard;
+            if (!movie) return;
+
+            var meta = Media.metaFrom(movie);
+            StatsDB.addWatchSeconds(sec, meta);
+            this.sessionAccumMs = 0;
+            this.lastPartialFlushAt = Date.now();
+            this.saveSession();
+        },
+
         endSession: function (reason) {
             if (this._sessionCommitted) return;
             if (!this.sessionHadPlay && !this.sessionRunning && this.sessionAccumMs === 0) return;
@@ -1732,13 +1766,20 @@
 
             var wallSec = Math.floor(ms / 1000);
 
-            // Занадто рано (типовий destroy/callback при старті VLC) —
-            // НЕ комітимо і ПРОДОВЖУЄМО таймер
+            // Занадто рано при старті external — не комітимо, продовжуємо таймер.
+            // Для внутрішнього destroy після короткого кліку — просто вихід без continue.
             if (wallSec < 20) {
-                this.sessionRunning = true;
-                this.sessionStartedAt = Date.now();
-                this.sessionHadPlay = true;
-                this.saveSession();
+                if (wasExternal || this.sessionIsExternal) {
+                    this.sessionRunning = true;
+                    this.sessionStartedAt = Date.now();
+                    this.sessionHadPlay = true;
+                    this.saveSession();
+                    return;
+                }
+                // internal: короткий перегляд < 20с не пишемо
+                this.sessionAccumMs = 0;
+                this.sessionHadPlay = false;
+                this.sessionMovie = null;
                 return;
             }
 
@@ -1803,6 +1844,9 @@
             this.sessionMovie = null;
             this.sessionSeedTime = 0;
             this.sessionIsExternal = false;
+            this._sessionWallStart = 0;
+            this.sessionLastTl = 0;
+            this.clearSession();
 
             // Completed
             try {
@@ -1855,14 +1899,42 @@
                     video = Lampa.PlayerVideo.video();
                 }
                 if (!video) video = document.querySelector('.player video') || document.querySelector('video');
+
                 if (video && !video.paused && !video.ended) {
-                    if (this.currentMovie || this.sessionMovie) {
+                    // внутрішній плеєр грає — гарантовано стартуємо сесію
+                    if (!this.sessionIsExternal) {
+                        var m = this.sessionMovie || this.currentMovie || Current.getMovie() || Media.lastCard;
+                        if (m && !this.sessionHadPlay) {
+                            this.beginSession(m);
+                        } else if (m && !this.sessionRunning) {
+                            this.resumeSession();
+                        } else if (!m) {
+                            // остання спроба з Activity
+                            try {
+                                var act = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
+                                if (act && (act.card || act.movie)) {
+                                    this.beginSession(act.movie || act.card);
+                                }
+                            } catch (eA) {}
+                        }
+                    } else if (this.currentMovie || this.sessionMovie) {
                         if (!this.sessionRunning) this.resumeSession();
                     }
                     this.hookVideoElement();
-                } else if (video && video.paused && this.sessionRunning) {
+
+                    // partial flush раз на ~60с для internal
+                    if (!this.sessionIsExternal) {
+                        var now = Date.now();
+                        if (!this.lastPartialFlushAt) this.lastPartialFlushAt = now;
+                        if (now - this.lastPartialFlushAt >= 60000) {
+                            this.flushPartial();
+                        }
+                    }
+                } else if (video && video.paused && this.sessionRunning && !this.sessionIsExternal) {
                     this.pauseSession();
+                    this.flushPartial();
                 }
+
                 if (this.sessionHadPlay || this.sessionRunning) {
                     this.saveSession();
                 }
@@ -2389,14 +2461,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v073-style');
+        var old = document.getElementById('lampa-stats-v074-style');
         if (old) old.remove();
-        ['lampa-stats-v072-style','lampa-stats-v071-style','lampa-stats-v070-style','lampa-stats-v069-style','lampa-stats-v068-style','lampa-stats-v067-style','lampa-stats-v066-style'].forEach(function (id) {
+        ['lampa-stats-v073-style','lampa-stats-v072-style','lampa-stats-v071-style','lampa-stats-v070-style','lampa-stats-v069-style','lampa-stats-v068-style','lampa-stats-v067-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v073-style';
+        s.id = 'lampa-stats-v074-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2415,7 +2487,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.73 ready (Just+/timeline finalize)');
+            console.log('Lampa stats v0.74 ready (internal player reliable + partial flush)');
         } catch (e) {
             console.error('stats init', e);
         }
