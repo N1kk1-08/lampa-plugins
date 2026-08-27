@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v072) return;
-    window.lampa_ukrainian_stats_v072 = true;
+    if (window.lampa_ukrainian_stats_v073) return;
+    window.lampa_ukrainian_stats_v073 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1065,6 +1065,7 @@
         sessionHadPlay: false,
         sessionSeedTime: 0,    // timeline position at session start
         sessionIsExternal: false,
+        sessionLastTl: 0,
         videoHooked: false,
 
         init: function () {
@@ -1200,18 +1201,65 @@
                 }
             } catch (e) {}
 
-            // Timeline більше НЕ нараховує час (лише completion-підказка не потрібна)
-            // onTimeline прибрано навмисно
+            // Timeline update — Just+/VLC часто пишуть позицію саме тут після повернення
+            try {
+                if (Lampa.Timeline && Lampa.Timeline.listener) {
+                    Lampa.Timeline.listener.follow('update', function (e) {
+                        if (!e) return;
+                        var road = e.data && (e.data.road || e.data);
+                        if (!road) return;
+                        var time = Number(road.time);
+                        if (!Number.isFinite(time) || time < 0) return;
+                        if (road.hash) self.currentTimelineHash = road.hash;
+                        if (Number.isFinite(Number(road.duration)) && Number(road.duration) > 0) {
+                            self._lastTimelineDuration = Number(road.duration);
+                        }
+                        self.sessionLastTl = time;
+                        if (self.sessionHadPlay || self.sessionRunning) {
+                            self.saveSession();
+                            // Just+ інколи не шле нормальний activity/callback — фіксуємо по timeline
+                            [600, 2000, 4500].forEach(function (ms) {
+                                setTimeout(function () { self.endSession('timeline'); }, ms);
+                            });
+                        } else {
+                            // сесія в Storage після reload / пропущеного start
+                            setTimeout(function () { self.recoverSession(); }, 400);
+                        }
+                    });
+                }
+            } catch (e) {}
 
             try {
                 Lampa.Listener.follow('activity', function (e) {
                     if (!e) return;
                     if (e.type === 'start' || e.type === 'archive' || e.type === 'resume') {
-                        // Головна точка фіксації після VLC/MX
                         [800, 2500, 5000, 9000].forEach(function (ms) {
                             setTimeout(function () { self.endSession('activity'); }, ms);
                         });
+                        setTimeout(function () { self.recoverSession(); }, 1500);
                     }
+                });
+            } catch (e) {}
+
+            // Повернення фокусу в WebView (Android TV після Just+)
+            try {
+                document.addEventListener('visibilitychange', function () {
+                    if (document.visibilityState === 'visible') {
+                        [1000, 3000, 6000].forEach(function (ms) {
+                            setTimeout(function () { self.endSession('visible'); }, ms);
+                        });
+                        setTimeout(function () { self.recoverSession(); }, 2000);
+                    } else if (document.visibilityState === 'hidden') {
+                        // пішли в Just+/VLC — зберегти heartbeat
+                        if (self.sessionHadPlay) self.saveSession();
+                    }
+                });
+            } catch (e) {}
+            try {
+                window.addEventListener('focus', function () {
+                    [1200, 4000].forEach(function (ms) {
+                        setTimeout(function () { self.endSession('focus'); }, ms);
+                    });
                 });
             } catch (e) {}
 
@@ -1330,6 +1378,7 @@
                     tmdb_id: movie.id || movie.tmdb_id || '',
                     original_title: movie.original_title || movie.original_name || '',
                     seedTime: this.sessionSeedTime || 0,
+                    lastTl: this.sessionLastTl || 0,
                     startedAt: this._sessionWallStart || this.sessionStartedAt || now,
                     accumMs: accum,
                     isExternal: !!this.sessionIsExternal,
@@ -1395,6 +1444,8 @@
 
             var seed = Number(payload.seedTime) || 0;
             var tNow = this.readTimelineTime(movie);
+            var lastTl = Number(payload.lastTl) || 0;
+            if (lastTl > tNow) tNow = lastTl;
             var tlDuration = this._lastTimelineDuration || 0;
             var runtimeSec = Number(payload.runtimeSec) || this.resolveRuntimeSec(movie) || 0;
             var duration = tlDuration > 60 ? tlDuration : runtimeSec;
@@ -1403,7 +1454,10 @@
             if (tNow > seed + 5) tlDelta = Math.floor(tNow - seed);
 
             var sec = wallSec;
-            if (payload.isExternal && tlDelta >= 15) sec = Math.min(wallSec, tlDelta);
+            if (payload.isExternal && tlDelta >= 15) {
+                if (wallSec >= 20) sec = Math.min(wallSec, tlDelta);
+                else sec = tlDelta; // wall збитий, timeline є (Just+)
+            }
             if (payload.isExternal && runtimeSec >= 300) sec = Math.min(sec, runtimeSec + 90);
             if (duration > 60) sec = Math.min(sec, Math.floor(duration) + 90);
             sec = Math.min(Math.max(0, sec), 21600);
@@ -1482,6 +1536,7 @@
             if (isNew) {
                 this._sessionCommitted = false;
                 this._sessionWallStart = Date.now();
+                this.sessionLastTl = 0;
             }
 
             if (isNew || this.sessionSeedTime === 0) {
@@ -1688,6 +1743,7 @@
             }
 
             var tNow = this.readTimelineTime(movie);
+            if (this.sessionLastTl > tNow) tNow = this.sessionLastTl;
             var tlDuration = this._lastTimelineDuration || 0;
             try {
                 if ((!tlDuration || tlDuration < 30) && movie.timeline) {
@@ -1703,14 +1759,33 @@
 
             var sec = wallSec;
 
-            // Зовнішній + є дельта timeline
-            if (wasExternal && tlDelta >= 15) {
-                sec = Math.min(wallSec, tlDelta);
-            }
-
-            // Зовнішній без timeline: ріжемо по runtime серії/фільму (51 хв, а не 1:16 з паузами)
-            if (wasExternal && runtimeSec >= 300) {
-                sec = Math.min(sec, runtimeSec + 90);
+            // Зовнішній (Just+/VLC/MX):
+            // 1) якщо є дельта timeline — вона точніша за wall з паузами
+            // 2) якщо timeline мовчить — wall, але з runtime-cap
+            if (wasExternal) {
+                if (tlDelta >= 15) {
+                    // якщо wall теж є — беремо розумний варіант:
+                    // timeline не повинен сильно перевищувати wall (перемотка вперед)
+                    if (wallSec >= 20) {
+                        sec = Math.min(Math.max(tlDelta, Math.min(wallSec, tlDelta + 120)), wallSec + 30);
+                        // простіше і стабільніше: min(wall, tlDelta) якщо wall близький, інакше tlDelta
+                        if (wallSec > 0) {
+                            sec = Math.min(wallSec, tlDelta);
+                            // якщо wall << tlDelta (паузи в wall? ні — wall більший при паузах)
+                            // wall > tlDelta при паузах → min = tlDelta ✓
+                            // wall < tlDelta при seek вперед → min = wall ✓
+                            sec = Math.min(wallSec, tlDelta);
+                        } else {
+                            sec = tlDelta;
+                        }
+                    } else {
+                        // wall майже нуль (сесія збита), але timeline зсунувся — Just+ intermittent
+                        sec = tlDelta;
+                    }
+                }
+                if (runtimeSec >= 300) {
+                    sec = Math.min(sec, runtimeSec + 90);
+                }
             }
             if (duration > 60) {
                 sec = Math.min(sec, Math.floor(duration) + 90);
@@ -2314,14 +2389,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v072-style');
+        var old = document.getElementById('lampa-stats-v073-style');
         if (old) old.remove();
-        ['lampa-stats-v071-style','lampa-stats-v070-style','lampa-stats-v069-style','lampa-stats-v068-style','lampa-stats-v067-style','lampa-stats-v066-style','lampa-stats-v065-style'].forEach(function (id) {
+        ['lampa-stats-v072-style','lampa-stats-v071-style','lampa-stats-v070-style','lampa-stats-v069-style','lampa-stats-v068-style','lampa-stats-v067-style','lampa-stats-v066-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v072-style';
+        s.id = 'lampa-stats-v073-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2340,7 +2415,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.72 ready (persistent session survives Lampa reload)');
+            console.log('Lampa stats v0.73 ready (Just+/timeline finalize)');
         } catch (e) {
             console.error('stats init', e);
         }
