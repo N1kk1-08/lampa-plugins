@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v074) return;
-    window.lampa_ukrainian_stats_v074 = true;
+    if (window.lampa_ukrainian_stats_v075) return;
+    window.lampa_ukrainian_stats_v075 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1165,10 +1165,17 @@
                         }
                     });
                     Lampa.Player.listener.follow('destroy', function () {
-                        // При запуску VLC/MX Lampa часто шле destroy ОДРАЗУ —
-                        // сесію не закриваємо, інакше таймер зупиняється на 0.5с.
-                        if (self.sessionIsExternal) {
-                            // лише «заморозити» UI-стан, таймер external продовжує wall-clock
+                        // Just+/VLC: destroy при старті і при зміні серії — не вбивати сесію
+                        var ext = self.sessionIsExternal || self.isExternalPlayer();
+                        var noVideo = false;
+                        try { noVideo = !Current.getVideoState(); } catch (eN) { noVideo = true; }
+                        if (ext || (self.sessionHadPlay && noVideo)) {
+                            self.sessionIsExternal = true;
+                            if (!self.sessionRunning && self.sessionHadPlay) {
+                                self.sessionStartedAt = Date.now();
+                                self.sessionRunning = true;
+                            }
+                            self.saveSession();
                             return;
                         }
                         [500, 2000, 5000].forEach(function (ms) {
@@ -1213,20 +1220,31 @@
                         if (!road) return;
                         var time = Number(road.time);
                         if (!Number.isFinite(time) || time < 0) return;
-                        if (road.hash) self.currentTimelineHash = road.hash;
+                        if (road.hash && road.hash !== self.currentTimelineHash) {
+                            // Нова серія в timeline — нова сесія, не блокувати _sessionCommitted
+                            if (self._sessionCommitted) self._sessionCommitted = false;
+                            self.currentTimelineHash = road.hash;
+                        } else if (road.hash) {
+                            self.currentTimelineHash = road.hash;
+                        }
                         if (Number.isFinite(Number(road.duration)) && Number(road.duration) > 0) {
                             self._lastTimelineDuration = Number(road.duration);
                         }
                         self.sessionLastTl = time;
                         if (self.sessionHadPlay || self.sessionRunning) {
                             self.saveSession();
-                            // Just+ інколи не шле нормальний activity/callback — фіксуємо по timeline
                             [600, 2000, 4500].forEach(function (ms) {
                                 setTimeout(function () { self.endSession('timeline'); }, ms);
                             });
                         } else {
-                            // сесія в Storage після reload / пропущеного start
-                            setTimeout(function () { self.recoverSession(); }, 400);
+                            // Немає живої сесії, але timeline стрибнув — спроба recover або soft start
+                            setTimeout(function () {
+                                if (!self._sessionCommitted) self.recoverSession();
+                            }, 400);
+                            // Якщо Lampa вже позначила серію, а сесії не було — нарахувати з timeline
+                            setTimeout(function () {
+                                self.commitFromTimelineOnly(road);
+                            }, 1200);
                         }
                     });
                 }
@@ -1521,6 +1539,20 @@
             this.clearSession();
         },
 
+        isExternalPlayer: function () {
+            try {
+                var p = Lampa.Storage.get('player') || Lampa.Storage.field('player') || '';
+                p = String(p).toLowerCase();
+                if (!p || p === 'inner' || p === 'lampa' || p === 'html5') return false;
+                // just, just+, vlc, mx, exo, outside, android...
+                return true;
+            } catch (e) {}
+            try {
+                if (!Current.getVideoState() && this.sessionHadPlay) return true;
+            } catch (e2) {}
+            return !!this.sessionIsExternal;
+        },
+
         beginSession: function (movie) {
             if (!Settings.collecting()) return;
             movie = movie || this.currentMovie;
@@ -1541,10 +1573,18 @@
             this.sessionMovie = movie;
             this.currentMovie = movie;
             this.sessionHadPlay = true;
+            // Завжди скидаємо commit при новій серії/фільмі (2-га серія після 1-ї)
             if (isNew) {
                 this._sessionCommitted = false;
                 this._sessionWallStart = Date.now();
                 this.sessionLastTl = 0;
+                this.sessionAccumMs = 0;
+            } else {
+                this._sessionCommitted = false;
+            }
+
+            if (this.isExternalPlayer()) {
+                this.sessionIsExternal = true;
             }
 
             if (isNew || this.sessionSeedTime === 0) {
@@ -1766,22 +1806,7 @@
 
             var wallSec = Math.floor(ms / 1000);
 
-            // Занадто рано при старті external — не комітимо, продовжуємо таймер.
-            // Для внутрішнього destroy після короткого кліку — просто вихід без continue.
-            if (wallSec < 20) {
-                if (wasExternal || this.sessionIsExternal) {
-                    this.sessionRunning = true;
-                    this.sessionStartedAt = Date.now();
-                    this.sessionHadPlay = true;
-                    this.saveSession();
-                    return;
-                }
-                // internal: короткий перегляд < 20с не пишемо
-                this.sessionAccumMs = 0;
-                this.sessionHadPlay = false;
-                this.sessionMovie = null;
-                return;
-            }
+            wasExternal = wasExternal || this.isExternalPlayer();
 
             var tNow = this.readTimelineTime(movie);
             if (this.sessionLastTl > tNow) tNow = this.sessionLastTl;
@@ -1798,31 +1823,32 @@
             var tlDelta = 0;
             if (tNow > seed + 5) tlDelta = Math.floor(tNow - seed);
 
+            // Занадто малий wall, але timeline вже показує прогрес (2-га серія / Just+)
+            if (wallSec < 20 && tlDelta >= 15) {
+                wallSec = tlDelta;
+            }
+
+            if (wallSec < 20) {
+                if (wasExternal || this.sessionIsExternal) {
+                    this.sessionRunning = true;
+                    this.sessionStartedAt = Date.now();
+                    this.sessionHadPlay = true;
+                    this.sessionIsExternal = true;
+                    this.saveSession();
+                    return;
+                }
+                this.sessionAccumMs = 0;
+                this.sessionHadPlay = false;
+                this.sessionMovie = null;
+                return;
+            }
+
             var sec = wallSec;
 
-            // Зовнішній (Just+/VLC/MX):
-            // 1) якщо є дельта timeline — вона точніша за wall з паузами
-            // 2) якщо timeline мовчить — wall, але з runtime-cap
+            // Зовнішній: timeline-дельта відсікає паузи; якщо wall збитий — чистий tlDelta
             if (wasExternal) {
                 if (tlDelta >= 15) {
-                    // якщо wall теж є — беремо розумний варіант:
-                    // timeline не повинен сильно перевищувати wall (перемотка вперед)
-                    if (wallSec >= 20) {
-                        sec = Math.min(Math.max(tlDelta, Math.min(wallSec, tlDelta + 120)), wallSec + 30);
-                        // простіше і стабільніше: min(wall, tlDelta) якщо wall близький, інакше tlDelta
-                        if (wallSec > 0) {
-                            sec = Math.min(wallSec, tlDelta);
-                            // якщо wall << tlDelta (паузи в wall? ні — wall більший при паузах)
-                            // wall > tlDelta при паузах → min = tlDelta ✓
-                            // wall < tlDelta при seek вперед → min = wall ✓
-                            sec = Math.min(wallSec, tlDelta);
-                        } else {
-                            sec = tlDelta;
-                        }
-                    } else {
-                        // wall майже нуль (сесія збита), але timeline зсунувся — Just+ intermittent
-                        sec = tlDelta;
-                    }
+                    sec = wallSec >= 20 ? Math.min(wallSec, tlDelta) : tlDelta;
                 }
                 if (runtimeSec >= 300) {
                     sec = Math.min(sec, runtimeSec + 90);
@@ -2461,14 +2487,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v074-style');
+        var old = document.getElementById('lampa-stats-v075-style');
         if (old) old.remove();
-        ['lampa-stats-v073-style','lampa-stats-v072-style','lampa-stats-v071-style','lampa-stats-v070-style','lampa-stats-v069-style','lampa-stats-v068-style','lampa-stats-v067-style'].forEach(function (id) {
+        ['lampa-stats-v074-style','lampa-stats-v073-style','lampa-stats-v072-style','lampa-stats-v071-style','lampa-stats-v070-style','lampa-stats-v069-style','lampa-stats-v068-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v074-style';
+        s.id = 'lampa-stats-v075-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2487,7 +2513,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.74 ready (internal player reliable + partial flush)');
+            console.log('Lampa stats v0.75 ready (multi-episode external time fix)');
         } catch (e) {
             console.error('stats init', e);
         }
