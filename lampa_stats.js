@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v077) return;
-    window.lampa_ukrainian_stats_v077 = true;
+    if (window.lampa_ukrainian_stats_v078) return;
+    window.lampa_ukrainian_stats_v078 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -40,7 +40,11 @@
         no_works: 'Поки немає записів',
         film: 'фільм',
         series_ep: 'серія',
-        level_up: 'Новий рівень'
+        level_up: 'Новий рівень',
+        watched_list_title: 'Усі перегляди',
+        watched_empty: 'Ще немає завершених переглядів',
+        watched_time: 'Час перегляду',
+        open_watched: 'Відкрити список'
     };
 
     var CONFIG = {
@@ -51,6 +55,7 @@
         menu_action: 'lampa_ukrainian_stats',
         activity: 'lampa_ukrainian_stats_view',
         activity_actor: 'lampa_ukrainian_stats_actor',
+        activity_watched: 'lampa_ukrainian_stats_watched',
         completion: 0.90,
         interval: 1000,
         tmdb_img: 'https://image.tmdb.org/t/p/w185',
@@ -836,15 +841,26 @@
                 this.data.completed[id].date = Date.now();
                 if (meta && meta.title) this.data.completed[id].title = meta.title;
                 if (meta && meta.poster) this.data.completed[id].poster = meta.poster;
+                try {
+                    var sUp = this.getLast(id) || 0;
+                    if (sUp > (this.data.completed[id].seconds || 0)) {
+                        this.data.completed[id].seconds = Math.floor(sUp);
+                    }
+                } catch (eU) {}
                 this.save();
                 return false;
             }
+            var secWatch = 0;
+            try {
+                secWatch = this.getLast(id) || 0;
+            } catch (eS) {}
             var entry = {
                 date: Date.now(),
                 isEpisode: !!(meta && meta.isEpisode),
                 title: (meta && meta.title) || Media.titleOf(movie) || '',
                 poster: (meta && meta.poster) || Media.posterOf(movie) || '',
-                tmdb_id: movie && (movie.id || movie.tmdb_id) || ''
+                tmdb_id: movie && (movie.id || movie.tmdb_id) || '',
+                seconds: Math.max(0, Math.floor(secWatch))
             };
             if (!entry.poster && movie) {
                 var st = MetaStore.load(movie);
@@ -880,17 +896,27 @@
             return true;
         },
         recentCompleted: function (limit) {
-            var list = Object.keys(this.data.completed).map(function (k) {
+            return this.allCompleted().slice(0, limit || CONFIG.max_posters_show);
+        },
+        allCompleted: function () {
+            return Object.keys(this.data.completed).map(function (k) {
                 var c = StatsDB.data.completed[k];
+                var sec = Number(c.seconds) || 0;
+                if (!sec) {
+                    try {
+                        var lr = StatsDB.getLast(k);
+                        if (lr > 0) sec = lr;
+                    } catch (e) {}
+                }
                 return {
                     id: k,
                     date: c.date || 0,
                     isEpisode: !!c.isEpisode,
                     title: c.title || '',
-                    poster: c.poster || ''
+                    poster: c.poster || '',
+                    seconds: Math.max(0, Math.floor(sec))
                 };
             }).sort(function (a, b) { return b.date - a.date; });
-            return list.slice(0, limit || CONFIG.max_posters_show);
         },
         topActors: function (limit) {
             return Object.keys(this.data.actors)
@@ -2295,6 +2321,16 @@
             });
             body.append(posters);
             c.append(body);
+            c.on('hover:enter click', function () {
+                try {
+                    Lampa.Activity.push({
+                        url: 'stats_watched',
+                        title: LANG.watched_list_title,
+                        component: CONFIG.activity_watched,
+                        page: 1
+                    });
+                } catch (e) {}
+            });
             return c;
         }
 
@@ -2573,6 +2609,60 @@
         }
     }
 
+
+    function WatchedListComponent(object) {
+        var scroll = makeScroll();
+        var html = $('<div class="stv-root"></div>');
+
+        this.create = function () {
+            render();
+            scroll.clear();
+            scroll.append(html);
+            bindFocusScroll(html, scroll);
+            bindWheel(scroll);
+            try { if (this.activity && this.activity.loader) this.activity.loader(false); } catch (e) {}
+        };
+        this.start = function () {
+            try { if (typeof scroll.minus === 'function') scroll.minus(); } catch (e) {}
+            bindController(scroll);
+            bindWheel(scroll);
+        };
+        this.pause = function () {};
+        this.render = function () { return scroll.render(); };
+        this.destroy = function () {
+            try { scroll.destroy(); } catch (e) {}
+            html.remove();
+        };
+
+        function render() {
+            html.empty();
+            html.append('<div class="stv-title">' + LANG.watched_list_title + '</div>');
+            var list = StatsDB.allCompleted();
+            if (!list.length) {
+                html.append('<div class="stv-empty selector">' + LANG.watched_empty + '</div>');
+                return;
+            }
+            var box = $('<div class="stv-watched-list"></div>');
+            list.forEach(function (w) {
+                var row = $('<div class="stv-watched-row selector"></div>');
+                var poster = $('<div class="stv-watched-poster"></div>');
+                var url = posterUrl(w.poster);
+                if (url) poster.css('background-image', 'url(' + url + ')');
+                else poster.addClass('stv-poster-empty').text(w.isEpisode ? 'S' : 'F');
+                if (w.isEpisode) poster.append('<span class="stv-poster-badge">EP</span>');
+                var info = $('<div class="stv-watched-info"></div>');
+                info.append('<div class="stv-watched-title">' + (w.title || '') + '</div>');
+                var kind = w.isEpisode ? LANG.series_ep : LANG.film;
+                var timeStr = w.seconds > 0 ? StatsDB.formatTime(w.seconds) : '—';
+                info.append('<div class="stv-watched-meta">' + kind + ' · ' + timeStr + '</div>');
+                row.append(poster);
+                row.append(info);
+                box.append(row);
+            });
+            html.append(box);
+        }
+    }
+
     var Menu = {
         selector: '.menu .menu__list',
         createItem: function () {
@@ -2604,7 +2694,7 @@
     var CSS =
         '.stv-root{padding:22px 28px 50px;color:#fff;box-sizing:border-box;}' +
         '.stv-title{font-size:28px;font-weight:700;margin-bottom:18px;}' +
-        '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-empty{transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;}' +
+        '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-watched-row,.stv-empty{transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;}' +
         '.stv-card:focus,.stv-actor:focus,.stv-panel:focus,.stv-reset:focus,.stv-work:focus,.stv-empty:focus,' +
         '.stv-card.focus,.stv-actor.focus,.stv-panel.focus,.stv-reset.focus,.stv-work.focus,' +
         '.stv-card.hover,.stv-actor.hover,.stv-panel.hover,.stv-reset.hover{' +
@@ -2646,6 +2736,13 @@
         '.stv-work-poster{width:48px;height:72px;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.1);flex-shrink:0;}' +
         '.stv-work-title{font-size:16px;font-weight:600;margin-bottom:4px;}' +
         '.stv-work-meta{font-size:12px;opacity:0.55;}' +
+        '.stv-watched-list{display:flex;flex-direction:column;gap:10px;}' +
+        '.stv-watched-row{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
+        '.stv-watched-poster{width:48px;height:72px;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.1);flex-shrink:0;position:relative;}' +
+        '.stv-watched-title{font-size:16px;font-weight:600;margin-bottom:4px;}' +
+        '.stv-watched-meta{font-size:12px;opacity:0.55;}' +
+        '.stv-watched-row:focus,.stv-watched-row.focus,.stv-watched-row.hover{' +
+        'transform:translateY(-4px);box-shadow:0 8px 22px rgba(0,0,0,.4);border-color:rgba(96,165,250,.9)!important;background:rgba(255,255,255,.12)!important;}' +
         '.stv-bottom{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:24px;}' +
         '.stv-panel{flex:1;min-width:200px;padding:16px;border-radius:14px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
         '.stv-bars{display:flex;align-items:flex-end;gap:8px;height:140px;padding-top:8px;}' +
@@ -2664,14 +2761,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v077-style');
+        var old = document.getElementById('lampa-stats-v078-style');
         if (old) old.remove();
-        ['lampa-stats-v076-style','lampa-stats-v075-style','lampa-stats-v074-style','lampa-stats-v073-style','lampa-stats-v072-style','lampa-stats-v071-style','lampa-stats-v070-style'].forEach(function (id) {
+        ['lampa-stats-v077-style','lampa-stats-v076-style','lampa-stats-v075-style','lampa-stats-v074-style','lampa-stats-v073-style','lampa-stats-v072-style','lampa-stats-v071-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v077-style';
+        s.id = 'lampa-stats-v078-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2685,12 +2782,13 @@
             if (Lampa.Component && Lampa.Component.add) {
                 Lampa.Component.add(CONFIG.activity, StatsComponent);
                 Lampa.Component.add(CONFIG.activity_actor, ActorWorksComponent);
+                Lampa.Component.add(CONFIG.activity_watched, WatchedListComponent);
             }
             Tracker.init();
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.77 ready (seek-safe + hard runtime/wall cap)');
+            console.log('Lampa stats v0.78 ready (watched list popup)');
         } catch (e) {
             console.error('stats init', e);
         }
