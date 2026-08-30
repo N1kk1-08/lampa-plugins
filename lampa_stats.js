@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v075) return;
-    window.lampa_ukrainian_stats_v075 = true;
+    if (window.lampa_ukrainian_stats_v076) return;
+    window.lampa_ukrainian_stats_v076 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1067,6 +1067,7 @@
         sessionIsExternal: false,
         sessionLastTl: 0,
         lastPartialFlushAt: 0,
+        committedIds: {},
         videoHooked: false,
 
         init: function () {
@@ -1220,31 +1221,26 @@
                         if (!road) return;
                         var time = Number(road.time);
                         if (!Number.isFinite(time) || time < 0) return;
-                        if (road.hash && road.hash !== self.currentTimelineHash) {
-                            // Нова серія в timeline — нова сесія, не блокувати _sessionCommitted
-                            if (self._sessionCommitted) self._sessionCommitted = false;
-                            self.currentTimelineHash = road.hash;
-                        } else if (road.hash) {
-                            self.currentTimelineHash = road.hash;
-                        }
+                        if (road.hash) self.currentTimelineHash = road.hash;
                         if (Number.isFinite(Number(road.duration)) && Number(road.duration) > 0) {
                             self._lastTimelineDuration = Number(road.duration);
                         }
                         self.sessionLastTl = time;
+                        self._sessionCommitted = false; // не блокувати наступні серії глобально
+
+                        // Just+/VLC: головне нарахування по timeline (працює на 2-й, 3-й серії)
+                        if (self.isExternalPlayer() || self.sessionIsExternal || !Current.getVideoState()) {
+                            setTimeout(function () { self.applyTimelineProgress(road); }, 400);
+                            setTimeout(function () { self.applyTimelineProgress(road); }, 2000);
+                        }
+
                         if (self.sessionHadPlay || self.sessionRunning) {
                             self.saveSession();
-                            [600, 2000, 4500].forEach(function (ms) {
+                            [800, 2500, 5000].forEach(function (ms) {
                                 setTimeout(function () { self.endSession('timeline'); }, ms);
                             });
                         } else {
-                            // Немає живої сесії, але timeline стрибнув — спроба recover або soft start
-                            setTimeout(function () {
-                                if (!self._sessionCommitted) self.recoverSession();
-                            }, 400);
-                            // Якщо Lampa вже позначила серію, а сесії не було — нарахувати з timeline
-                            setTimeout(function () {
-                                self.commitFromTimelineOnly(road);
-                            }, 1200);
+                            setTimeout(function () { self.recoverSession(); }, 600);
                         }
                     });
                 }
@@ -1423,10 +1419,6 @@
 
         recoverSession: function () {
             if (!Settings.collecting()) return;
-            if (this._sessionCommitted) {
-                this.clearSession();
-                return;
-            }
             var payload = null;
             try { payload = Lampa.Storage.get(CONFIG.session_storage); } catch (e) {}
             if (!payload || typeof payload !== 'object') return;
@@ -1521,7 +1513,8 @@
                 } catch (eM) {}
 
                 StatsDB.addWatchSeconds(sec, meta);
-                this._sessionCommitted = true;
+                this.markIdCommitted(wid);
+                this._sessionCommitted = false;
 
                 var done = false;
                 if (duration > 60) {
@@ -1544,13 +1537,143 @@
                 var p = Lampa.Storage.get('player') || Lampa.Storage.field('player') || '';
                 p = String(p).toLowerCase();
                 if (!p || p === 'inner' || p === 'lampa' || p === 'html5') return false;
-                // just, just+, vlc, mx, exo, outside, android...
                 return true;
             } catch (e) {}
             try {
                 if (!Current.getVideoState() && this.sessionHadPlay) return true;
             } catch (e2) {}
             return !!this.sessionIsExternal;
+        },
+
+        recentlyCommitted: function (id) {
+            if (!id) return false;
+            var t = this.committedIds[id];
+            if (!t) return false;
+            return (Date.now() - t) < 90000; // 90с антидубль на той самий id
+        },
+
+        markIdCommitted: function (id) {
+            if (!id) return;
+            this.committedIds[id] = Date.now();
+            // прибираємо старі
+            var self = this, now = Date.now();
+            Object.keys(this.committedIds).forEach(function (k) {
+                if (now - self.committedIds[k] > 3600000) delete self.committedIds[k];
+            });
+        },
+
+        resolveMovieAny: function () {
+            var movie = this.sessionMovie || this.currentMovie || null;
+            if (!movie) {
+                try { movie = Current.getMovie(); } catch (e) {}
+            }
+            if (!movie) movie = Media.lastCard;
+            if (!movie) {
+                try {
+                    var act = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
+                    if (act) movie = act.movie || act.card || (act.object && (act.object.movie || act.object.card)) || null;
+                } catch (e2) {}
+            }
+            return movie;
+        },
+
+        // Головний шлях для Just+/VLC: час з дельти Timeline (кожна серія окремо)
+        applyTimelineProgress: function (road) {
+            if (!Settings.collecting()) return false;
+            if (!road) return false;
+            var time = Number(road.time);
+            if (!Number.isFinite(time) || time < 20) return false;
+            var duration = Number(road.duration) || 0;
+            if (duration > 0) this._lastTimelineDuration = duration;
+            if (road.hash) this.currentTimelineHash = road.hash;
+
+            var movie = this.resolveMovieAny();
+            if (!movie) return false;
+            var id = Media.getId(movie);
+            if (this.recentlyCommitted(id)) return false;
+
+            var prev = StatsDB.getLast(id);
+            // seed сесії, якщо це той самий id
+            if (this.sessionMovie && Media.getId(this.sessionMovie) === id && this.sessionSeedTime > prev) {
+                prev = this.sessionSeedTime;
+            }
+
+            var delta = Math.floor(time - prev);
+            // перший контакт з уже майже доглянутим таймкодом без сесії — seed, без нарахування
+            if (prev === 0 && delta > 120 && !this.sessionHadPlay && !this.sessionRunning) {
+                // якщо є wall-сесія в storage — recoverSession розбере
+                var hasStored = false;
+                try {
+                    var st = Lampa.Storage.get(CONFIG.session_storage);
+                    if (st && st.id) hasStored = true;
+                } catch (e) {}
+                if (!hasStored) {
+                    StatsDB.setLast(id, time);
+                    StatsDB.save();
+                    // completed якщо в кінці
+                    if (duration > 60 && time / duration >= 0.85) {
+                        var meta0 = Media.metaFrom(movie);
+                        StatsDB.markCompleted(id, meta0, movie);
+                    }
+                    return false;
+                }
+            }
+
+            if (delta < 15) {
+                // все одно completed check
+                if (duration > 60 && time / duration >= 0.85) {
+                    var metaC = Media.metaFrom(movie);
+                    if (!StatsDB.data.completed[id]) {
+                        // мінімальний час якщо додивились а дельта крихітна
+                        if (!this.recentlyCommitted(id)) {
+                            var bump = Math.max(30, Math.min(300, Math.floor(duration * 0.05)));
+                            StatsDB.addWatchSeconds(bump, metaC);
+                            StatsDB.setLast(id, time);
+                            StatsDB.markCompleted(id, metaC, movie);
+                            this.markIdCommitted(id);
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+
+            var runtimeSec = this.resolveRuntimeSec(movie);
+            var sec = delta;
+            if (runtimeSec >= 300) sec = Math.min(sec, runtimeSec + 90);
+            if (duration > 60) sec = Math.min(sec, Math.floor(duration) + 90);
+            // wall cap якщо сесія є
+            if (this.sessionHadPlay && this._sessionWallStart) {
+                var wallCap = Math.floor((Date.now() - this._sessionWallStart) / 1000) + 90;
+                if (wallCap >= 30) sec = Math.min(sec, wallCap);
+            }
+            sec = Math.min(Math.max(0, sec), 21600);
+            if (sec < 15) return false;
+
+            var meta = Media.metaFrom(movie);
+            StatsDB.addWatchSeconds(sec, meta);
+            StatsDB.setLast(id, time);
+            StatsDB.save();
+            this.markIdCommitted(id);
+
+            // закрити сесію цього id
+            if (this.sessionMovie && Media.getId(this.sessionMovie) === id) {
+                this.sessionAccumMs = 0;
+                this.sessionHadPlay = false;
+                this.sessionRunning = false;
+                this.sessionStartedAt = 0;
+                this.sessionMovie = null;
+                this.sessionSeedTime = 0;
+                this._sessionCommitted = false;
+                this.clearSession();
+            }
+
+            if (duration > 60 && time / duration >= 0.85) {
+                StatsDB.markCompleted(id, meta, movie);
+            } else if (runtimeSec >= 300 && (time >= runtimeSec * 0.85 || sec >= runtimeSec * 0.85)) {
+                StatsDB.markCompleted(id, meta, movie);
+            }
+            return true;
         },
 
         beginSession: function (movie) {
@@ -1781,8 +1904,9 @@
         },
 
         endSession: function (reason) {
-            if (this._sessionCommitted) return;
             if (!this.sessionHadPlay && !this.sessionRunning && this.sessionAccumMs === 0) return;
+            var movieEarly = this.sessionMovie || this.currentMovie;
+            if (movieEarly && this.recentlyCommitted(Media.getId(movieEarly))) return;
 
             // зняти поточний відрізок у accum
             if (this.sessionRunning && this.sessionStartedAt) {
@@ -1864,7 +1988,8 @@
 
             var meta = Media.metaFrom(movie);
             StatsDB.addWatchSeconds(sec, meta);
-            this._sessionCommitted = true;
+            this.markIdCommitted(Media.getId(movie));
+            this._sessionCommitted = false;
             this.sessionAccumMs = 0;
             this.sessionHadPlay = false;
             this.sessionMovie = null;
@@ -2487,14 +2612,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v075-style');
+        var old = document.getElementById('lampa-stats-v076-style');
         if (old) old.remove();
-        ['lampa-stats-v074-style','lampa-stats-v073-style','lampa-stats-v072-style','lampa-stats-v071-style','lampa-stats-v070-style','lampa-stats-v069-style','lampa-stats-v068-style'].forEach(function (id) {
+        ['lampa-stats-v075-style','lampa-stats-v074-style','lampa-stats-v073-style','lampa-stats-v072-style','lampa-stats-v071-style','lampa-stats-v070-style','lampa-stats-v069-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v075-style';
+        s.id = 'lampa-stats-v076-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2513,7 +2638,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.75 ready (multi-episode external time fix)');
+            console.log('Lampa stats v0.76 ready (per-id commit + timeline-first external)');
         } catch (e) {
             console.error('stats init', e);
         }
