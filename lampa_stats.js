@@ -61,7 +61,7 @@
         tmdb_img: 'https://image.tmdb.org/t/p/w185',
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
         max_actors_show: 15,
-        max_posters_show: 8,
+        max_posters_show: 12,
         xp_movie_bonus: 3600,
         xp_episode_bonus: 900
     };
