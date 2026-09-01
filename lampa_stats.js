@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v079) return;
-    window.lampa_ukrainian_stats_v079 = true;
+    if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.80' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -47,14 +47,6 @@
         open_watched: 'Відкрити список'
     };
 
-    function escapeHtml(s) {
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
 
     var CONFIG = {
         stats_storage: 'lampa_personal_stats_v9',
@@ -132,11 +124,20 @@
         return false;
     }
 
-    function posterUrl(path) {
+    function posterUrl(path, size) {
         if (!path) return '';
         var s = String(path);
-        if (s.indexOf('http') === 0) return s;
-        return CONFIG.tmdb_poster + s;
+        if (/^https?:\/\//i.test(s)) return s;
+        if (s.charAt(0) !== '/') s = '/' + s;
+        size = size || 'w92';
+        try {
+            if (Lampa.TMDB && typeof Lampa.TMDB.image === 'function') {
+                var u = Lampa.TMDB.image(s, size);
+                if (u) return u;
+            }
+        } catch (e) {}
+        var base = size === 'w185' ? CONFIG.tmdb_img : CONFIG.tmdb_poster;
+        return base + s;
     }
 
     function openActorPage(a) {
@@ -736,7 +737,61 @@
         },
         save: function () {
             this.normalize();
-            try { Lampa.Storage.set(CONFIG.stats_storage, this.data); } catch (e) {}
+            try { this.pruneStats(); } catch (eP) {}
+            try {
+                Lampa.Storage.set(CONFIG.stats_storage, this.data);
+            } catch (e) {
+                try {
+                    this.pruneStats(true);
+                    Lampa.Storage.set(CONFIG.stats_storage, this.data);
+                } catch (e2) {}
+            }
+        },
+        pruneStats: function (aggressive) {
+            var actorsMax = aggressive ? Math.floor((CONFIG.actors_max || 800) / 2) : (CONFIG.actors_max || 800);
+            var completedMax = aggressive ? Math.floor((CONFIG.completed_max || 500) / 2) : (CONFIG.completed_max || 500);
+            var minSec = aggressive ? 600 : 120;
+
+            try {
+                var keys = Object.keys(this.data.actors || {});
+                if (keys.length > actorsMax) {
+                    keys.sort(function (a, b) {
+                        return (StatsDB.data.actors[a].seconds || 0) - (StatsDB.data.actors[b].seconds || 0);
+                    });
+                    keys.slice(0, keys.length - actorsMax).forEach(function (k) {
+                        delete StatsDB.data.actors[k];
+                    });
+                } else if (aggressive) {
+                    keys.forEach(function (k) {
+                        if ((StatsDB.data.actors[k].seconds || 0) < minSec) delete StatsDB.data.actors[k];
+                    });
+                }
+            } catch (eA) {}
+
+            try {
+                var ckeys = Object.keys(this.data.completed || {});
+                if (ckeys.length > completedMax) {
+                    ckeys.sort(function (a, b) {
+                        return (StatsDB.data.completed[b].date || 0) - (StatsDB.data.completed[a].date || 0);
+                    });
+                    ckeys.slice(completedMax).forEach(function (k) {
+                        delete StatsDB.data.completed[k];
+                    });
+                }
+            } catch (eC) {}
+
+            try {
+                var lkeys = Object.keys(this.data.last_recorded || {});
+                var lmax = completedMax * 3;
+                if (lkeys.length > lmax) {
+                    lkeys.sort(function (a, b) {
+                        return (StatsDB.data.last_recorded[a] || 0) - (StatsDB.data.last_recorded[b] || 0);
+                    });
+                    lkeys.slice(0, lkeys.length - lmax).forEach(function (k) {
+                        if (!StatsDB.data.completed[k]) delete StatsDB.data.last_recorded[k];
+                    });
+                }
+            } catch (eL) {}
         },
         reset: function () {
             this.data = JSON.parse(JSON.stringify(DEFAULT_STATS));
@@ -1335,7 +1390,20 @@
             } catch (e) {}
 
             // Резервний тік: якщо video грає — сесія running; якщо на паузі — pause
+            this.startWatchdog();
+        },
+
+        startWatchdog: function () {
+            var self = this;
+            if (this.timer) return;
             this.timer = setInterval(function () { self.watchdog(); }, 2000);
+        },
+
+        stopWatchdog: function () {
+            if (this.timer) {
+                try { clearInterval(this.timer); } catch (e) {}
+                this.timer = null;
+            }
         },
 
         resolveMovieFromPlay: function (data) {
@@ -2764,14 +2832,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v079-style');
+        var old = document.getElementById('lampa-stats-v080-style');
         if (old) old.remove();
-        ['lampa-stats-v078-style','lampa-stats-v077-style','lampa-stats-v076-style','lampa-stats-v075-style','lampa-stats-v074-style','lampa-stats-v073-style','lampa-stats-v072-style'].forEach(function (id) {
+        ['lampa-stats-v079-style','lampa-stats-v078-style','lampa-stats-v077-style','lampa-stats-v076-style','lampa-stats-v075-style','lampa-stats-v074-style','lampa-stats-v073-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v079-style';
+        s.id = 'lampa-stats-v080-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2791,7 +2859,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.79 ready (XSS escape + MetaStore prune)');
+            console.log('Lampa stats v0.80 ready (prune StatsDB + TMDB image + singleton)');
         } catch (e) {
             console.error('stats init', e);
         }
