@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.82' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.83' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -129,27 +129,16 @@
         if (!path) return '';
         var s = String(path).trim();
         if (!s) return '';
-        // вже повний URL
         if (/^https?:\/\//i.test(s)) return s;
         if (/^\/\//.test(s)) return 'https:' + s;
-        // data-uri
         if (/^data:/i.test(s)) return s;
         if (s.charAt(0) !== '/') s = '/' + s;
         size = size || 'w92';
-        try {
-            if (Lampa.TMDB && typeof Lampa.TMDB.image === 'function') {
-                var u = Lampa.TMDB.image(s, size);
-                if (u && String(u).indexOf('http') === 0) return u;
-                if (u && String(u).length > 5) return u;
-            }
-        } catch (e) {}
-        try {
-            if (Lampa.Utils && typeof Lampa.Utils.fixImageURL === 'function') {
-                var u3 = Lampa.Utils.fixImageURL(s);
-                if (u3) return u3;
-            }
-        } catch (e3) {}
-        var base = size === 'w185' ? CONFIG.tmdb_img : CONFIG.tmdb_poster;
+        // Простий CDN — без Lampa.TMDB.image (ламав прев’ю)
+        var base = (size === 'w185' || size === 'w300') ? CONFIG.tmdb_img : CONFIG.tmdb_poster;
+        if (size === 'w185') base = 'https://image.tmdb.org/t/p/w185';
+        else if (size === 'w300') base = 'https://image.tmdb.org/t/p/w300';
+        else base = 'https://image.tmdb.org/t/p/w92';
         return base + s;
     }
 
@@ -1522,6 +1511,7 @@
                     lastTl: this.sessionLastTl || 0,
                     startedAt: this._sessionWallStart || this.sessionStartedAt || now,
                     accumMs: accum,
+                    alreadyAccounted: this.sessionAddedSec || 0,
                     isExternal: !!this.sessionIsExternal,
                     timelineHash: this.currentTimelineHash || (movie.timeline && movie.timeline.hash) || '',
                     heartbeat: now,
@@ -1536,117 +1526,21 @@
             try { localStorage.removeItem(CONFIG.session_storage); } catch (e2) {}
         },
 
+        // ВАЖЛИВО: recover більше НЕ нараховує час.
+        // Раніше після F5 wall-сесія з Storage знову плюсувалась (8→14→25 хв).
+        // Лише прибираємо застарілий payload.
         recoverSession: function () {
-            if (!Settings.collecting()) return;
-            var payload = null;
-            try { payload = Lampa.Storage.get(CONFIG.session_storage); } catch (e) {}
-            if (!payload || typeof payload !== 'object') return;
-            if (!payload.startedAt && !payload.accumMs) {
-                this.clearSession();
-                return;
-            }
-
-            var now = Date.now();
-            var started = Number(payload.startedAt) || 0;
-            var accumMs = Number(payload.accumMs) || 0;
-            var heartbeat = Number(payload.heartbeat) || started;
-            if (heartbeat && now - heartbeat > 6 * 3600 * 1000) {
-                this.clearSession();
-                return;
-            }
-
-            var wallMs = Math.max(accumMs, (heartbeat && started && heartbeat > started) ? (heartbeat - started) : accumMs);
-            var wallSec = Math.floor(wallMs / 1000);
-            if (wallSec < 20) {
-                this.clearSession();
-                return;
-            }
-
-            var movie = {
-                id: payload.tmdb_id || payload.baseId,
-                tmdb_id: payload.tmdb_id,
-                title: payload.title,
-                name: payload.title,
-                original_title: payload.original_title,
-                poster_path: payload.poster,
-                season_number: payload.season,
-                season: payload.season,
-                episode_number: payload.episode,
-                episode: payload.episode
-            };
-            if (payload.timelineHash) {
-                this.currentTimelineHash = payload.timelineHash;
-                movie.timeline = { hash: payload.timelineHash };
-            }
-
-            var seed = Number(payload.seedTime) || 0;
-            var tNow = this.readTimelineTime(movie);
-            var lastTl = Number(payload.lastTl) || 0;
-            if (lastTl > tNow) tNow = lastTl;
-            var tlDuration = this._lastTimelineDuration || 0;
-            var runtimeSec = Number(payload.runtimeSec) || this.resolveRuntimeSec(movie) || 0;
-            var duration = tlDuration > 60 ? tlDuration : runtimeSec;
-
-            var tlDelta = 0;
-            if (tNow > seed + 5) tlDelta = Math.floor(tNow - seed);
-
-            var hardCap = 3 * 3600;
-            if (duration > 60) hardCap = Math.floor(duration) + 60;
-            if (runtimeSec >= 300) hardCap = Math.min(hardCap, runtimeSec + 60);
-            // recover: тільки wall (heartbeat - start), без timeline-накрутки
-            var sec = Math.min(wallSec, hardCap);
-            sec = Math.min(Math.max(0, sec), 21600);
-            if (sec < 20) {
-                this.clearSession();
-                return;
-            }
-
             try {
-                var wid = payload.id || Media.getId(movie);
-                var meta = Media.metaFrom(movie);
-                if (!meta) {
-                    meta = {
-                        isEpisode: !!payload.isEpisode || !!(payload.season || payload.episode),
-                        title: payload.title || '',
-                        poster: payload.poster || '',
-                        baseId: String(payload.baseId || payload.tmdb_id || ''),
-                        watchId: wid,
-                        actors: [],
-                        genres: [],
-                        year: 0
-                    };
+                var payload = Lampa.Storage.get(CONFIG.session_storage);
+                if (!payload) return;
+                // якщо сесія старша за 2 хв без активної — просто очистити
+                var hb = Number(payload.heartbeat) || 0;
+                if (!hb || Date.now() - hb > 120000) {
+                    this.clearSession();
                 }
-                try {
-                    var stored = MetaStore.load(movie);
-                    if (stored) {
-                        if (stored.actors && stored.actors.length) {
-                            movie.credits = { cast: stored.actors };
-                            meta = Media.metaFrom(movie) || meta;
-                        }
-                        if (stored.genres && stored.genres.length) meta.genres = stored.genres;
-                        if (stored.year) meta.year = stored.year;
-                        if (stored.poster_path && !meta.poster) meta.poster = stored.poster_path;
-                    }
-                } catch (eM) {}
-
-                StatsDB.addWatchSeconds(sec, meta);
-                this.markIdCommitted(wid);
-                this._sessionCommitted = false;
-
-                var done = false;
-                if (duration > 60) {
-                    if (tNow > 0 && tNow / duration >= 0.85) done = true;
-                    if (tNow > 0 && (duration - tNow) < 150 && tNow / duration > 0.65) done = true;
-                }
-                if (!done && runtimeSec >= 300) {
-                    if (sec >= runtimeSec * 0.85) done = true;
-                    if (wallSec >= runtimeSec * 0.9) done = true;
-                }
-                if (!done && tNow > 0 && tlDuration > 60 && tNow >= tlDuration * 0.85) done = true;
-                if (done) StatsDB.markCompleted(wid, meta, movie);
-            } catch (eR) {}
-
-            this.clearSession();
+            } catch (e) {
+                try { this.clearSession(); } catch (e2) {}
+            }
         },
 
         isExternalPlayer: function () {
@@ -1946,7 +1840,10 @@
             var meta = Media.metaFrom(movie);
             StatsDB.addWatchSeconds(sec, meta);
             this.sessionAccumMs = 0;
+            this.sessionAddedSec = (this.sessionAddedSec || 0) + sec;
             this.lastPartialFlushAt = Date.now();
+            // після partial — оновити wall start, щоб не накрутити
+            if (this.sessionRunning) this.sessionStartedAt = Date.now();
             this.saveSession();
         },
 
@@ -2727,14 +2624,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v082-style');
+        var old = document.getElementById('lampa-stats-v083-style');
         if (old) old.remove();
-        ['lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style','lampa-stats-v078-style','lampa-stats-v077-style','lampa-stats-v076-style','lampa-stats-v075-style'].forEach(function (id) {
+        ['lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style','lampa-stats-v078-style','lampa-stats-v077-style','lampa-stats-v076-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v082-style';
+        s.id = 'lampa-stats-v083-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2754,7 +2651,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.82 ready (wall-clock only, timeline for completed)');
+            console.log('Lampa stats v0.83 ready (no recover double-count, simple posters)');
         } catch (e) {
             console.error('stats init', e);
         }
