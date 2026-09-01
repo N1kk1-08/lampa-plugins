@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.81' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.82' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1346,22 +1346,8 @@
                             self._lastTimelineDuration = Number(road.duration);
                         }
                         self.sessionLastTl = time;
-                        self._sessionCommitted = false; // не блокувати наступні серії глобально
-
-                        // Just+/VLC: головне нарахування по timeline (працює на 2-й, 3-й серії)
-                        if (self.isExternalPlayer() || self.sessionIsExternal || !Current.getVideoState()) {
-                            setTimeout(function () { self.applyTimelineProgress(road); }, 400);
-                            setTimeout(function () { self.applyTimelineProgress(road); }, 2000);
-                        }
-
-                        if (self.sessionHadPlay || self.sessionRunning) {
-                            self.saveSession();
-                            [800, 2500, 5000].forEach(function (ms) {
-                                setTimeout(function () { self.endSession('timeline'); }, ms);
-                            });
-                        } else {
-                            setTimeout(function () { self.recoverSession(); }, 600);
-                        }
+                        // лише completed/position — без addWatchSeconds
+                        setTimeout(function () { self.applyTimelineProgress(road); }, 300);
                     });
                 }
             } catch (e) {}
@@ -1607,15 +1593,8 @@
             var hardCap = 3 * 3600;
             if (duration > 60) hardCap = Math.floor(duration) + 60;
             if (runtimeSec >= 300) hardCap = Math.min(hardCap, runtimeSec + 60);
-            // wall не більше ніж від started до heartbeat (вже в wallSec)
-            // seek: tlDelta не більше wall
-            if (tlDelta > wallSec + 90) tlDelta = wallSec;
-
-            var sec = wallSec;
-            if (payload.isExternal && tlDelta >= 15) {
-                sec = wallSec >= 20 ? Math.min(wallSec, tlDelta) : Math.min(tlDelta, hardCap);
-            }
-            sec = Math.min(sec, hardCap);
+            // recover: тільки wall (heartbeat - start), без timeline-накрутки
+            var sec = Math.min(wallSec, hardCap);
             sec = Math.min(Math.max(0, sec), 21600);
             if (sec < 20) {
                 this.clearSession();
@@ -1716,134 +1695,31 @@
         },
 
         // Головний шлях для Just+/VLC: час з дельти Timeline (кожна серія окремо)
+        // Timeline НЕ нараховує час (лише completed + last position).
+        // Час тільки з wall-clock: flushPartial / endSession.
         applyTimelineProgress: function (road) {
             if (!Settings.collecting()) return false;
             if (!road) return false;
             var time = Number(road.time);
-            if (!Number.isFinite(time) || time < 20) return false;
+            if (!Number.isFinite(time) || time < 0) return false;
             var duration = Number(road.duration) || 0;
             if (duration > 0) this._lastTimelineDuration = duration;
             if (road.hash) this.currentTimelineHash = road.hash;
+            this.sessionLastTl = time;
 
             var movie = this.resolveMovieAny();
             if (!movie) return false;
             var id = Media.getId(movie);
-            if (this.recentlyCommitted(id)) return false;
+            try { StatsDB.setLast(id, time); } catch (e) {}
 
-            var prev = StatsDB.getLast(id);
-            if (this.sessionMovie && Media.getId(this.sessionMovie) === id && this.sessionSeedTime > prev) {
-                prev = this.sessionSeedTime;
-            }
-
-            var delta = Math.floor(time - prev);
-
-            // перший контакт без сесії з великим таймкодом — лише seed
-            if (prev === 0 && delta > 120 && !this.sessionHadPlay && !this.sessionRunning) {
-                var hasStored = false;
-                try {
-                    var st = Lampa.Storage.get(CONFIG.session_storage);
-                    if (st && st.id) hasStored = true;
-                } catch (e) {}
-                if (!hasStored) {
-                    StatsDB.setLast(id, time);
-                    StatsDB.save();
-                    if (duration > 60 && time / duration >= 0.85) {
-                        StatsDB.markCompleted(id, Media.metaFrom(movie), movie);
-                    }
-                    return false;
+            // Позначка «переглянуто» без нарахування хвилин
+            if (duration > 60 && time / duration >= 0.90) {
+                if (!StatsDB.data.completed[id]) {
+                    var meta = Media.metaFrom(movie);
+                    StatsDB.markCompleted(id, meta, movie);
                 }
             }
-
-            var runtimeSec = this.resolveRuntimeSec(movie);
-            var hardCap = 0;
-            if (duration > 60) hardCap = Math.floor(duration) + 60;
-            if (runtimeSec >= 300) hardCap = hardCap ? Math.min(hardCap, runtimeSec + 60) : (runtimeSec + 60);
-            if (!hardCap) hardCap = 3 * 3600; // макс 3 год за один commit без відомого runtime
-
-            // wall-clock сесії (перемотка/reconnect не роздувають)
-            var wallSec = 0;
-            if (this._sessionWallStart) {
-                wallSec = Math.floor((Date.now() - this._sessionWallStart) / 1000);
-            } else if (this.sessionHadPlay) {
-                wallSec = Math.floor((this.sessionAccumMs || 0) / 1000);
-            }
-
-            // Seek: стрибок timeline >> реального wall — не нараховувати весь стрибок
-            if (wallSec > 0 && delta > wallSec + 90) {
-                delta = wallSec;
-            }
-            // без wall — не довіряти великій дельті (перемотка без сесії)
-            if (wallSec <= 0 && delta > 600) {
-                // лише оновити last, без повного нарахування
-                StatsDB.setLast(id, time);
-                StatsDB.save();
-                if (duration > 60 && time / duration >= 0.85 && !StatsDB.data.completed[id]) {
-                    var metaS = Media.metaFrom(movie);
-                    StatsDB.addWatchSeconds(Math.min(120, hardCap), metaS);
-                    StatsDB.markCompleted(id, metaS, movie);
-                    this.markIdCommitted(id);
-                    return true;
-                }
-                return false;
-            }
-
-            if (delta < 15) {
-                if (duration > 60 && time / duration >= 0.85 && !StatsDB.data.completed[id]) {
-                    var metaC = Media.metaFrom(movie);
-                    var bump = Math.max(30, Math.min(180, Math.floor((duration || hardCap) * 0.03)));
-                    // не більше ніж залишок до hardCap з урахуванням уже нарахованого в сесії
-                    var left = Math.max(0, hardCap - (this.sessionAddedSec || 0));
-                    bump = Math.min(bump, left || bump);
-                    if (bump >= 15) {
-                        StatsDB.addWatchSeconds(bump, metaC);
-                        this.sessionAddedSec = (this.sessionAddedSec || 0) + bump;
-                    }
-                    StatsDB.setLast(id, time);
-                    StatsDB.markCompleted(id, metaC, movie);
-                    this.markIdCommitted(id);
-                    return true;
-                }
-                return false;
-            }
-
-            var sec = delta;
-            if (wallSec >= 20) sec = Math.min(sec, wallSec + 45);
-            sec = Math.min(sec, hardCap);
-            // скільки вже додали в цій сесії — не перевищити hardCap сумарно
-            var already = this.sessionAddedSec || 0;
-            if (already > 0) sec = Math.min(sec, Math.max(0, hardCap - already));
-            sec = Math.min(Math.max(0, sec), 21600);
-            if (sec < 15) {
-                StatsDB.setLast(id, time);
-                StatsDB.save();
-                return false;
-            }
-
-            var meta = Media.metaFrom(movie);
-            StatsDB.addWatchSeconds(sec, meta);
-            StatsDB.setLast(id, time);
-            StatsDB.save();
-            this.sessionAddedSec = already + sec;
-            this.markIdCommitted(id);
-
-            if (this.sessionMovie && Media.getId(this.sessionMovie) === id) {
-                this.sessionAccumMs = 0;
-                this.sessionHadPlay = false;
-                this.sessionRunning = false;
-                this.sessionStartedAt = 0;
-                this.sessionMovie = null;
-                this.sessionSeedTime = 0;
-                this.sessionAddedSec = 0;
-                this._sessionCommitted = false;
-                this.clearSession();
-            }
-
-            if (duration > 60 && time / duration >= 0.85) {
-                StatsDB.markCompleted(id, meta, movie);
-            } else if (runtimeSec >= 300 && (time >= runtimeSec * 0.85 || (already + sec) >= runtimeSec * 0.85)) {
-                StatsDB.markCompleted(id, meta, movie);
-            }
-            return true;
+            return false;
         },
 
         beginSession: function (movie) {
@@ -2103,13 +1979,29 @@
 
             wasExternal = wasExternal || this.isExternalPlayer();
 
-            // вже нарахували по timeline для цього id — не дублювати wall
             if (this.recentlyCommitted(Media.getId(movie))) {
                 this.sessionAccumMs = 0;
                 this.sessionHadPlay = false;
                 this.sessionMovie = null;
                 this.sessionAddedSec = 0;
                 this.clearSession();
+                return;
+            }
+
+            // Єдине джерело часу — wall-clock. Timeline не додає хвилини.
+            if (wallSec < 15) {
+                if (wasExternal || this.sessionIsExternal) {
+                    // рано при старті external — продовжити сесію
+                    this.sessionRunning = true;
+                    this.sessionStartedAt = Date.now();
+                    this.sessionHadPlay = true;
+                    this.sessionIsExternal = true;
+                    this.saveSession();
+                    return;
+                }
+                this.sessionAccumMs = 0;
+                this.sessionHadPlay = false;
+                this.sessionMovie = null;
                 return;
             }
 
@@ -2128,44 +2020,11 @@
             if (duration > 60) hardCap = Math.floor(duration) + 60;
             if (runtimeSec >= 300) hardCap = Math.min(hardCap, runtimeSec + 60);
 
-            var tlDelta = 0;
-            if (tNow > seed + 5) tlDelta = Math.floor(tNow - seed);
-
-            // Seek: timeline >> wall
-            if (wallSec >= 20 && tlDelta > wallSec + 90) {
-                tlDelta = wallSec;
-            }
-
-            if (wallSec < 20 && tlDelta >= 15) {
-                wallSec = Math.min(tlDelta, hardCap);
-            }
-
-            if (wallSec < 20) {
-                if (wasExternal || this.sessionIsExternal) {
-                    this.sessionRunning = true;
-                    this.sessionStartedAt = Date.now();
-                    this.sessionHadPlay = true;
-                    this.sessionIsExternal = true;
-                    this.saveSession();
-                    return;
-                }
-                this.sessionAccumMs = 0;
-                this.sessionHadPlay = false;
-                this.sessionMovie = null;
-                return;
-            }
-
             var sec = wallSec;
-            if (wasExternal) {
-                if (tlDelta >= 15) {
-                    sec = Math.min(wallSec, tlDelta);
-                }
+            if (this.sessionAddedSec > 0) {
+                sec = Math.max(0, sec); // flushPartial уже додав шматки; wall тут — залишок
             }
             sec = Math.min(sec, hardCap);
-            // уже додане в сесії (timeline partial)
-            if (this.sessionAddedSec > 0) {
-                sec = Math.min(sec, Math.max(0, hardCap - this.sessionAddedSec));
-            }
             sec = Math.min(sec, 21600);
 
             if (sec < 15) return;
@@ -2181,6 +2040,7 @@
             this.sessionIsExternal = false;
             this._sessionWallStart = 0;
             this.sessionLastTl = 0;
+            this.sessionAddedSec = 0;
             this.clearSession();
 
             // Completed
@@ -2867,14 +2727,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v081-style');
+        var old = document.getElementById('lampa-stats-v082-style');
         if (old) old.remove();
-        ['lampa-stats-v080-style','lampa-stats-v079-style','lampa-stats-v078-style','lampa-stats-v077-style','lampa-stats-v076-style','lampa-stats-v075-style','lampa-stats-v074-style'].forEach(function (id) {
+        ['lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style','lampa-stats-v078-style','lampa-stats-v077-style','lampa-stats-v076-style','lampa-stats-v075-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v081-style';
+        s.id = 'lampa-stats-v082-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2894,7 +2754,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.81 ready (watch-time vs timeline + posters)');
+            console.log('Lampa stats v0.82 ready (wall-clock only, timeline for completed)');
         } catch (e) {
             console.error('stats init', e);
         }
