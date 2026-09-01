@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.lampa_ukrainian_stats_v078) return;
-    window.lampa_ukrainian_stats_v078 = true;
+    if (window.lampa_ukrainian_stats_v079) return;
+    window.lampa_ukrainian_stats_v079 = true;
 
     var LANG = {
         menu_title: 'Статистика',
@@ -47,6 +47,15 @@
         open_watched: 'Відкрити список'
     };
 
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     var CONFIG = {
         stats_storage: 'lampa_personal_stats_v9',
         session_storage: 'lampa_stats_session_v1',
@@ -62,6 +71,7 @@
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
         max_actors_show: 15,
         max_posters_show: 12,
+        meta_max: 400,
         xp_movie_bonus: 3600,
         xp_episode_bonus: 900
     };
@@ -368,7 +378,34 @@
                 }
                 if ((meta.genres && meta.genres.length) || (meta.actors && meta.actors.length) || meta.year || meta.poster_path) {
                     Lampa.Storage.set(this.prefix + id, meta);
+                    this.touchIndex(id);
+                    this.prune();
                 }
+            } catch (e) {}
+        },
+        touchIndex: function (id) {
+            try {
+                var idx = Lampa.Storage.get('stats_meta_index');
+                if (!Array.isArray(idx)) idx = [];
+                idx = idx.filter(function (x) { return x && x !== id; });
+                idx.unshift(id);
+                Lampa.Storage.set('stats_meta_index', idx);
+            } catch (e) {}
+        },
+        prune: function () {
+            try {
+                var max = CONFIG.meta_max || 400;
+                var idx = Lampa.Storage.get('stats_meta_index');
+                if (!Array.isArray(idx) || idx.length <= max) return;
+                var keep = idx.slice(0, max);
+                var drop = idx.slice(max);
+                var self = this;
+                drop.forEach(function (d) {
+                    try { Lampa.Storage.set(self.prefix + d, null); } catch (e1) {}
+                    try { localStorage.removeItem(self.prefix + d); } catch (e2) {}
+                    try { localStorage.removeItem('lampa_' + self.prefix + d); } catch (e3) {}
+                });
+                Lampa.Storage.set('stats_meta_index', keep);
             } catch (e) {}
         },
         load: function (idOrMovie) {
@@ -755,41 +792,7 @@
             if (completed) w.completed = true;
             row.count = Object.keys(row.works).length;
         },
-        addProgress: function (id, time, duration, deltaSec, meta, opts) {
-            if (!id || !Number.isFinite(time) || time < 0) return 0;
-            opts = opts || {};
-            var fromExternal = !!opts.fromExternal;
-            var prev = this.getLast(id);
-            if (time < prev - 5) {
-                this.setLast(id, time);
-                this.save();
-                return 0;
-            }
-            // Перший контакт після скидання / нова серія: лише seed позиції (догляд з історії),
-            // без нарахування «фантомних» хвилин з уже збереженого таймкоду Lampa.
-            if (prev === 0 && time > 10 && !fromExternal) {
-                this.setLast(id, time);
-                this.save();
-                return 0;
-            }
-
-            var raw = Math.max(0, time - prev);
-            // Внутрішній плеєр: обмежуємо wall-time. Зовнішній (VLC): довіряємо дельті Timeline.
-            if (!fromExternal && Number.isFinite(deltaSec) && deltaSec >= 0) {
-                raw = Math.min(raw, deltaSec + 1.5);
-            }
-            var maxJump = Number.isFinite(duration) && duration > 0 ? Math.min(duration, 14400) : (fromExternal ? 14400 : 600);
-            var safe = Math.min(raw, maxJump);
-            if (safe > 0) {
-                this.data.seconds_watched += Math.floor(safe);
-                this.enrich(Math.floor(safe), meta);
-            }
-            this.setLast(id, time);
-            this.save();
-            LevelSystem.checkLevelUp();
-            return Math.floor(safe);
-        },
-        // Нарахування «живих» секунд від wall-clock таймера сесії
+        // addProgress removed — only addWatchSeconds (wall-clock / timeline)
         addWatchSeconds: function (sec, meta) {
             sec = Math.floor(Number(sec) || 0);
             if (sec <= 0) return 0;
@@ -2294,7 +2297,7 @@
             c.append('<div class="stv-card-label">' + LANG.total_time + '</div>');
             var body = $('<div class="stv-card-body stv-total-body"></div>');
             body.append('<div class="stv-card-val">' + StatsDB.formatTime(StatsDB.data.seconds_watched) + '</div>');
-            body.append('<div class="stv-level-inline"><span class="stv-level-num-sm">' + info.level + '</span> <span class="stv-level-name-sm">' + info.name + '</span></div>');
+            body.append($('<div class="stv-level-inline"></div>').append($('<span class="stv-level-num-sm"></span>').text(String(info.level))).append(' ').append($('<span class="stv-level-name-sm"></span>').text(info.name || '')));
             body.append('<div class="stv-level-bar stv-level-bar-sm"><div class="stv-level-fill" style="width:' + Math.round(info.progress * 100) + '%"></div></div>');
             var sub = info.max ? LANG.level_max : (LANG.level_to + ' «' + info.nextName + '» — ' + StatsDB.formatTime(info.toNext));
             body.append('<div class="stv-level-sub">' + sub + '</div>');
@@ -2309,7 +2312,7 @@
             body.append('<div class="stv-watched-counts"><span class="stv-big">' + (StatsDB.data.movies_watched || 0) + '</span><span class="stv-sub"> ' + LANG.movies + ' / ' + (StatsDB.data.episodes_watched || 0) + ' ' + LANG.episodes + '</span></div>');
             var posters = $('<div class="stv-posters"></div>');
             StatsDB.recentCompleted(CONFIG.max_posters_show).forEach(function (item) {
-                var p = $('<div class="stv-poster" title="' + (item.title || '').replace(/"/g, '&quot;') + '"></div>');
+                var p = $('<div class="stv-poster"></div>').attr('title', item.title || '');
                 var url = posterUrl(item.poster);
                 if (url) p.css('background-image', 'url(' + url + ')');
                 else {
@@ -2359,9 +2362,9 @@
                         : '';
 
                     if (img) item.append('<div class="stv-actor-photo" style="background-image:url(' + img + ')"></div>');
-                    else item.append('<div class="stv-actor-photo stv-actor-ph">' + (a.name || '?').charAt(0) + '</div>');
+                    else item.append($('<div class="stv-actor-photo stv-actor-ph"></div>').text((a.name || '?').charAt(0)));
 
-                    item.append('<div class="stv-actor-name">' + (a.name || '') + '</div>');
+                    item.append($('<div class="stv-actor-name"></div>').text(a.name || ''));
                     item.append('<div class="stv-actor-meta">' + StatsDB.formatTime(a.seconds || 0) + '</div>');
 
                     // Горизонтальний скрол на ТВ
@@ -2470,7 +2473,7 @@
             box.append($('<div class="stv-pie" style="background:conic-gradient(' + stops.join(',') + ')"></div>'));
             var legend = $('<div class="stv-legend"></div>');
             list.forEach(function (g, i) {
-                legend.append('<div class="stv-leg-item"><span class="stv-dot" style="background:' + colors[i % colors.length] + '"></span>' + g.name + ' ' + Math.round((g.seconds / total) * 100) + '%</div>');
+                legend.append($('<div class="stv-leg-item"></div>').append($('<span class="stv-dot"></span>').css('background', colors[i % colors.length])).append(document.createTextNode(' ' + (g.name || '') + ' ' + Math.round((g.seconds / total) * 100) + '%')));
             });
             box.append(legend);
             return box;
@@ -2584,7 +2587,7 @@
             html.empty();
             var actor = StatsDB.data.actors[key];
             var name = (actor && actor.name) || (object && object.title) || LANG.actor_works;
-            html.append('<div class="stv-title">' + name + '</div>');
+            html.append($('<div class="stv-title"></div>').text(name || ''));
             html.append('<div class="stv-section-title">' + LANG.actor_works + '</div>');
             var works = StatsDB.actorWorks(key);
             if (!works.length) {
@@ -2599,7 +2602,7 @@
                 if (url) poster.css('background-image', 'url(' + url + ')');
                 else poster.addClass('stv-poster-empty').text(w.isEpisode ? 'S' : 'F');
                 var info = $('<div class="stv-work-info"></div>');
-                info.append('<div class="stv-work-title">' + (w.title || '') + '</div>');
+                info.append($('<div class="stv-work-title"></div>').text(w.title || ''));
                 info.append('<div class="stv-work-meta">' + (w.isEpisode ? LANG.series_ep : LANG.film) + ' · ' + StatsDB.formatTime(w.seconds) + (w.completed ? ' · ✓' : '') + '</div>');
                 row.append(poster);
                 row.append(info);
@@ -2651,7 +2654,7 @@
                 else poster.addClass('stv-poster-empty').text(w.isEpisode ? 'S' : 'F');
                 if (w.isEpisode) poster.append('<span class="stv-poster-badge">EP</span>');
                 var info = $('<div class="stv-watched-info"></div>');
-                info.append('<div class="stv-watched-title">' + (w.title || '') + '</div>');
+                info.append($('<div class="stv-watched-title"></div>').text(w.title || ''));
                 var kind = w.isEpisode ? LANG.series_ep : LANG.film;
                 var timeStr = w.seconds > 0 ? StatsDB.formatTime(w.seconds) : '—';
                 info.append('<div class="stv-watched-meta">' + kind + ' · ' + timeStr + '</div>');
@@ -2761,14 +2764,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v078-style');
+        var old = document.getElementById('lampa-stats-v079-style');
         if (old) old.remove();
-        ['lampa-stats-v077-style','lampa-stats-v076-style','lampa-stats-v075-style','lampa-stats-v074-style','lampa-stats-v073-style','lampa-stats-v072-style','lampa-stats-v071-style'].forEach(function (id) {
+        ['lampa-stats-v078-style','lampa-stats-v077-style','lampa-stats-v076-style','lampa-stats-v075-style','lampa-stats-v074-style','lampa-stats-v073-style','lampa-stats-v072-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v078-style';
+        s.id = 'lampa-stats-v079-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2788,7 +2791,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.78 ready (watched list popup)');
+            console.log('Lampa stats v0.79 ready (XSS escape + MetaStore prune)');
         } catch (e) {
             console.error('stats init', e);
         }
