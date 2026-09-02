@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.84' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.85' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -57,7 +57,7 @@
         activity: 'lampa_ukrainian_stats_view',
         activity_actor: 'lampa_ukrainian_stats_actor',
         activity_watched: 'lampa_ukrainian_stats_watched',
-        completion: 0.90,
+        completion: 0.82,
         interval: 1000,
         tmdb_img: 'https://image.tmdb.org/t/p/w185',
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
@@ -1607,11 +1607,15 @@
             try { StatsDB.setLast(id, time); } catch (e) {}
 
             // Позначка «переглянуто» без нарахування хвилин
-            if (duration > 60 && time / duration >= 0.90) {
-                if (!StatsDB.data.completed[id]) {
-                    var meta = Media.metaFrom(movie);
-                    StatsDB.markCompleted(id, meta, movie);
-                }
+            // майже кінець: ≥82% або лишилось ≤3 хв
+            var nearEnd = false;
+            if (duration > 60 && time > 0) {
+                if (time / duration >= 0.82) nearEnd = true;
+                if ((duration - time) <= 180 && time / duration >= 0.55) nearEnd = true;
+            }
+            if (nearEnd && !StatsDB.data.completed[id]) {
+                var meta = Media.metaFrom(movie);
+                StatsDB.markCompleted(id, meta, movie);
             }
             return false;
         },
@@ -1948,19 +1952,25 @@
             this.sessionAddedSec = 0;
             this.clearSession();
 
-            // Completed
+            // Completed — м’якше для «лишилось 1–2 хв»
             try {
                 var done = false;
-                if (duration > 60) {
-                    if (tNow > 0 && tNow / duration >= 0.85) done = true;
-                    if (tNow > 0 && (duration - tNow) < 150 && tNow / duration > 0.65) done = true;
+                var dur = duration > 60 ? duration : (tlDuration > 60 ? tlDuration : 0);
+                if (dur > 60 && tNow > 0) {
+                    if (tNow / dur >= 0.82) done = true;
+                    // лишилось ≤3 хв і вже більше половини
+                    if ((dur - tNow) <= 180 && tNow / dur >= 0.50) done = true;
+                    // лишилось ≤2 хв
+                    if ((dur - tNow) <= 120 && tNow > 60) done = true;
                 }
                 if (!done && runtimeSec >= 300) {
-                    if (sec >= runtimeSec * 0.85) done = true;
-                    if (wallSec >= runtimeSec * 0.9) done = true;
+                    if (sec >= runtimeSec * 0.80) done = true;
+                    // external: додивились майже до кінця за timeline
+                    if (tNow > 0 && (runtimeSec - tNow) <= 180 && tNow >= runtimeSec * 0.50) done = true;
                 }
-                if (!done && tNow > 0 && tlDuration > 60 && tNow >= tlDuration * 0.85) {
-                    done = true;
+                if (!done && tNow > 0 && tlDuration > 60) {
+                    if (tNow / tlDuration >= 0.82) done = true;
+                    if ((tlDuration - tNow) <= 180 && tNow > 60) done = true;
                 }
                 if (done) {
                     StatsDB.markCompleted(Media.getId(movie), meta, movie);
@@ -2630,14 +2640,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v084-style');
+        var old = document.getElementById('lampa-stats-v085-style');
         if (old) old.remove();
-        ['lampa-stats-v083-style','lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style','lampa-stats-v078-style','lampa-stats-v077-style'].forEach(function (id) {
+        ['lampa-stats-v084-style','lampa-stats-v083-style','lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style','lampa-stats-v078-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v084-style';
+        s.id = 'lampa-stats-v085-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2657,7 +2667,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.84 ready (tlDelta ceiling + completed fix)');
+            console.log('Lampa stats v0.85 ready (near-end completed for episodes)');
         } catch (e) {
             console.error('stats init', e);
         }
