@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.85' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.86' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1232,22 +1232,20 @@
             try {
                 if (Lampa.Player && typeof Lampa.Player.callback === 'function') {
                     Lampa.Player.callback(function () {
-                        // callback при старті external — ігноруємо якщо сесія ще «коротка»
-                        // реальний commit при поверненні в activity
+                        // External (Just+/VLC): callback часто при обриві TorrServe/потоку,
+                        // поки користувач лишається в плеєрі — сесію НЕ закриваємо.
                         setTimeout(function () {
-                            if (self.sessionIsExternal) {
-                                var lived = self.sessionAccumMs;
-                                if (self.sessionRunning && self.sessionStartedAt) {
-                                    lived += Date.now() - self.sessionStartedAt;
+                            if (self.sessionIsExternal || self.isExternalPlayer()) {
+                                self.sessionIsExternal = true;
+                                if (!self.sessionRunning && self.sessionHadPlay) {
+                                    self.sessionStartedAt = Date.now();
+                                    self.sessionRunning = true;
                                 }
-                                // якщо менше 30с — це старт плеєра, не кінець перегляду
-                                if (lived < 30000) return;
+                                self.saveSession();
+                                return;
                             }
                             self.endSession('callback');
                         }, 600);
-                        [3000, 7000, 12000].forEach(function (ms) {
-                            setTimeout(function () { self.endSession('callback-late'); }, ms);
-                        });
                     });
                 }
             } catch (e) {}
@@ -1856,6 +1854,22 @@
             var movieEarly = this.sessionMovie || this.currentMovie;
             if (movieEarly && this.recentlyCommitted(Media.getId(movieEarly))) return;
 
+            reason = reason || '';
+            var ext = this.sessionIsExternal || this.isExternalPlayer();
+            // Поки користувач у Just+/VLC: не комітити на обриві потоку / destroy / callback
+            // Фіксація лише після повернення в Lampa (activity / visible / focus)
+            if (ext && reason && reason !== 'activity' && reason !== 'visible' && reason !== 'focus'
+                && reason !== 'switch' && reason !== 'timeline') {
+                this.sessionIsExternal = true;
+                if (!this.sessionRunning) {
+                    this.sessionStartedAt = Date.now();
+                    this.sessionRunning = true;
+                    this.sessionHadPlay = true;
+                }
+                this.saveSession();
+                return;
+            }
+
             // зняти поточний відрізок у accum
             if (this.sessionRunning && this.sessionStartedAt) {
                 var dt = Date.now() - this.sessionStartedAt;
@@ -1877,8 +1891,15 @@
             if (!movie) return;
 
             var wallSec = Math.floor(ms / 1000);
-
+            // external: повний час від старту сесії (обрив TorrServe не ріже таймер)
             wasExternal = wasExternal || this.isExternalPlayer();
+            if (wasExternal && this._sessionWallStart) {
+                var fullWall = Math.floor((Date.now() - this._sessionWallStart) / 1000);
+                // мінус already flushed
+                var accounted = this.sessionAddedSec || 0;
+                var fromStart = Math.max(0, fullWall - accounted);
+                if (fromStart > wallSec) wallSec = fromStart;
+            }
 
             if (this.recentlyCommitted(Media.getId(movie))) {
                 this.sessionAccumMs = 0;
@@ -2640,14 +2661,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v085-style');
+        var old = document.getElementById('lampa-stats-v086-style');
         if (old) old.remove();
-        ['lampa-stats-v084-style','lampa-stats-v083-style','lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style','lampa-stats-v078-style'].forEach(function (id) {
+        ['lampa-stats-v085-style','lampa-stats-v084-style','lampa-stats-v083-style','lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v085-style';
+        s.id = 'lampa-stats-v086-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2667,7 +2688,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.85 ready (near-end completed for episodes)');
+            console.log('Lampa stats v0.86 ready (external session survives stream drop)');
         } catch (e) {
             console.error('stats init', e);
         }
