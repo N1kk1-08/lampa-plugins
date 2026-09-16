@@ -2231,8 +2231,9 @@
                 },
                 up: function () {
                     if (Navigator.canmove('up')) Navigator.move('up');
-                    else if (typeof scroll.wheel === 'function') scroll.wheel(-200);
-                    else if (typeof scroll.move === 'function') scroll.move(-200);
+                    // На першому ряду повертаємо штатний фокус шапці Lampa:
+                    // звідси доступні пошук, сповіщення та налаштування.
+                    else Lampa.Controller.toggle('head');
                 },
                 down: function () {
                     if (Navigator.canmove('down')) Navigator.move('down');
