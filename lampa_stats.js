@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.90' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.93' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1295,9 +1295,8 @@
                 }
             } catch (e) {}
 
-            // Bandera/Makhno можуть відкрити VLC через Android.openPlayer,
-            // оминаючи Lampa.Player.play і його listener.external. Це єдиний
-            // надійний момент зафіксувати початок такої сесії на Android TV.
+            // Частина online-плагінів відкриває VLC через Android.openPlayer,
+            // оминаючи Lampa.Player.play і його listener.external.
             try {
                 if (Lampa.Android && typeof Lampa.Android.openPlayer === 'function' && !Lampa.Android._stats_open_player_hooked) {
                     Lampa.Android._stats_open_player_hooked = true;
@@ -1437,43 +1436,25 @@
             try {
                 if (Lampa.Timeline && Lampa.Timeline.listener) {
                     Lampa.Timeline.listener.follow('update', function (e) {
-                        if (!e) return;
-                        // Штатна форма Lampa: e.data = { hash, road }.
-                        // Частина старих збірок передає сам road напряму.
-                        var payload = e.data || e;
-                        var road = payload && (payload.road || payload);
-                        if (!road) return;
-                        var time = Number(road.time);
-                        if (!Number.isFinite(time) || time < 0) return;
-                        var timelineHash = payload.hash || road.hash || '';
-                        // Bandera Online може зберегти таймлайн без Player.play
-                        // і без картки серії. У такому випадку хеш дозволяє
-                        // безпечно відновити саме сезон і серію.
-                        if (timelineHash) self.adoptFallbackEpisode(timelineHash, road);
-                        if (timelineHash) self.currentTimelineHash = timelineHash;
-                        if (Number.isFinite(Number(road.duration)) && Number(road.duration) > 0) {
-                            self._lastTimelineDuration = Number(road.duration);
-                        }
-                        self.sessionLastTl = time;
-                        self.timelineEvidence = true;
-                        // лише completed/position — без addWatchSeconds
-                        var token = self.sessionToken;
-                        setTimeout(function () {
-                            if (token === self.sessionToken) {
-                                var progress = Object.assign({}, road);
-                                if (timelineHash && !progress.hash) progress.hash = timelineHash;
-                                self.applyTimelineProgress(progress);
-                            }
-                        }, 300);
+                        self.onTimelineUpdate(e);
                     });
                 }
+            } catch (e) {}
+
+            // Старі та модифіковані збірки Lampa можуть не пересилати подію
+            // через Timeline.listener, але завжди повідомляють state:changed.
+            try {
+                Lampa.Listener.follow('state:changed', function (e) {
+                    if (!e || e.target !== 'timeline' || e.reason !== 'update') return;
+                    self.onTimelineUpdate(e);
+                });
             } catch (e) {}
 
             try {
                 Lampa.Listener.follow('activity', function (e) {
                     if (!e) return;
                     if (e.type === 'start' || e.type === 'archive' || e.type === 'resume') {
-                        [800, 2500, 5000, 9000].forEach(function (ms) { self.scheduleEnd('activity', ms); });
+                        [800, 2500, 5000, 9000, 15000].forEach(function (ms) { self.scheduleEnd('activity', ms); });
                         setTimeout(function () { self.recoverSession(); }, 1500);
                     }
                 });
@@ -1483,7 +1464,7 @@
             try {
                 document.addEventListener('visibilitychange', function () {
                     if (document.visibilityState === 'visible') {
-                        [1000, 3000, 6000].forEach(function (ms) { self.scheduleEnd('visible', ms); });
+                        [1000, 3000, 6000, 15000].forEach(function (ms) { self.scheduleEnd('visible', ms); });
                         setTimeout(function () { self.recoverSession(); }, 2000);
                     } else if (document.visibilityState === 'hidden') {
                         // Деякі online-балансери запускають VLC напряму, без
@@ -1499,7 +1480,7 @@
                     self.beginExternalFallback('blur');
                 });
                 window.addEventListener('focus', function () {
-                    [1200, 4000, 7000].forEach(function (ms) { self.scheduleEnd('focus', ms); });
+                    [1200, 4000, 7000, 15000].forEach(function (ms) { self.scheduleEnd('focus', ms); });
                 });
             } catch (e) {}
             try {
@@ -1509,7 +1490,7 @@
                     self.beginExternalFallback('app-pause');
                 }, false);
                 document.addEventListener('resume', function () {
-                    [1500, 3500, 6500].forEach(function (ms) { self.scheduleEnd('app-resume', ms); });
+                    [1500, 3500, 6500, 15000].forEach(function (ms) { self.scheduleEnd('app-resume', ms); });
                 }, false);
             } catch (e) {}
 
@@ -1663,6 +1644,35 @@
             return true;
         },
 
+        onTimelineUpdate: function (e) {
+            if (!e) return false;
+            // Штатна форма Lampa: e.data = { hash, road }.
+            // Частина старих збірок передає сам road напряму.
+            var payload = e.data || e;
+            var road = payload && (payload.road || payload);
+            if (!road) return false;
+            var time = Number(road.time);
+            if (!Number.isFinite(time) || time < 0) return false;
+            var timelineHash = payload.hash || road.hash || '';
+            if (timelineHash) this.adoptFallbackEpisode(timelineHash, road);
+            if (timelineHash) this.currentTimelineHash = timelineHash;
+            if (Number.isFinite(Number(road.duration)) && Number(road.duration) > 0) {
+                this._lastTimelineDuration = Number(road.duration);
+            }
+            this.sessionLastTl = time;
+            this.timelineEvidence = true;
+            // Timeline лише підтверджує позицію/completed; хвилини додає endSession.
+            var self = this;
+            var token = this.sessionToken;
+            setTimeout(function () {
+                if (token !== self.sessionToken) return;
+                var progress = Object.assign({}, road);
+                if (timelineHash && !progress.hash) progress.hash = timelineHash;
+                self.applyTimelineProgress(progress);
+            }, 300);
+            return true;
+        },
+
 
         saveSession: function () {
             try {
@@ -1740,7 +1750,8 @@
                 if (id && (!self.sessionMovie || Media.getId(self.sessionMovie) !== id)) return;
                 // Перші кілька секунд після повернення з Just+/VLC Timeline ще може
                 // записувати фінальну позицію. Наступна перевірка її підхопить.
-                self.endSession(reason, token, delay >= 5000);
+                var finalFallbackCheck = self.sessionExternalFallback ? delay >= 12000 : delay >= 5000;
+                self.endSession(reason, token, finalFallbackCheck);
             }, delay);
         },
 
@@ -1785,10 +1796,6 @@
                 if (this.sessionIsExternal) this.saveSession();
                 return false;
             }
-            // Не стартуємо fallback від звичайного згортання Lampa, якщо в
-            // налаштуваннях обраний внутрішній плеєр.
-            if (!this.externalPlayerConfigured()) return false;
-
             var movie = this.resolveMovieAny();
             if (!movie || Media.getId(movie) === 'unknown:0:0') return false;
 
@@ -1808,39 +1815,89 @@
             return true;
         },
 
-        // Bandera зберігає прогрес у file_view, але її запуск VLC інколи
-        // обходить Player.play. Відображення таймлайна вже має точний хеш;
-        // будуємо невеликий індекс хешів серій лише на час такої сесії.
+        // Online-плагіни можуть зберігати прогрес без Player.play. Таймлайн
+        // усе одно має точний хеш; будуємо індекс лише на час такої сесії.
         prepareFallbackEpisodeIndex: function (movie) {
             var name = movie && (movie.original_name || movie.original_title || movie.name || movie.title) || '';
             if (!name || !Lampa.Utils || typeof Lampa.Utils.hash !== 'function') return;
-            var index = {}, before = {}, seasons = [];
+            var index = {}, seasons = [];
             var knownSeason = Number(movie.season_number || movie.season || 0);
+            var knownEpisode = Number(movie.episode_number || movie.episode || 0);
             if (knownSeason > 0) seasons.push(knownSeason);
             else for (var s = 1; s <= 40; s++) seasons.push(s);
 
             try {
-                seasons.forEach(function (season) {
-                    for (var episode = 1; episode <= 100; episode++) {
-                        var hash = String(Lampa.Utils.hash([season, season > 10 ? ':' : '', episode, name].join('')));
-                        index[hash] = { season: season, episode: episode };
-                    }
-                });
-                var key = (Lampa.Timeline && typeof Lampa.Timeline.filename === 'function') ? Lampa.Timeline.filename() : 'file_view';
-                var viewed = Lampa.Storage && Lampa.Storage.get ? Lampa.Storage.get(key, {}) : {};
-                if (viewed && typeof viewed === 'object') {
-                    Object.keys(index).forEach(function (hash) {
-                        var road = viewed[hash];
-                        before[hash] = road ? {
-                            time: Number(road.time) || 0,
-                            percent: Number(road.percent) || 0,
-                            updated: Number(road.updated) || 0
-                        } : { time: 0, percent: 0, updated: 0 };
+                // Фільм або вже відома серія.
+                index[String(Lampa.Utils.hash(name))] = { season: knownSeason, episode: knownEpisode };
+                if (movie.timeline && movie.timeline.hash) {
+                    index[String(movie.timeline.hash)] = { season: knownSeason, episode: knownEpisode };
+                }
+                // Серіал без переданої серії: стандартні хеші Lampa.
+                if (movie.original_name || knownSeason || knownEpisode) {
+                    seasons.forEach(function (season) {
+                        for (var episode = 1; episode <= 100; episode++) {
+                            var hash = String(Lampa.Utils.hash([season, season > 10 ? ':' : '', episode, name].join('')));
+                            index[hash] = { season: season, episode: episode };
+                        }
                     });
                 }
                 this.fallbackEpisodeIndex = index;
-                this.fallbackTimelineBefore = before;
+                this.fallbackTimelineBefore = this.readTimelineStorageSnapshot(index);
             } catch (e) {}
+        },
+
+        timelineStorageMaps: function () {
+            var names = {}, maps = [];
+            function addName(name) {
+                if (!name) return;
+                name = String(name).replace(/^lampa_/, '');
+                if (/^(file_view|online_view)/.test(name)) names[name] = true;
+            }
+            try {
+                if (Lampa.Timeline && typeof Lampa.Timeline.filename === 'function') addName(Lampa.Timeline.filename());
+            } catch (e0) {}
+            addName('file_view');
+            addName('online_view');
+            try {
+                for (var i = 0; i < localStorage.length; i++) addName(localStorage.key(i));
+            } catch (e1) {}
+            Object.keys(names).forEach(function (name) {
+                var map = null;
+                try { map = Lampa.Storage.get(name); } catch (e2) {}
+                if (!map || typeof map !== 'object') {
+                    try {
+                        var raw = localStorage.getItem(name) || localStorage.getItem('lampa_' + name);
+                        map = raw ? JSON.parse(raw) : null;
+                    } catch (e3) { map = null; }
+                }
+                if (map && typeof map === 'object') maps.push(map);
+            });
+            return maps;
+        },
+
+        readTimelineStorageSnapshot: function (index) {
+            var snapshot = {};
+            Object.keys(index || {}).forEach(function (hash) {
+                snapshot[hash] = { time: 0, percent: 0, updated: 0, duration: 0 };
+            });
+            this.timelineStorageMaps().forEach(function (map) {
+                Object.keys(map).forEach(function (hash) {
+                    if (!index || !index[String(hash)]) return;
+                    var road = map[hash];
+                    if (!road || typeof road !== 'object') return;
+                    var current = snapshot[String(hash)] || { time: 0, percent: 0, updated: 0, duration: 0 };
+                    var candidate = {
+                        time: Number(road.time) || 0,
+                        percent: Number(road.percent) || 0,
+                        updated: Number(road.updated) || 0,
+                        duration: Number(road.duration) || 0
+                    };
+                    if (candidate.updated > current.updated || candidate.time > current.time || candidate.percent > current.percent) {
+                        snapshot[String(hash)] = candidate;
+                    }
+                });
+            });
+            return snapshot;
         },
 
         // Якщо Timeline.listener не спрацював, шукаємо підтверджений рух
@@ -1849,13 +1906,10 @@
         adoptFallbackEpisodeFromStorage: function () {
             if (!this.sessionExternalFallback || !this.fallbackEpisodeIndex) return false;
             try {
-                var key = (Lampa.Timeline && typeof Lampa.Timeline.filename === 'function') ? Lampa.Timeline.filename() : 'file_view';
-                var viewed = Lampa.Storage && Lampa.Storage.get ? Lampa.Storage.get(key, {}) : {};
-                if (!viewed || typeof viewed !== 'object') return false;
+                var viewed = this.readTimelineStorageSnapshot(this.fallbackEpisodeIndex);
                 var self = this, selected = null, selectedRoad = null, selectedScore = -1;
-                Object.keys(this.fallbackEpisodeIndex).forEach(function (hash) {
+                Object.keys(viewed).forEach(function (hash) {
                     var road = viewed[hash];
-                    if (!road || typeof road !== 'object') return;
                     var old = (self.fallbackTimelineBefore && self.fallbackTimelineBefore[hash]) || { time: 0, percent: 0, updated: 0 };
                     var time = Number(road.time) || 0;
                     var percent = Number(road.percent) || 0;
@@ -1883,12 +1937,16 @@
             var base = this.fallbackBaseMovie || this.sessionMovie || this.currentMovie;
             if (!base) return false;
             var movie = Object.assign({}, base, {
-                season_number: episode.season,
-                season: episode.season,
-                episode_number: episode.episode,
-                episode: episode.episode,
                 timeline: Object.assign({}, road || {}, { hash: timelineHash })
             });
+            if (episode.season > 0) {
+                movie.season_number = episode.season;
+                movie.season = episode.season;
+            }
+            if (episode.episode > 0) {
+                movie.episode_number = episode.episode;
+                movie.episode = episode.episode;
+            }
             var startedAt = this.fallbackStartedAt || this._sessionWallStart || Date.now();
             this.sessionToken++;
             this.sessionMovie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
@@ -2312,8 +2370,8 @@
                 return;
             }
 
-            // Bandera може записати file_view без події Timeline.update.
-            // Скануємо лише хеші поточного серіалу й лише за фактом руху.
+            // Online-плагін може записати file_view/online_view без події
+            // Timeline.update. Скануємо лише хеші поточного контенту.
             if (this.sessionExternalFallback) this.adoptFallbackEpisodeFromStorage();
             movie = this.sessionMovie || this.currentMovie || movie;
             var tNow = this.readTimelineTime(movie);
@@ -2349,14 +2407,20 @@
                 this.saveSession();
                 return;
             }
+            // Fallback без руху Timeline:
+            // - до 2 хв — найімовірніше звичайне згортання Lampa;
+            // - від 2 хв — дозволяємо wall-clock, бо деякі online-плагіни
+            //   не передають Player.play і не оновлюють Timeline вчасно.
             if (this.sessionExternalFallback && tlDelta < 15) {
-                // Fallback стартує від background-події, яка може бути звичайним
-                // згортанням Lampa. Без руху Timeline перегляд не зараховуємо.
-                this.discardSession();
-                return;
-            }
-            if (wasExternal && hasTimelineEvidence) {
-                var extGrace = 60; // запас на затримку timeline
+                if (wallSec < 120) {
+                    this.discardSession();
+                    return;
+                }
+                // sec залишається wallSec і нижче обмежується hardCap.
+            } else if (wasExternal && hasTimelineEvidence) {
+                // Для штатної external-сесії Timeline залишається стелею
+                // навіть при нульовій дельті: це захищає від довгої паузи.
+                var extGrace = 60;
                 sec = Math.min(sec, tlDelta + extGrace);
             }
             sec = Math.min(sec, hardCap);
@@ -2559,7 +2623,9 @@
 
         function renderAll(root) {
             root.empty();
-            root.append('<div class="stv-title">' + LANG.page_title + '</div>');
+            var pageTitle = $('<div class="stv-title"></div>').text(LANG.page_title);
+            pageTitle.append($('<span class="stv-version"></span>').text('v0.93'));
+            root.append(pageTitle);
 
             if (!Settings.collecting()) root.append('<div class="stv-disabled">' + LANG.disabled_text + '</div>');
 
@@ -2999,6 +3065,7 @@
     var CSS =
         '.stv-root{padding:22px 28px 50px;color:#fff;box-sizing:border-box;}' +
         '.stv-title{font-size:28px;font-weight:700;margin-bottom:18px;}' +
+        '.stv-version{font-size:11px;font-weight:500;opacity:.4;margin-left:10px;vertical-align:middle;}' +
         '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-watched-row,.stv-empty{transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;}' +
         '.stv-card:focus,.stv-actor:focus,.stv-panel:focus,.stv-reset:focus,.stv-work:focus,.stv-empty:focus,' +
         '.stv-card.focus,.stv-actor.focus,.stv-panel.focus,.stv-reset.focus,.stv-work.focus,' +
@@ -3066,14 +3133,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v090-style');
+        var old = document.getElementById('lampa-stats-v093-style');
         if (old) old.remove();
-        ['lampa-stats-v089-style','lampa-stats-v088-style','lampa-stats-v087-style','lampa-stats-v086-style','lampa-stats-v085-style','lampa-stats-v084-style','lampa-stats-v083-style','lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style'].forEach(function (id) {
+        ['lampa-stats-v092-style','lampa-stats-v091-style','lampa-stats-v090-style','lampa-stats-v089-style','lampa-stats-v088-style','lampa-stats-v087-style','lampa-stats-v086-style','lampa-stats-v085-style','lampa-stats-v084-style','lampa-stats-v083-style','lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v090-style';
+        s.id = 'lampa-stats-v093-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -3093,7 +3160,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.90 ready (Bandera Timeline episode recovery)');
+            console.log('Lampa stats v0.93 ready (fallback wall-clock without external pause inflation)');
         } catch (e) {
             console.error('stats init', e);
         }
