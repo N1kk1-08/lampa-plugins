@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.88' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.89' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1291,6 +1291,52 @@
                 }
             } catch (e) {}
 
+            // Bandera/Makhno можуть відкрити VLC через Android.openPlayer,
+            // оминаючи Lampa.Player.play і його listener.external. Це єдиний
+            // надійний момент зафіксувати початок такої сесії на Android TV.
+            try {
+                if (Lampa.Android && typeof Lampa.Android.openPlayer === 'function' && !Lampa.Android._stats_open_player_hooked) {
+                    Lampa.Android._stats_open_player_hooked = true;
+                    var _openPlayer = Lampa.Android.openPlayer.bind(Lampa.Android);
+                    Lampa.Android.openPlayer = function (link, data) {
+                        try {
+                            // У штатній Lampa card додається всередині openPlayer,
+                            // але для статистики він потрібний до запуску VLC.
+                            if (data && !data.card && !data.movie) {
+                                var activeMovie = Current.getMovie() || Media.lastCard;
+                                if (activeMovie) data.card = activeMovie;
+                            }
+                            self.onAndroidOpenPlayer(data);
+                        } catch (eA) {}
+                        return _openPlayer(link, data);
+                    };
+                }
+            } catch (e) {}
+
+            try {
+                if (Lampa.Android && typeof Lampa.Android.timeCall === 'function' && !Lampa.Android._stats_time_hooked) {
+                    Lampa.Android._stats_time_hooked = true;
+                    var _timeCall = Lampa.Android.timeCall.bind(Lampa.Android);
+                    Lampa.Android.timeCall = function (timeline) {
+                        var result = _timeCall(timeline);
+                        try {
+                            if (timeline && timeline.hash) self.currentTimelineHash = timeline.hash;
+                            if (timeline && Number.isFinite(Number(timeline.time))) {
+                                self.sessionLastTl = Number(timeline.time);
+                                self.timelineEvidence = true;
+                            }
+                            if (timeline && Number.isFinite(Number(timeline.duration)) && Number(timeline.duration) > 0) {
+                                self._lastTimelineDuration = Number(timeline.duration);
+                            }
+                            // Native Android callback приходить після повернення
+                            // з VLC, навіть якщо WebView не дав focus/visibility.
+                            self.scheduleEnd('android-time', 1200);
+                        } catch (eT) {}
+                        return result;
+                    };
+                }
+            } catch (e) {}
+
             try {
                 if (Lampa.Player && typeof Lampa.Player.callback === 'function') {
                     Lampa.Player.callback(function () {
@@ -1571,6 +1617,42 @@
                 }
             });
             this.hookVideoElement();
+        },
+
+        onAndroidOpenPlayer: function (data) {
+            var movie = this.resolveMovieFromPlay(data) || this.currentMovie || Current.getMovie() || Media.lastCard;
+            if (!movie) return false;
+
+            movie = Object.assign({}, movie);
+            var timeline = data && data.timeline;
+            if (!timeline && data && Array.isArray(data.playlist)) {
+                for (var i = 0; i < data.playlist.length; i++) {
+                    if (data.playlist[i] && data.playlist[i].timeline) {
+                        timeline = data.playlist[i].timeline;
+                        break;
+                    }
+                }
+            }
+            if (timeline) movie.timeline = timeline;
+
+            this.sessionExternalFallback = false;
+            this.sessionIsExternal = true;
+            Media.remember(movie);
+            movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
+            this.currentMovie = movie;
+            if (timeline && timeline.hash) this.currentTimelineHash = timeline.hash;
+            else if (movie.timeline && movie.timeline.hash) this.currentTimelineHash = movie.timeline.hash;
+            this.beginSession(movie);
+            this.sessionIsExternal = true;
+            var token = this.sessionToken;
+            MetaLoader.enrich(movie, function (rich) {
+                if (token !== Tracker.sessionToken || !rich) return;
+                Tracker.currentMovie = MetaStore.applyToMovie(CardCache.get(rich) || rich);
+                if (Tracker.sessionMovie) Tracker.sessionMovie = Tracker.currentMovie;
+                Media.remember(rich);
+            });
+            this.saveSession();
+            return true;
         },
 
 
@@ -2047,7 +2129,7 @@
             // Поки користувач у Just+/VLC: не комітити на обриві потоку / destroy / callback
             // Фіксація лише після повернення в Lampa (activity / visible / focus)
             if (ext && reason && reason !== 'activity' && reason !== 'visible' && reason !== 'focus'
-                && reason !== 'app-resume' && reason !== 'switch' && reason !== 'timeline') {
+                && reason !== 'app-resume' && reason !== 'android-time' && reason !== 'switch' && reason !== 'timeline') {
                 this.sessionIsExternal = true;
                 if (!this.sessionRunning) {
                     this.sessionStartedAt = Date.now();
@@ -2136,7 +2218,8 @@
                 sec = Math.max(0, sec); // flushPartial уже додав шматки; wall тут — залишок
             }
             var hasTimelineEvidence = this.timelineEvidence || seed > 0 || this.sessionLastTl > 0;
-            var isReturnFromExternal = reason === 'activity' || reason === 'visible' || reason === 'focus' || reason === 'app-resume';
+            var isReturnFromExternal = reason === 'activity' || reason === 'visible' || reason === 'focus' ||
+                reason === 'app-resume' || reason === 'android-time';
             if (wasExternal && isReturnFromExternal && !allowStaleTimeline &&
                 (this.sessionExternalFallback || (hasTimelineEvidence && tlDelta < 15))) {
                 // Не фіксуємо сесію до наступної короткої перевірки: позиція
@@ -2861,14 +2944,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v088-style');
+        var old = document.getElementById('lampa-stats-v089-style');
         if (old) old.remove();
-        ['lampa-stats-v087-style','lampa-stats-v086-style','lampa-stats-v085-style','lampa-stats-v084-style','lampa-stats-v083-style','lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style'].forEach(function (id) {
+        ['lampa-stats-v088-style','lampa-stats-v087-style','lampa-stats-v086-style','lampa-stats-v085-style','lampa-stats-v084-style','lampa-stats-v083-style','lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v088-style';
+        s.id = 'lampa-stats-v089-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2888,7 +2971,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.88 ready (direct VLC/Bandera/Makhno fallback)');
+            console.log('Lampa stats v0.89 ready (native Android VLC hook)');
         } catch (e) {
             console.error('stats init', e);
         }
