@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.89' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.90' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1232,6 +1232,10 @@
         sessionSeedTime: 0,    // timeline position at session start
         sessionIsExternal: false,
         sessionExternalFallback: false,
+        fallbackBaseMovie: null,
+        fallbackStartedAt: 0,
+        fallbackEpisodeIndex: null,
+        fallbackTimelineBefore: null,
         sessionLastTl: 0,
         timelineEvidence: false,
         lastPartialFlushAt: 0,
@@ -1442,6 +1446,10 @@
                         var time = Number(road.time);
                         if (!Number.isFinite(time) || time < 0) return;
                         var timelineHash = payload.hash || road.hash || '';
+                        // Bandera Online може зберегти таймлайн без Player.play
+                        // і без картки серії. У такому випадку хеш дозволяє
+                        // безпечно відновити саме сезон і серію.
+                        if (timelineHash) self.adoptFallbackEpisode(timelineHash, road);
                         if (timelineHash) self.currentTimelineHash = timelineHash;
                         if (Number.isFinite(Number(road.duration)) && Number(road.duration) > 0) {
                             self._lastTimelineDuration = Number(road.duration);
@@ -1708,6 +1716,10 @@
             this.sessionSeedTime = 0;
             this.sessionIsExternal = false;
             this.sessionExternalFallback = false;
+            this.fallbackBaseMovie = null;
+            this.fallbackStartedAt = 0;
+            this.fallbackEpisodeIndex = null;
+            this.fallbackTimelineBefore = null;
             this.sessionLastTl = 0;
             this.timelineEvidence = false;
             this.lastPartialFlushAt = 0;
@@ -1783,12 +1795,118 @@
             Media.remember(movie);
             movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
             this.currentMovie = movie;
+            this.prepareFallbackEpisodeIndex(movie);
+            this.fallbackBaseMovie = Object.assign({}, movie);
+            this.fallbackStartedAt = Date.now();
             this.beginSession(movie);
             if (!this.sessionHadPlay) return false;
 
             this.sessionIsExternal = true;
             this.sessionExternalFallback = true;
             this._externalFallbackReason = reason || '';
+            this.saveSession();
+            return true;
+        },
+
+        // Bandera зберігає прогрес у file_view, але її запуск VLC інколи
+        // обходить Player.play. Відображення таймлайна вже має точний хеш;
+        // будуємо невеликий індекс хешів серій лише на час такої сесії.
+        prepareFallbackEpisodeIndex: function (movie) {
+            var name = movie && (movie.original_name || movie.original_title || movie.name || movie.title) || '';
+            if (!name || !Lampa.Utils || typeof Lampa.Utils.hash !== 'function') return;
+            var index = {}, before = {}, seasons = [];
+            var knownSeason = Number(movie.season_number || movie.season || 0);
+            if (knownSeason > 0) seasons.push(knownSeason);
+            else for (var s = 1; s <= 40; s++) seasons.push(s);
+
+            try {
+                seasons.forEach(function (season) {
+                    for (var episode = 1; episode <= 100; episode++) {
+                        var hash = String(Lampa.Utils.hash([season, season > 10 ? ':' : '', episode, name].join('')));
+                        index[hash] = { season: season, episode: episode };
+                    }
+                });
+                var key = (Lampa.Timeline && typeof Lampa.Timeline.filename === 'function') ? Lampa.Timeline.filename() : 'file_view';
+                var viewed = Lampa.Storage && Lampa.Storage.get ? Lampa.Storage.get(key, {}) : {};
+                if (viewed && typeof viewed === 'object') {
+                    Object.keys(index).forEach(function (hash) {
+                        var road = viewed[hash];
+                        before[hash] = road ? {
+                            time: Number(road.time) || 0,
+                            percent: Number(road.percent) || 0,
+                            updated: Number(road.updated) || 0
+                        } : { time: 0, percent: 0, updated: 0 };
+                    });
+                }
+                this.fallbackEpisodeIndex = index;
+                this.fallbackTimelineBefore = before;
+            } catch (e) {}
+        },
+
+        // Якщо Timeline.listener не спрацював, шукаємо підтверджений рух
+        // таймлайна безпосередньо у file_view. Це викликається тільки при
+        // поверненні з зовнішнього плеєра, а не при довільному blur.
+        adoptFallbackEpisodeFromStorage: function () {
+            if (!this.sessionExternalFallback || !this.fallbackEpisodeIndex) return false;
+            try {
+                var key = (Lampa.Timeline && typeof Lampa.Timeline.filename === 'function') ? Lampa.Timeline.filename() : 'file_view';
+                var viewed = Lampa.Storage && Lampa.Storage.get ? Lampa.Storage.get(key, {}) : {};
+                if (!viewed || typeof viewed !== 'object') return false;
+                var self = this, selected = null, selectedRoad = null, selectedScore = -1;
+                Object.keys(this.fallbackEpisodeIndex).forEach(function (hash) {
+                    var road = viewed[hash];
+                    if (!road || typeof road !== 'object') return;
+                    var old = (self.fallbackTimelineBefore && self.fallbackTimelineBefore[hash]) || { time: 0, percent: 0, updated: 0 };
+                    var time = Number(road.time) || 0;
+                    var percent = Number(road.percent) || 0;
+                    var updated = Number(road.updated) || 0;
+                    var moved = time > old.time + 5 || percent > old.percent + 0.5 || (updated > old.updated && time > 0);
+                    if (!moved) return;
+                    var score = updated || time * 1000 + percent;
+                    if (score > selectedScore) {
+                        selected = hash;
+                        selectedRoad = road;
+                        selectedScore = score;
+                    }
+                });
+                return selected ? this.adoptFallbackEpisode(selected, selectedRoad) : false;
+            } catch (e) { return false; }
+        },
+
+        // Переіменовуємо тільки підтверджену fallback-сесію. Стартовий час
+        // лишається моментом відкриття VLC; хвилини все одно рахуються лише
+        // за wall-clock і обмежуються фактичним прогресом Timeline.
+        adoptFallbackEpisode: function (timelineHash, road) {
+            if (!this.sessionExternalFallback || !this.fallbackEpisodeIndex) return false;
+            var episode = this.fallbackEpisodeIndex[String(timelineHash)];
+            if (!episode) return false;
+            var base = this.fallbackBaseMovie || this.sessionMovie || this.currentMovie;
+            if (!base) return false;
+            var movie = Object.assign({}, base, {
+                season_number: episode.season,
+                season: episode.season,
+                episode_number: episode.episode,
+                episode: episode.episode,
+                timeline: Object.assign({}, road || {}, { hash: timelineHash })
+            });
+            var startedAt = this.fallbackStartedAt || this._sessionWallStart || Date.now();
+            this.sessionToken++;
+            this.sessionMovie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
+            this.currentMovie = this.sessionMovie;
+            this.sessionHadPlay = true;
+            this.sessionRunning = true;
+            this.sessionStartedAt = startedAt;
+            this.sessionAccumMs = 0;
+            this.sessionAddedSec = 0;
+            this.sessionSeedTime = 0;
+            this.sessionLastTl = Number(road && road.time) || 0;
+            this.currentTimelineHash = timelineHash;
+            this.timelineEvidence = true;
+            this.sessionIsExternal = true;
+            this.sessionExternalFallback = false;
+            this._sessionWallStart = startedAt;
+            this._sessionCommitted = false;
+            Media.remember(this.sessionMovie);
             this.saveSession();
             return true;
         },
@@ -2194,6 +2312,10 @@
                 return;
             }
 
+            // Bandera може записати file_view без події Timeline.update.
+            // Скануємо лише хеші поточного серіалу й лише за фактом руху.
+            if (this.sessionExternalFallback) this.adoptFallbackEpisodeFromStorage();
+            movie = this.sessionMovie || this.currentMovie || movie;
             var tNow = this.readTimelineTime(movie);
             if (this.sessionLastTl > tNow) tNow = this.sessionLastTl;
             var tlDuration = this._lastTimelineDuration || 0;
@@ -2944,14 +3066,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v089-style');
+        var old = document.getElementById('lampa-stats-v090-style');
         if (old) old.remove();
-        ['lampa-stats-v088-style','lampa-stats-v087-style','lampa-stats-v086-style','lampa-stats-v085-style','lampa-stats-v084-style','lampa-stats-v083-style','lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style'].forEach(function (id) {
+        ['lampa-stats-v089-style','lampa-stats-v088-style','lampa-stats-v087-style','lampa-stats-v086-style','lampa-stats-v085-style','lampa-stats-v084-style','lampa-stats-v083-style','lampa-stats-v082-style','lampa-stats-v081-style','lampa-stats-v080-style','lampa-stats-v079-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v089-style';
+        s.id = 'lampa-stats-v090-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2971,7 +3093,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.89 ready (native Android VLC hook)');
+            console.log('Lampa stats v0.90 ready (Bandera Timeline episode recovery)');
         } catch (e) {
             console.error('stats init', e);
         }
