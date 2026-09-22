@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.96' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.97' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1397,21 +1397,9 @@
                         });
                         setTimeout(function () { self.recoverSession(); }, 2000);
                     } else if (document.visibilityState === 'hidden') {
-                        // Online інколи відкриває VLC без Player.play — стартуємо сесію з lastCard
-                        if (!self.sessionHadPlay) {
-                            try {
-                                var m = self.currentMovie || Media.lastCard || Current.getMovie();
-                                if (m && self.isExternalPlayer()) {
-                                    Media.remember(m);
-                                    self.sessionIsExternal = true;
-                                    self.beginSession(m);
-                                    self.sessionIsExternal = true;
-                                    self.saveSession();
-                                }
-                            } catch (eH) {}
-                        } else {
-                            self.saveSession();
-                        }
+                        // НЕ стартуємо сесію тут: інакше wall тікає до відкриття Just+/VLC
+                        // (30 хв серія → 60 хв у статистиці). Старт лише openPlayer/play.
+                        if (self.sessionHadPlay) self.saveSession();
                     }
                 });
             } catch (e) {}
@@ -1424,19 +1412,7 @@
             } catch (e) {}
             try {
                 document.addEventListener('pause', function () {
-                    if (!self.sessionHadPlay) {
-                        try {
-                            var m2 = self.currentMovie || Media.lastCard || Current.getMovie();
-                            if (m2 && self.isExternalPlayer()) {
-                                Media.remember(m2);
-                                self.sessionIsExternal = true;
-                                self.beginSession(m2);
-                                self.sessionIsExternal = true;
-                            }
-                        } catch (eP) {}
-                    } else {
-                        self.saveSession();
-                    }
+                    if (self.sessionHadPlay) self.saveSession();
                 }, false);
                 document.addEventListener('resume', function () {
                     [1500, 4000, 8000].forEach(function (ms) {
@@ -1681,16 +1657,24 @@
 
         recentlyCommitted: function (id) {
             if (!id) return false;
-            var t = this.committedIds[id];
-            if (!t) return false;
-            return (Date.now() - t) < 90000; // 90с антидубль на той самий id
+            var t0 = this.committedIds[id];
+            if (t0 && (Date.now() - t0) < 120000) return true;
+            // також baseId (online інколи комітить 123:0:0 і 123:1:5 окремо)
+            var base = String(id).split(':')[0];
+            if (base) {
+                var tb = this.committedIds['b:' + base];
+                if (tb && (Date.now() - tb) < 120000) return true;
+            }
+            return false;
         },
 
         markIdCommitted: function (id) {
             if (!id) return;
-            this.committedIds[id] = Date.now();
-            // прибираємо старі
-            var self = this, now = Date.now();
+            var now = Date.now();
+            this.committedIds[id] = now;
+            var base = String(id).split(':')[0];
+            if (base) this.committedIds['b:' + base] = now;
+            var self = this;
             Object.keys(this.committedIds).forEach(function (k) {
                 if (now - self.committedIds[k] > 3600000) delete self.committedIds[k];
             });
@@ -2022,10 +2006,17 @@
             wasExternal = wasExternal || this.isExternalPlayer();
             if (wasExternal && this._sessionWallStart) {
                 var fullWall = Math.floor((Date.now() - this._sessionWallStart) / 1000);
-                // мінус already flushed
                 var accounted = this.sessionAddedSec || 0;
                 var fromStart = Math.max(0, fullWall - accounted);
-                if (fromStart > wallSec) wallSec = fromStart;
+                // не роздувати wall «до відкриття плеєра» понад розумне
+                if (fromStart > wallSec) {
+                    // якщо accum майже порожній, а fullWall великий — підозра на ранній старт
+                    if (wallSec >= 15 && fromStart > wallSec * 1.8) {
+                        // лишаємо accum (реальніший)
+                    } else {
+                        wallSec = fromStart;
+                    }
+                }
             }
 
             if (this.recentlyCommitted(Media.getId(movie))) {
@@ -2069,17 +2060,30 @@
             if (duration > 60) hardCap = Math.floor(duration) + 60;
             if (runtimeSec >= 300) hardCap = Math.min(hardCap, runtimeSec + 60);
 
-            // tlDelta не додає час — лише стеля для external (пауза в Just+/VLC)
+            // tlDelta не додає час — лише стеля для external
             var tlDelta = 0;
             if (tNow > seed + 5) tlDelta = Math.floor(tNow - seed);
 
             var sec = wallSec;
             if (this.sessionAddedSec > 0) {
-                sec = Math.max(0, sec); // flushPartial уже додав шматки; wall тут — залишок
+                sec = Math.max(0, sec);
             }
+            // Just+ skip intro: position стрибає вперед, wall лишається реальним —
+            // якщо є tlDelta, не даємо wall роздутись вище прогресу+grace
             if (wasExternal && tlDelta >= 15) {
-                var extGrace = 60; // запас на затримку timeline
-                sec = Math.min(sec, tlDelta + extGrace);
+                sec = Math.min(sec, tlDelta + 90);
+            }
+            // Жорстка стеля: не більше тривалості серії/фільму
+            if (runtimeSec >= 300) {
+                sec = Math.min(sec, runtimeSec + 30);
+            }
+            if (duration > 60) {
+                var remainCap = Math.floor(duration - Math.max(0, seed)) + 90;
+                if (remainCap > 60) sec = Math.min(sec, remainCap);
+            }
+            // захист від подвійного commit (~2× runtime)
+            if (runtimeSec >= 300 && sec > runtimeSec * 1.2) {
+                sec = runtimeSec;
             }
             sec = Math.min(sec, hardCap);
             sec = Math.min(sec, 21600);
@@ -2801,14 +2805,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v096-style');
+        var old = document.getElementById('lampa-stats-v097-style');
         if (old) old.remove();
-        ['lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style','lampa-stats-v090-style','lampa-stats-v089-style','lampa-stats-v088-style','lampa-stats-v087-style','lampa-stats-v086-style'].forEach(function (id) {
+        ['lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style','lampa-stats-v090-style','lampa-stats-v089-style','lampa-stats-v088-style','lampa-stats-v087-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v096-style';
+        s.id = 'lampa-stats-v097-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2828,7 +2832,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.96 ready (completed for online/VLC near-end)');
+            console.log('Lampa stats v0.97 ready (external cap + no early session on hide)');
         } catch (e) {
             console.error('stats init', e);
         }
