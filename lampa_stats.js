@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.97' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.98' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -239,6 +239,13 @@
                 movie.original_title || movie.original_name || movie.title || movie.name || 'unknown';
             var season = movie.season_number || movie.season || 0;
             var episode = movie.episode_number || movie.episode || 0;
+            // Online часто без S/E → серії склеювались в один id. Timeline.hash унікальний на епізод.
+            if ((!season || !episode) && movie.timeline && movie.timeline.hash) {
+                return String(id) + ':h:' + String(movie.timeline.hash);
+            }
+            if ((!season || !episode) && movie._stats_ep_key) {
+                return String(id) + ':k:' + String(movie._stats_ep_key);
+            }
             return String(id) + ':' + String(season) + ':' + String(episode);
         },
         getBaseId: function (movie) {
@@ -1552,15 +1559,63 @@
 
             movie = Object.assign({}, movie);
             var timeline = data.timeline;
+            var plItem = null;
             if (!timeline && Array.isArray(data.playlist)) {
                 for (var i = 0; i < data.playlist.length; i++) {
                     if (data.playlist[i] && data.playlist[i].timeline) {
                         timeline = data.playlist[i].timeline;
+                        plItem = data.playlist[i];
                         break;
                     }
                 }
+                // активний елемент плейлиста
+                if (!plItem && data.playlist.length) {
+                    var idx = Number(data.playlist_index != null ? data.playlist_index : data.index);
+                    if (Number.isFinite(idx) && data.playlist[idx]) plItem = data.playlist[idx];
+                }
             }
             if (timeline) movie.timeline = timeline;
+            // Season/episode з data / playlist (online Makhno/LampaUA)
+            var se = data.season != null ? data.season : (data.season_number != null ? data.season_number : null);
+            var ep = data.episode != null ? data.episode : (data.episode_number != null ? data.episode_number : null);
+            if (plItem) {
+                if (se == null && plItem.season != null) se = plItem.season;
+                if (ep == null && plItem.episode != null) ep = plItem.episode;
+                if (se == null && plItem.season_number != null) se = plItem.season_number;
+                if (ep == null && plItem.episode_number != null) ep = plItem.episode_number;
+                if (!timeline && plItem.timeline) { timeline = plItem.timeline; movie.timeline = timeline; }
+            }
+            if (se != null) { movie.season_number = se; movie.season = se; }
+            if (ep != null) { movie.episode_number = ep; movie.episode = ep; }
+            // Парсинг S01E02 з title/url
+            if (!(movie.season_number || movie.episode_number)) {
+                var blob = [data.title, data.fname, data.url, data.path, movie.title, movie.name].join(' ');
+                var mSE = String(blob).match(/[sS](\d{1,2})[eE](\d{1,3})/);
+                if (mSE) {
+                    movie.season_number = parseInt(mSE[1], 10);
+                    movie.season = movie.season_number;
+                    movie.episode_number = parseInt(mSE[2], 10);
+                    movie.episode = movie.episode_number;
+                }
+            }
+            if (timeline && timeline.hash) {
+                movie.timeline = movie.timeline || timeline;
+                movie._stats_ep_key = String(timeline.hash);
+            } else if (data.url || data.path || data.link) {
+                movie._stats_ep_key = String(data.url || data.path || data.link).slice(-120);
+            }
+
+            // Новий файл/серія — закрити попередню сесію ДО beginSession
+            if (this.sessionHadPlay && this.sessionMovie) {
+                var prevId = Media.getId(this.sessionMovie);
+                var nextId = Media.getId(movie);
+                if (prevId !== nextId) {
+                    this.endSession('switch');
+                } else if (this.currentTimelineHash && timeline && timeline.hash &&
+                    String(this.currentTimelineHash) !== String(timeline.hash)) {
+                    this.endSession('switch');
+                }
+            }
 
             this.sessionIsExternal = true;
             Media.remember(movie);
@@ -1658,22 +1713,14 @@
         recentlyCommitted: function (id) {
             if (!id) return false;
             var t0 = this.committedIds[id];
-            if (t0 && (Date.now() - t0) < 120000) return true;
-            // також baseId (online інколи комітить 123:0:0 і 123:1:5 окремо)
-            var base = String(id).split(':')[0];
-            if (base) {
-                var tb = this.committedIds['b:' + base];
-                if (tb && (Date.now() - tb) < 120000) return true;
-            }
-            return false;
+            if (!t0) return false;
+            return (Date.now() - t0) < 90000;
         },
 
         markIdCommitted: function (id) {
             if (!id) return;
             var now = Date.now();
             this.committedIds[id] = now;
-            var base = String(id).split(':')[0];
-            if (base) this.committedIds['b:' + base] = now;
             var self = this;
             Object.keys(this.committedIds).forEach(function (k) {
                 if (now - self.committedIds[k] > 3600000) delete self.committedIds[k];
@@ -1734,10 +1781,14 @@
             if (!movie) return;
 
             var id = Media.getId(movie);
-            // Новий файл/серія в торренті — закрити попередню сесію
+            // Новий файл/серія — закрити попередню сесію (в т.ч. online без S/E)
             if (this.sessionMovie && this.sessionHadPlay) {
                 var prevId = Media.getId(this.sessionMovie);
+                var prevHash = this.currentTimelineHash || '';
+                var nextHash = (movie.timeline && movie.timeline.hash) ? String(movie.timeline.hash) : '';
                 if (prevId !== id) {
+                    this.endSession('switch');
+                } else if (prevHash && nextHash && prevHash !== nextHash) {
                     this.endSession('switch');
                 }
             }
@@ -2805,14 +2856,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v097-style');
+        var old = document.getElementById('lampa-stats-v098-style');
         if (old) old.remove();
-        ['lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style','lampa-stats-v090-style','lampa-stats-v089-style','lampa-stats-v088-style','lampa-stats-v087-style'].forEach(function (id) {
+        ['lampa-stats-v097-style','lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style','lampa-stats-v090-style','lampa-stats-v089-style','lampa-stats-v088-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v097-style';
+        s.id = 'lampa-stats-v098-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2832,7 +2883,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.97 ready (external cap + no early session on hide)');
+            console.log('Lampa stats v0.98 ready (per-episode id for online series)');
         } catch (e) {
             console.error('stats init', e);
         }
