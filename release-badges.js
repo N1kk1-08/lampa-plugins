@@ -15,6 +15,67 @@
     var settingsRefreshTimer = null;
     var cardObserver = null;
     var visibilityObserver = null;
+    var MESSAGES = {
+        uk: {
+            settings_title: 'Мітки релізів: якість та аудіо',
+            settings_source: 'Джерело міток: парсер Lampa (розділ «Парсер»)',
+            settings_enabled: 'Показувати мітки релізів',
+            settings_quality: 'Показувати якість',
+            settings_hdr: 'Показувати HDR / Dolby Vision',
+            settings_ua: 'Показувати аудіо UA',
+            settings_ru: 'Показувати аудіо RU',
+            settings_en: 'Показувати аудіо EN',
+            settings_rating: 'Показувати рейтинг TMDB',
+            badge_audio: 'Знайдено реліз з аудіо {language}',
+            badge_audio_quality: 'Знайдено реліз з аудіо {language} та якістю {quality}',
+            badge_quality: 'Знайдено реліз у якості {quality}',
+            badge_dv: 'Знайдено реліз з Dolby Vision',
+            badge_hdr: 'Знайдено реліз з HDR',
+            badge_rating: 'Рейтинг TMDB'
+        },
+        ru: {
+            settings_title: 'Метки релизов: качество и аудио',
+            settings_source: 'Источник меток: парсер Lampa (раздел «Парсер»)',
+            settings_enabled: 'Показывать метки релизов',
+            settings_quality: 'Показывать качество',
+            settings_hdr: 'Показывать HDR / Dolby Vision',
+            settings_ua: 'Показывать аудио UA',
+            settings_ru: 'Показывать аудио RU',
+            settings_en: 'Показывать аудио EN',
+            settings_rating: 'Показывать рейтинг TMDB',
+            badge_audio: 'Найден релиз с аудио {language}',
+            badge_audio_quality: 'Найден релиз с аудио {language} и качеством {quality}',
+            badge_quality: 'Найден релиз в качестве {quality}',
+            badge_dv: 'Найден релиз с Dolby Vision',
+            badge_hdr: 'Найден релиз с HDR',
+            badge_rating: 'Рейтинг TMDB'
+        },
+        en: {
+            settings_title: 'Release badges: quality and audio',
+            settings_source: 'Badge source: Lampa parser (Parser settings)',
+            settings_enabled: 'Show release badges',
+            settings_quality: 'Show quality',
+            settings_hdr: 'Show HDR / Dolby Vision',
+            settings_ua: 'Show UA audio',
+            settings_ru: 'Show RU audio',
+            settings_en: 'Show EN audio',
+            settings_rating: 'Show TMDB rating',
+            badge_audio: 'Found a release with {language} audio',
+            badge_audio_quality: 'Found a {quality} release with {language} audio',
+            badge_quality: 'Found a {quality} release',
+            badge_dv: 'Found a release with Dolby Vision',
+            badge_hdr: 'Found a release with HDR',
+            badge_rating: 'TMDB rating'
+        }
+    };
+
+    function localizedText(key, language, values) {
+        var code = String(language || '').toLowerCase();
+        var phrase = (MESSAGES[code] || MESSAGES.en)[key] || MESSAGES.en[key] || key;
+        return phrase.replace(/\{(\w+)\}/g, function (match, name) {
+            return values && values[name] != null ? String(values[name]) : match;
+        });
+    }
 
     function normal(text) {
         return String(text || '').toLowerCase()
@@ -44,12 +105,11 @@
             var name = normal(names[i]);
             if (name.length >= 3 && release.indexOf(' ' + name + ' ') !== -1) matched = true;
         }
-        if (!matched) return false;
         if (!movie.series && movie.year) {
             var years = release.match(/\b(?:19|20)\d{2}\b/g) || [];
             if (years.length && years.indexOf(movie.year) === -1) return false;
         }
-        return true;
+        return matched;
     }
 
     function qualityFrom(item) {
@@ -174,7 +234,7 @@
         module.exports = { movieIdentity: movieIdentity, matchesTitle: matchesTitle,
             qualityFrom: qualityFrom, languagesFrom: languagesFrom, analyse: analyse,
             videoTypeFrom: videoTypeFrom, tmdbRating: tmdbRating,
-            searchCandidates: searchCandidates };
+            searchCandidates: searchCandidates, localizedText: localizedText };
     }
     if (typeof window === 'undefined') return;
 
@@ -190,6 +250,15 @@
             var storage = window.Lampa.Storage;
             return storage.field ? storage.field(name) : storage.get(name, '');
         } catch (e) { return ''; }
+    }
+
+    function currentLanguage() {
+        try { return window.Lampa.Storage.get('language', 'ru'); }
+        catch (e) { return 'ru'; }
+    }
+
+    function label(key, values) {
+        return localizedText(key, currentLanguage(), values);
     }
 
     function sourceReady() {
@@ -333,23 +402,24 @@
             ['ua', 'ru', 'en'].forEach(function (lang) {
                 if (summary[lang] === null || !setting('release_badges_' + lang, true)) return;
                 var quality = qualityLabel(summary[lang]);
-                container.appendChild(badge(lang.toUpperCase(), lang, 'Найден релиз с аудио ' + lang.toUpperCase() +
-                    (quality ? ' и качеством ' + quality : '')));
+                container.appendChild(badge(lang.toUpperCase(), lang,
+                    label(quality ? 'badge_audio_quality' : 'badge_audio',
+                        { language: lang.toUpperCase(), quality: quality })));
             });
             if (showQuality) {
                 var qualityClass = summary.quality >= 2160 ? '4k' : summary.quality >= 1080 ? 'fhd' : 'hd';
                 container.appendChild(badge(qualityLabel(summary.quality), qualityClass,
-                    'Найден релиз этого качества'));
+                    label('badge_quality', { quality: qualityLabel(summary.quality) })));
             }
             if (summary.hdr && setting('release_badges_hdr', true)) {
                 container.appendChild(badge(summary.dv ? 'DV' : 'HDR', 'hdr',
-                    summary.dv ? 'Найден релиз с Dolby Vision' : 'Найден релиз с HDR'));
+                    label(summary.dv ? 'badge_dv' : 'badge_hdr')));
             }
         }
         var rating = tmdbRating(movie);
         var showRating = Boolean(rating && setting('release_badges_rating', true));
         if (showRating) {
-            container.appendChild(badge('★ ' + rating.toFixed(1), 'rating', 'Рейтинг TMDB'));
+            container.appendChild(badge('★ ' + rating.toFixed(1), 'rating', label('badge_rating')));
         }
         if (card) {
             card.classList.toggle('release-badges-has-rating', showRating);
@@ -455,22 +525,27 @@
     function addSettings() {
         if (!Lampa.SettingsApi || !Lampa.SettingsApi.addParam) return;
         var component = 'interface';
-        Lampa.SettingsApi.addParam({ component: component, param: { type: 'title' },
-            field: { name: 'Метки релизов: качество и аудио' } });
-        Lampa.SettingsApi.addParam({ component: component, param: { type: 'title' },
-            field: { name: 'Источник меток: парсер Lampa (раздел «Парсер»)' } });
+        function addTitle(key) {
+            Lampa.SettingsApi.addParam({ component: component, param: { type: 'title' },
+                field: { name: label(key) },
+                onRender: function (item) { item.find('span').text(label(key)); } });
+        }
+        addTitle('settings_title');
+        addTitle('settings_source');
         [
-            ['release_badges_enabled', 'Показывать метки релизов'],
-            ['release_badges_quality', 'Показывать качество'],
-            ['release_badges_hdr', 'Показывать HDR / Dolby Vision'],
-            ['release_badges_ua', 'Показывать аудио UA'],
-            ['release_badges_ru', 'Показывать аудио RU'],
-            ['release_badges_en', 'Показывать аудио EN'],
-            ['release_badges_rating', 'Показывать рейтинг TMDB']
+            ['release_badges_enabled', 'settings_enabled'],
+            ['release_badges_quality', 'settings_quality'],
+            ['release_badges_hdr', 'settings_hdr'],
+            ['release_badges_ua', 'settings_ua'],
+            ['release_badges_ru', 'settings_ru'],
+            ['release_badges_en', 'settings_en'],
+            ['release_badges_rating', 'settings_rating']
         ].forEach(function (entry) {
             Lampa.SettingsApi.addParam({ component: component,
                 param: { name: entry[0], type: 'trigger', default: true },
-                field: { name: entry[1] }, onChange: refresh });
+                field: { name: label(entry[1]) },
+                onRender: function (item) { item.find('.settings-param__name').text(label(entry[1])); },
+                onChange: refresh });
         });
     }
 
@@ -532,6 +607,11 @@
         }
         if (Lampa.Storage.listener && Lampa.Storage.listener.follow) {
             Lampa.Storage.listener.follow('change', function (event) {
+                if (event && event.name === 'language') {
+                    clearTimeout(settingsRefreshTimer);
+                    settingsRefreshTimer = setTimeout(refresh, 300);
+                    return;
+                }
                 if (!event || !/^(?:parser_use|parser_torrent_type|parser_use_link|parse_timeout|torrserver_use_link|jackett_(?:url|key)(?:_two)?|prowlarr_(?:url|key)(?:_two)?|torrserver_url(?:_two)?)$/.test(event.name)) return;
                 sourceVersion++;
                 cache = {};
