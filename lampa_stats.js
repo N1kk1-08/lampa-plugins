@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.99' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.1' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -63,6 +63,8 @@
         tmdb_poster: 'https://image.tmdb.org/t/p/w92',
         max_actors_show: 15,
         max_posters_show: 12,
+        completed_list_max: 100,
+        completed_max: 500,
         meta_max: 400,
         xp_movie_bonus: 3600,
         xp_episode_bonus: 900
@@ -993,19 +995,23 @@
             return this.allCompleted().slice(0, limit || CONFIG.max_posters_show);
         },
         allCompleted: function () {
-            return Object.keys(this.data.completed).map(function (k) {
+            var max = CONFIG.completed_list_max || 100;
+            var list = Object.keys(this.data.completed || {}).map(function (k) {
                 var c = StatsDB.data.completed[k];
                 var sec = StatsDB.getWatchById(k) || Number(c.seconds) || 0;
-                // getLast = позиція timeline, не використовуємо як час перегляду
                 return {
                     id: k,
                     date: c.date || 0,
                     isEpisode: !!c.isEpisode,
                     title: c.title || '',
                     poster: c.poster || '',
-                    seconds: Math.max(0, Math.floor(sec))
+                    seconds: Math.floor(sec)
                 };
-            }).sort(function (a, b) { return b.date - a.date; });
+            }).sort(function (a, b) {
+                return (b.date || 0) - (a.date || 0);
+            });
+            if (list.length > max) list = list.slice(0, max);
+            return list;
         },
         topActors: function (limit) {
             return Object.keys(this.data.actors)
@@ -2186,41 +2192,50 @@
             this.sessionWatchId = '';
             this.clearSession();
 
-            // Completed — для online/VLC timeline часто без позиції; беремо wall+seed
+            // Completed — online/Just+ часто без фінальної позиції timeline
             try {
                 var done = false;
+                var isEp = Media.isEpisode(movie);
+                // online-серіал інколи без episode_number — все одно серія
+                if (!isEp && movie && (movie.original_name || movie.number_of_seasons || movie.first_air_date ||
+                    (meta && meta.isEpisode))) isEp = true;
                 var dur = duration > 60 ? duration : (tlDuration > 60 ? tlDuration : 0);
                 if (dur > 60 && tNow > 0) {
-                    if (tNow / dur >= 0.80) done = true;
-                    if ((dur - tNow) <= 180 && tNow / dur >= 0.50) done = true;
-                    if ((dur - tNow) <= 120 && tNow > 60) done = true;
+                    if (tNow / dur >= 0.78) done = true;
+                    if ((dur - tNow) <= 200 && tNow / dur >= 0.45) done = true;
+                    if ((dur - tNow) <= 150 && tNow > 60) done = true;
                 }
-                if (!done && runtimeSec >= 300) {
-                    if (sec >= runtimeSec * 0.75) done = true;
-                    if (tNow > 0 && (runtimeSec - tNow) <= 180 && tNow >= runtimeSec * 0.50) done = true;
+                if (!done && runtimeSec >= 240) {
+                    if (sec >= runtimeSec * 0.70) done = true;
+                    if (tNow > 0 && (runtimeSec - tNow) <= 200 && tNow >= runtimeSec * 0.45) done = true;
                 }
                 if (!done && tNow > 0 && tlDuration > 60) {
-                    if (tNow / tlDuration >= 0.80) done = true;
-                    if ((tlDuration - tNow) <= 180 && tNow > 60) done = true;
+                    if (tNow / tlDuration >= 0.78) done = true;
+                    if ((tlDuration - tNow) <= 200 && tNow > 60) done = true;
                 }
-                // online+VLC: позиція таймлайну може не прийти, але wall+seed ≈ кінець
                 if (!done && wasExternal) {
                     var progressGuess = (seed > 0 ? seed : 0) + sec;
-                    if (dur > 60 && progressGuess >= dur * 0.75) done = true;
-                    if (runtimeSec >= 300 && progressGuess >= runtimeSec * 0.75) done = true;
-                    if (dur > 60 && sec >= dur * 0.70) done = true;
-                    if (runtimeSec >= 300 && sec >= runtimeSec * 0.70) done = true;
+                    if (dur > 60 && progressGuess >= dur * 0.68) done = true;
+                    if (runtimeSec >= 240 && progressGuess >= runtimeSec * 0.68) done = true;
+                    if (dur > 60 && sec >= dur * 0.65) done = true;
+                    if (runtimeSec >= 240 && sec >= runtimeSec * 0.65) done = true;
+                    // серія ~18+ хв wall — у «Переглянуто» (timeline міг мовчати)
+                    if (isEp && sec >= 18 * 60) done = true;
+                    if (!isEp && sec >= 40 * 60) done = true;
                 }
+                if (!done && isEp && sec >= 22 * 60) done = true;
                 try {
                     var pct = 0;
                     if (movie.timeline && Number.isFinite(Number(movie.timeline.percent))) {
                         pct = Number(movie.timeline.percent);
                     }
                     if (!pct && tNow > 0 && dur > 60) pct = (tNow / dur) * 100;
-                    if (pct >= 80) done = true;
+                    if (pct >= 75) done = true;
                 } catch (ePct) {}
                 if (done) {
-                    StatsDB.markCompleted((meta && meta.watchId) || Media.getId(movie), meta, movie);
+                    var cid = (meta && meta.watchId) || Media.getId(movie);
+                    if (meta && isEp) meta.isEpisode = true;
+                    StatsDB.markCompleted(cid, meta, movie);
                 }
             } catch (eC) {}
         },
@@ -2887,14 +2902,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v099-style');
+        var old = document.getElementById('lampa-stats-v0991-style');
         if (old) old.remove();
-        ['lampa-stats-v098-style','lampa-stats-v097-style','lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style','lampa-stats-v090-style','lampa-stats-v089-style'].forEach(function (id) {
+        ['lampa-stats-v099-style','lampa-stats-v098-style','lampa-stats-v097-style','lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style','lampa-stats-v090-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v099-style';
+        s.id = 'lampa-stats-v0991-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2914,7 +2929,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.99 ready (single commit per external session)');
+            console.log('Lampa stats v0.99.1 ready (completed list, preview 12)');
         } catch (e) {
             console.error('stats init', e);
         }
