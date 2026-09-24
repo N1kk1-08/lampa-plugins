@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.98' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.99' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1182,7 +1182,9 @@
         sessionIsExternal: false,
         sessionLastTl: 0,
         lastPartialFlushAt: 0,
-        sessionAddedSec: 0,  // скільки вже нарахували в цій сесії
+        sessionAddedSec: 0,
+        sessionWatchId: '',
+        _sessionCommitted: false,
         committedIds: {},
         videoHooked: false,
 
@@ -1712,15 +1714,18 @@
 
         recentlyCommitted: function (id) {
             if (!id) return false;
-            var t0 = this.committedIds[id];
-            if (!t0) return false;
-            return (Date.now() - t0) < 90000;
+            var now = Date.now();
+            if (this.committedIds[id] && (now - this.committedIds[id]) < 120000) return true;
+            // aliases зафіксовані через markIdCommitted (sessionWatchId + getId), не весь baseId —
+            // інакше 2-га серія того ж шоу за <2 хв не зарахується
+            return false;
         },
 
         markIdCommitted: function (id) {
             if (!id) return;
             var now = Date.now();
             this.committedIds[id] = now;
+            if (this.sessionWatchId) this.committedIds[this.sessionWatchId] = now;
             var self = this;
             Object.keys(this.committedIds).forEach(function (k) {
                 if (now - self.committedIds[k] > 3600000) delete self.committedIds[k];
@@ -1806,9 +1811,10 @@
                 this.sessionLastTl = 0;
                 this.sessionAccumMs = 0;
                 this.sessionAddedSec = 0;
-            } else {
-                this._sessionCommitted = false;
+                // Фіксуємо id на всю сесію — online міняє hash/S-E і робив 2 commit
+                this.sessionWatchId = Media.getId(movie);
             }
+            // не скидаємо _sessionCommitted на «тому ж» id без isNew
 
             if (this.isExternalPlayer()) {
                 this.sessionIsExternal = true;
@@ -1843,6 +1849,8 @@
             try {
                 if (!Current.getVideoState()) this.sessionIsExternal = true;
             } catch (e) {}
+
+            if (!this.sessionWatchId) this.sessionWatchId = Media.getId(movie);
 
             this.saveSession();
         },
@@ -2011,9 +2019,18 @@
         },
 
         endSession: function (reason) {
+            if (this._sessionCommitted) return;
             if (!this.sessionHadPlay && !this.sessionRunning && this.sessionAccumMs === 0) return;
             var movieEarly = this.sessionMovie || this.currentMovie;
-            if (movieEarly && this.recentlyCommitted(Media.getId(movieEarly))) return;
+            var earlyId = this.sessionWatchId || (movieEarly ? Media.getId(movieEarly) : '');
+            if (earlyId && this.recentlyCommitted(earlyId)) {
+                this._sessionCommitted = true;
+                return;
+            }
+            if (movieEarly && this.recentlyCommitted(Media.getId(movieEarly))) {
+                this._sessionCommitted = true;
+                return;
+            }
 
             reason = reason || '';
             var ext = this.sessionIsExternal || this.isExternalPlayer();
@@ -2142,9 +2159,22 @@
             if (sec < 15) return;
 
             var meta = Media.metaFrom(movie);
+            var watchId = this.sessionWatchId || Media.getId(movie);
+            if (meta) meta.watchId = watchId;
+            // ще один захист: якщо вже комітили цей watchId — вихід
+            if (this.recentlyCommitted(watchId)) {
+                this._sessionCommitted = true;
+                this.sessionAccumMs = 0;
+                this.sessionHadPlay = false;
+                this.sessionMovie = null;
+                this.sessionWatchId = '';
+                this.clearSession();
+                return;
+            }
             StatsDB.addWatchSeconds(sec, meta);
+            this.markIdCommitted(watchId);
             this.markIdCommitted(Media.getId(movie));
-            this._sessionCommitted = false;
+            this._sessionCommitted = true;
             this.sessionAccumMs = 0;
             this.sessionHadPlay = false;
             this.sessionMovie = null;
@@ -2153,6 +2183,7 @@
             this._sessionWallStart = 0;
             this.sessionLastTl = 0;
             this.sessionAddedSec = 0;
+            this.sessionWatchId = '';
             this.clearSession();
 
             // Completed — для online/VLC timeline часто без позиції; беремо wall+seed
@@ -2189,7 +2220,7 @@
                     if (pct >= 80) done = true;
                 } catch (ePct) {}
                 if (done) {
-                    StatsDB.markCompleted(Media.getId(movie), meta, movie);
+                    StatsDB.markCompleted((meta && meta.watchId) || Media.getId(movie), meta, movie);
                 }
             } catch (eC) {}
         },
@@ -2856,14 +2887,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v098-style');
+        var old = document.getElementById('lampa-stats-v099-style');
         if (old) old.remove();
-        ['lampa-stats-v097-style','lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style','lampa-stats-v090-style','lampa-stats-v089-style','lampa-stats-v088-style'].forEach(function (id) {
+        ['lampa-stats-v098-style','lampa-stats-v097-style','lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style','lampa-stats-v090-style','lampa-stats-v089-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v098-style';
+        s.id = 'lampa-stats-v099-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2883,7 +2914,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.98 ready (per-episode id for online series)');
+            console.log('Lampa stats v0.99 ready (single commit per external session)');
         } catch (e) {
             console.error('stats init', e);
         }
