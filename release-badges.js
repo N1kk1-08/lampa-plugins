@@ -35,7 +35,6 @@
         },
         ru: {
             settings_menu: 'Метки релизов',
-            settings_title: 'Метки релизов: качество и аудио',
             settings_source: 'Источник меток: парсер Lampa (раздел «Парсер»)',
             settings_enabled: 'Показывать метки релизов',
             settings_quality: 'Показывать качество',
@@ -53,7 +52,6 @@
         },
         en: {
             settings_menu: 'Release badges',
-            settings_title: 'Release badges: quality and audio',
             settings_source: 'Badge source: Lampa parser (Parser settings)',
             settings_enabled: 'Show release badges',
             settings_quality: 'Show quality',
@@ -552,7 +550,6 @@
                 field: { name: label(key) },
                 onRender: function (item) { item.find('span').text(label(key)); } });
         }
-        addTitle('settings_title');
         [
             ['release_badges_enabled', 'settings_enabled'],
             ['release_badges_quality', 'settings_quality'],
