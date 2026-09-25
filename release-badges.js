@@ -7,6 +7,7 @@
     var MAX_CACHE = 200;
     var MAX_ACTIVE = 2;
     var REQUEST_TIMEOUT = 20000;
+    var ANALYSE_LIMIT = 100;
     var cache = {};
     var pending = {};
     var queue = [];
@@ -15,6 +16,8 @@
     var settingsRefreshTimer = null;
     var cardObserver = null;
     var visibilityObserver = null;
+    var scanPending = false;
+    var scanRoots = [];
     var MESSAGES = {
         uk: {
             settings_menu: 'Мітки релізів: якість та аудіо',
@@ -179,7 +182,6 @@
         var tags = title.match(/[[(][^\])]{1,60}[\])]/g) || [];
         tags.forEach(function (tag) { markLanguage(tag, found); });
 
-        // Standalone uppercase release tags, not arbitrary words in a film title.
         var codes = title.match(/(?:^|[\s._-])(?:UA|UKR|RU|RUS|EN|ENG)(?=$|[\s._-])/g) || [];
         codes.forEach(function (code) { markLanguage(code, found); });
 
@@ -203,7 +205,7 @@
         var summary = { quality: 0, ua: null, ru: null, en: null,
             hdr: false, dv: false, matches: 0 };
         if (!Array.isArray(results)) return summary;
-        results.slice(0, 200).forEach(function (item) {
+        results.slice(0, ANALYSE_LIMIT).forEach(function (item) {
             if (!item || !matchesTitle(item.Title || item.title, movie)) return;
             var quality = qualityFrom(item);
             var langs = languagesFrom(item);
@@ -228,6 +230,31 @@
     function tmdbRating(movie) {
         var rating = Number(movie && movie.vote_average);
         return isFinite(rating) && rating > 0 && rating <= 10 ? rating : 0;
+    }
+
+    function summarySignature(summary, movie) {
+        if (!summary) {
+            var r = tmdbRating(movie);
+            return 'null|' + (r ? r.toFixed(1) : '0') + '|' +
+                setting('release_badges_enabled', true) + '|' +
+                setting('release_badges_rating', true);
+        }
+        return [
+            summary.quality || 0,
+            summary.ua === null ? 'n' : summary.ua,
+            summary.ru === null ? 'n' : summary.ru,
+            summary.en === null ? 'n' : summary.en,
+            summary.hdr ? 1 : 0,
+            summary.dv ? 1 : 0,
+            tmdbRating(movie) ? tmdbRating(movie).toFixed(1) : '0',
+            setting('release_badges_enabled', true),
+            setting('release_badges_quality', true),
+            setting('release_badges_hdr', true),
+            setting('release_badges_ua', true),
+            setting('release_badges_ru', true),
+            setting('release_badges_en', true),
+            setting('release_badges_rating', true)
+        ].join('|');
     }
 
     if (typeof module !== 'undefined' && module.exports) {
@@ -391,6 +418,10 @@
     }
 
     function render(container, summary, movie) {
+        var sig = summarySignature(summary, movie);
+        if (container.__releaseBadgesSig === sig) return;
+        container.__releaseBadgesSig = sig;
+
         empty(container);
         var card = container.closest && container.closest('.card');
         if (!setting('release_badges_enabled', true)) {
@@ -429,7 +460,8 @@
 
     function getMovie(card) {
         try {
-            return card.heroMovieData || $(card).data('item') || card.card_data || card.item || null;
+            return card.heroMovieData || card.card_data || card.item ||
+                (window.$ && $(card).data && $(card).data('item')) || null;
         } catch (e) { return null; }
     }
 
@@ -477,6 +509,7 @@
 
     function scan(root) {
         if (!setting('release_badges_enabled', true)) return;
+        if (!root) return;
         if (root.classList && root.classList.contains('card')) processCard(root);
         if (root.querySelectorAll) {
             var cards = root.querySelectorAll('.card');
@@ -486,15 +519,36 @@
         }
     }
 
+    function scheduleScan(root) {
+        if (root) scanRoots.push(root);
+        if (scanPending) return;
+        scanPending = true;
+        var runner = window.requestAnimationFrame || function (cb) { setTimeout(cb, 16); };
+        runner(function () {
+            scanPending = false;
+            var roots = scanRoots.splice(0);
+            if (!roots.length) return;
+            var seen = [];
+            for (var i = 0; i < roots.length; i++) {
+                var r = roots[i];
+                if (r && seen.indexOf(r) === -1) {
+                    seen.push(r);
+                    scan(r);
+                }
+            }
+        });
+    }
+
     function showFull(movie, renderElement) {
         if (!setting('release_badges_enabled', true) || !movie || !movie.id || !renderElement) return;
-        var root = $(renderElement)[0];
+        var root = (window.$ ? $(renderElement)[0] : renderElement) || renderElement;
         if (!root) return;
         var host = root.querySelector('.full-start__poster, .full-start-new__poster') || root;
         var container = ensureContainer(host);
         container.classList.add('release-badges--full');
         var key = cacheKey(movie);
         container.setAttribute('data-release-key', key);
+        container.__releaseBadgesSig = null;
         render(container, null, movie);
         fetchSummary(movie, function (summary) {
             if (!document.documentElement.contains(container) ||
@@ -505,14 +559,17 @@
 
     function refresh() {
         var containers = document.querySelectorAll('.release-badges');
-        for (var i = 0; i < containers.length; i++) containers[i].parentNode.removeChild(containers[i]);
+        for (var i = 0; i < containers.length; i++) {
+            containers[i].__releaseBadgesSig = null;
+            if (containers[i].parentNode) containers[i].parentNode.removeChild(containers[i]);
+        }
         var cards = document.querySelectorAll('.card');
         for (var j = 0; j < cards.length; j++) {
             cards[j].__releaseBadgesKey = null;
             cards[j].classList.remove('release-badges-has-rating', 'release-badges-has-quality');
         }
         if (!setting('release_badges_enabled', true)) return;
-        scan(document.body);
+        scheduleScan(document.body);
         try {
             var activity = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
             if (activity && activity.component === 'full') {
@@ -606,14 +663,17 @@
                         loadCard(entry.target);
                     }
                 });
-            }, { rootMargin: '300px' });
+            }, { rootMargin: '80px' });
         }
         cardObserver = new MutationObserver(function (mutations) {
-            mutations.forEach(function (mutation) {
+            for (var m = 0; m < mutations.length; m++) {
+                var mutation = mutations[m];
                 for (var i = 0; i < mutation.addedNodes.length; i++) {
-                    if (mutation.addedNodes[i].nodeType === 1) scan(mutation.addedNodes[i]);
+                    if (mutation.addedNodes[i].nodeType === 1) {
+                        scheduleScan(mutation.addedNodes[i]);
+                    }
                 }
-            });
+            }
         });
         cardObserver.observe(document.getElementById('app') || document.body,
             { childList: true, subtree: true });
@@ -640,7 +700,7 @@
             });
         }
         window.LAMPA_RELEASE_BADGES_REFRESH = refresh;
-        refresh();
+        scheduleScan(document.body);
     }
 
     function waitForLampa(attempt) {
