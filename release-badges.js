@@ -17,8 +17,7 @@
     var visibilityObserver = null;
     var MESSAGES = {
         uk: {
-            settings_menu: 'Мітки релізів',
-            settings_title: 'Мітки релізів: якість та аудіо',
+            settings_menu: 'Мітки релізів: якість та аудіо',
             settings_source: 'Джерело міток: парсер Lampa (розділ «Парсер»)',
             settings_enabled: 'Показувати мітки релізів',
             settings_quality: 'Показувати якість',
