@@ -545,11 +545,6 @@
                 });
             }
         });
-        function addTitle(key) {
-            Lampa.SettingsApi.addParam({ component: component, param: { type: 'title' },
-                field: { name: label(key) },
-                onRender: function (item) { item.find('span').text(label(key)); } });
-        }
         [
             ['release_badges_enabled', 'settings_enabled'],
             ['release_badges_quality', 'settings_quality'],
@@ -580,6 +575,7 @@
         style.textContent = [
             '.release-badges{position:absolute;left:-.2em;top:1.4em;z-index:25;display:flex;flex-direction:column;align-items:flex-start;gap:.2em;pointer-events:none}',
             '.hero-banner .release-badges{left:1.2em;top:1.5em;gap:.3em}',
+            'body:not(.ifx-type-badges) .card.card--tv .card__view > .release-badges{top:3.2em}',
             '.release-badges--full{left:.5em;top:.8em;gap:.3em}',
             '.release-badges__badge{display:inline-flex;align-items:center;justify-content:center;align-self:flex-start;padding:.32em .48em;border:1px solid rgba(255,255,255,.16);border-radius:.32em;color:#fff;font-size:.78em;font-weight:800;line-height:1;letter-spacing:.03em;white-space:nowrap;box-shadow:0 1px 5px rgba(0,0,0,.35)}',
             '.release-badges__badge--ua{background:linear-gradient(135deg,#1565c0,#42a5f5);border-color:rgba(66,165,245,.4)}',
