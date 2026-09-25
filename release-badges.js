@@ -17,6 +17,7 @@
     var visibilityObserver = null;
     var MESSAGES = {
         uk: {
+            settings_menu: 'Мітки релізів',
             settings_title: 'Мітки релізів: якість та аудіо',
             settings_source: 'Джерело міток: парсер Lampa (розділ «Парсер»)',
             settings_enabled: 'Показувати мітки релізів',
@@ -34,6 +35,7 @@
             badge_rating: 'Рейтинг TMDB'
         },
         ru: {
+            settings_menu: 'Метки релизов',
             settings_title: 'Метки релизов: качество и аудио',
             settings_source: 'Источник меток: парсер Lampa (раздел «Парсер»)',
             settings_enabled: 'Показывать метки релизов',
@@ -51,6 +53,7 @@
             badge_rating: 'Рейтинг TMDB'
         },
         en: {
+            settings_menu: 'Release badges',
             settings_title: 'Release badges: quality and audio',
             settings_source: 'Badge source: Lampa parser (Parser settings)',
             settings_enabled: 'Show release badges',
@@ -523,15 +526,34 @@
     }
 
     function addSettings() {
-        if (!Lampa.SettingsApi || !Lampa.SettingsApi.addParam) return;
-        var component = 'interface';
+        if (!Lampa.SettingsApi || !Lampa.SettingsApi.addParam ||
+            !Lampa.Settings || !Lampa.Settings.create ||
+            !Lampa.Template || !Lampa.Template.add) return;
+        var component = 'release_badges';
+        var menuItem = null;
+        Lampa.Template.add('settings_' + component, '<div></div>');
+        Lampa.SettingsApi.addParam({ component: 'interface',
+            param: { name: 'release_badges_open', type: 'button' },
+            field: { name: label('settings_menu') },
+            onRender: function (item) {
+                menuItem = item;
+                item.find('.settings-param__name').text(label('settings_menu'));
+            },
+            onChange: function () {
+                var index = menuItem ? menuItem.parent().find('.selector').index(menuItem) : 0;
+                Lampa.Settings.create(component, {
+                    onBack: function () {
+                        Lampa.Settings.create('interface', { last_index: Math.max(0, index) });
+                    }
+                });
+            }
+        });
         function addTitle(key) {
             Lampa.SettingsApi.addParam({ component: component, param: { type: 'title' },
                 field: { name: label(key) },
                 onRender: function (item) { item.find('span').text(label(key)); } });
         }
         addTitle('settings_title');
-        addTitle('settings_source');
         [
             ['release_badges_enabled', 'settings_enabled'],
             ['release_badges_quality', 'settings_quality'],
@@ -543,8 +565,14 @@
         ].forEach(function (entry) {
             Lampa.SettingsApi.addParam({ component: component,
                 param: { name: entry[0], type: 'trigger', default: true },
-                field: { name: label(entry[1]) },
-                onRender: function (item) { item.find('.settings-param__name').text(label(entry[1])); },
+                field: { name: label(entry[1]),
+                    description: entry[0] === 'release_badges_enabled' ? label('settings_source') : '' },
+                onRender: function (item) {
+                    item.find('.settings-param__name').text(label(entry[1]));
+                    if (entry[0] === 'release_badges_enabled') {
+                        item.find('.settings-param__descr').text(label('settings_source'));
+                    }
+                },
                 onChange: refresh });
         });
     }
