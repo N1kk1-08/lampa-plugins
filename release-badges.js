@@ -4,10 +4,13 @@
     var CACHE_TTL = 2 * 60 * 60 * 1000;
     var EMPTY_TTL = 10 * 60 * 1000;
     var ERROR_TTL = 60 * 1000;
-    var MAX_CACHE = 200;
-    var MAX_ACTIVE = 2;
+    var MAX_CACHE = 150;
+    var MAX_ACTIVE = 1;
+    var MAX_QUEUE = 6;
     var REQUEST_TIMEOUT = 20000;
-    var ANALYSE_LIMIT = 100;
+    var ANALYSE_LIMIT = 50;
+    var SCAN_PER_FRAME = 6;
+    var LOAD_IDLE_MS = 450;
     var cache = {};
     var pending = {};
     var queue = [];
@@ -18,6 +21,9 @@
     var visibilityObserver = null;
     var scanPending = false;
     var scanRoots = [];
+    var loadWaiting = [];
+    var loadIdleTimer = null;
+    var lastActivity = 0;
     var MESSAGES = {
         uk: {
             settings_menu: 'Мітки релізів: якість та аудіо',
@@ -143,9 +149,9 @@
         if (typeof value === 'string' || typeof value === 'number') {
             markLanguage(value, found);
         } else if (Array.isArray(value)) {
-            for (var i = 0; i < Math.min(value.length, 20); i++) readAudio(value[i], found, depth + 1);
+            for (var i = 0; i < Math.min(value.length, 12); i++) readAudio(value[i], found, depth + 1);
         } else if (typeof value === 'object') {
-            var keys = Object.keys(value).slice(0, 20);
+            var keys = Object.keys(value).slice(0, 12);
             for (var j = 0; j < keys.length; j++) {
                 var key = keys[j];
                 if (key === 'subtitles' || key === 'subtitle') continue;
@@ -167,12 +173,15 @@
         if (item.info) readAudio(item.info.audio_languages, found, 0);
 
         if (Array.isArray(item.ffprobe)) {
-            item.ffprobe.forEach(function (stream) {
+            var streams = item.ffprobe;
+            var maxS = Math.min(streams.length, 15);
+            for (var s = 0; s < maxS; s++) {
+                var stream = streams[s];
                 if (stream && (stream.codec_type === 'audio' || stream.type === 'audio')) {
                     readAudio(stream.tags && stream.tags.language, found, 0);
                     readAudio(stream.language, found, 0);
                 }
-            });
+            }
         }
 
         var title = String(item.Title || item.title || '');
@@ -180,10 +189,10 @@
             .replace(/\([^)]*(?:subtitles?|subs?|субтитр)[^)]*\)/ig, ' ')
             .replace(/(?:subtitles?|subs?|субтитр[а-я]*)\s*[:=-]?\s*(?:(?:UA|UKR|RU|RUS|EN|ENG)\b[\s,/+]*)+/ig, ' ');
         var tags = title.match(/[[(][^\])]{1,60}[\])]/g) || [];
-        tags.forEach(function (tag) { markLanguage(tag, found); });
+        for (var t = 0; t < tags.length; t++) markLanguage(tags[t], found);
 
         var codes = title.match(/(?:^|[\s._-])(?:UA|UKR|RU|RUS|EN|ENG)(?=$|[\s._-])/g) || [];
-        codes.forEach(function (code) { markLanguage(code, found); });
+        for (var c = 0; c < codes.length; c++) markLanguage(codes[c], found);
 
         var audioLabel = /(?:audio|dubbed|dub|voice|озвучка|озвучення|дубляж|звук|мова|язык)\s*[:=-]?\s*([^\[\]()]{1,50})/ig;
         var match;
@@ -205,8 +214,11 @@
         var summary = { quality: 0, ua: null, ru: null, en: null,
             hdr: false, dv: false, matches: 0 };
         if (!Array.isArray(results)) return summary;
-        results.slice(0, ANALYSE_LIMIT).forEach(function (item) {
-            if (!item || !matchesTitle(item.Title || item.title, movie)) return;
+        var list = results;
+        var len = Math.min(list.length, ANALYSE_LIMIT);
+        for (var i = 0; i < len; i++) {
+            var item = list[i];
+            if (!item || !matchesTitle(item.Title || item.title, movie)) continue;
             var quality = qualityFrom(item);
             var langs = languagesFrom(item);
             var videoType = videoTypeFrom(item);
@@ -214,12 +226,10 @@
             if (quality > summary.quality) summary.quality = quality;
             if (videoType === 'DV') summary.dv = true;
             if (videoType) summary.hdr = true;
-            ['ua', 'ru', 'en'].forEach(function (lang) {
-                if (langs[lang] && (summary[lang] === null || quality > summary[lang])) {
-                    summary[lang] = quality;
-                }
-            });
-        });
+            if (langs.ua && (summary.ua === null || quality > summary.ua)) summary.ua = quality;
+            if (langs.ru && (summary.ru === null || quality > summary.ru)) summary.ru = quality;
+            if (langs.en && (summary.en === null || quality > summary.en)) summary.en = quality;
+        }
         return summary;
     }
 
@@ -333,6 +343,10 @@
             info.id + ':' + normal(info.title) + ':' + info.year;
     }
 
+    function markActivity() {
+        lastActivity = Date.now();
+    }
+
     function fetchSummary(movie, callback) {
         var key = cacheKey(movie);
         var hit = cache[key];
@@ -343,6 +357,14 @@
             return;
         }
         pending[key] = [callback];
+        if (queue.length >= MAX_QUEUE) {
+            var dropped = queue.shift();
+            if (dropped) {
+                var dropCbs = pending[dropped.key] || [];
+                delete pending[dropped.key];
+                dropCbs.forEach(function (cb) { try { cb(null); } catch (e) {} });
+            }
+        }
         queue.push({ key: key, movie: movie });
         pump();
     }
@@ -374,7 +396,7 @@
                 try { callback(summary); } catch (e) {}
             });
             active--;
-            pump();
+            setTimeout(pump, 30);
         }
 
         try {
@@ -430,13 +452,21 @@
         }
         var showQuality = Boolean(summary && summary.quality && setting('release_badges_quality', true));
         if (summary) {
-            ['ua', 'ru', 'en'].forEach(function (lang) {
-                if (summary[lang] === null || !setting('release_badges_' + lang, true)) return;
-                var quality = qualityLabel(summary[lang]);
-                container.appendChild(badge(lang.toUpperCase(), lang,
-                    label(quality ? 'badge_audio_quality' : 'badge_audio',
-                        { language: lang.toUpperCase(), quality: quality })));
-            });
+            if (summary.ua !== null && setting('release_badges_ua', true)) {
+                var qUa = qualityLabel(summary.ua);
+                container.appendChild(badge('UA', 'ua',
+                    label(qUa ? 'badge_audio_quality' : 'badge_audio', { language: 'UA', quality: qUa })));
+            }
+            if (summary.ru !== null && setting('release_badges_ru', true)) {
+                var qRu = qualityLabel(summary.ru);
+                container.appendChild(badge('RU', 'ru',
+                    label(qRu ? 'badge_audio_quality' : 'badge_audio', { language: 'RU', quality: qRu })));
+            }
+            if (summary.en !== null && setting('release_badges_en', true)) {
+                var qEn = qualityLabel(summary.en);
+                container.appendChild(badge('EN', 'en',
+                    label(qEn ? 'badge_audio_quality' : 'badge_audio', { language: 'EN', quality: qEn })));
+            }
             if (showQuality) {
                 var qualityClass = summary.quality >= 2160 ? '4k' : summary.quality >= 1080 ? 'fhd' : 'hd';
                 container.appendChild(badge(qualityLabel(summary.quality), qualityClass,
@@ -482,8 +512,9 @@
         return container;
     }
 
-    function loadCard(card) {
+    function loadCardNow(card) {
         if (!setting('release_badges_enabled', true)) return;
+        if (!card || !document.documentElement.contains(card)) return;
         var movie = getMovie(card);
         if (!movie || !movie.id) return;
         var key = cacheKey(movie);
@@ -497,6 +528,39 @@
         });
     }
 
+    function scheduleLoad(card) {
+        if (!card || card.__releaseBadgesQueued) return;
+        card.__releaseBadgesQueued = true;
+        loadWaiting.push(card);
+        markActivity();
+        clearTimeout(loadIdleTimer);
+        loadIdleTimer = setTimeout(flushLoads, LOAD_IDLE_MS);
+    }
+
+    function flushLoads() {
+        if (Date.now() - lastActivity < LOAD_IDLE_MS - 50) {
+            loadIdleTimer = setTimeout(flushLoads, LOAD_IDLE_MS);
+            return;
+        }
+        var list = loadWaiting.splice(0);
+        var i = 0;
+        function step() {
+            var count = 0;
+            while (i < list.length && count < 2) {
+                var card = list[i++];
+                if (card) {
+                    card.__releaseBadgesQueued = false;
+                    if (document.documentElement.contains(card)) loadCardNow(card);
+                }
+                count++;
+            }
+            if (i < list.length) {
+                setTimeout(step, 40);
+            }
+        }
+        step();
+    }
+
     function processCard(card) {
         if (!card || !card.classList || !card.classList.contains('card')) return;
         var movie = getMovie(card);
@@ -504,7 +568,7 @@
         var key = cacheKey(movie);
         if (card.__releaseBadgesKey === key && card.querySelector('.release-badges')) return;
         if (visibilityObserver) visibilityObserver.observe(card);
-        else loadCard(card);
+        else scheduleLoad(card);
     }
 
     function scan(root) {
@@ -513,7 +577,8 @@
         if (root.classList && root.classList.contains('card')) processCard(root);
         if (root.querySelectorAll) {
             var cards = root.querySelectorAll('.card');
-            for (var i = 0; i < cards.length; i++) processCard(cards[i]);
+            var max = Math.min(cards.length, 40);
+            for (var i = 0; i < max; i++) processCard(cards[i]);
             var parent = root.closest && root.closest('.card');
             if (parent) processCard(parent);
         }
@@ -521,6 +586,7 @@
 
     function scheduleScan(root) {
         if (root) scanRoots.push(root);
+        markActivity();
         if (scanPending) return;
         scanPending = true;
         var runner = window.requestAnimationFrame || function (cb) { setTimeout(cb, 16); };
@@ -529,12 +595,18 @@
             var roots = scanRoots.splice(0);
             if (!roots.length) return;
             var seen = [];
-            for (var i = 0; i < roots.length; i++) {
+            var processed = 0;
+            for (var i = 0; i < roots.length && processed < SCAN_PER_FRAME; i++) {
                 var r = roots[i];
                 if (r && seen.indexOf(r) === -1) {
                     seen.push(r);
                     scan(r);
+                    processed++;
                 }
+            }
+            if (roots.length > seen.length) {
+                for (var j = seen.length; j < roots.length; j++) scanRoots.push(roots[j]);
+                scheduleScan(null);
             }
         });
     }
@@ -558,6 +630,8 @@
     }
 
     function refresh() {
+        clearTimeout(loadIdleTimer);
+        loadWaiting = [];
         var containers = document.querySelectorAll('.release-badges');
         for (var i = 0; i < containers.length; i++) {
             containers[i].__releaseBadgesSig = null;
@@ -566,6 +640,7 @@
         var cards = document.querySelectorAll('.card');
         for (var j = 0; j < cards.length; j++) {
             cards[j].__releaseBadgesKey = null;
+            cards[j].__releaseBadgesQueued = false;
             cards[j].classList.remove('release-badges-has-rating', 'release-badges-has-quality');
         }
         if (!setting('release_badges_enabled', true)) return;
@@ -649,23 +724,44 @@
         document.head.appendChild(style);
     }
 
+    function bindActivityHints() {
+        var handler = function () { markActivity(); };
+        try {
+            document.addEventListener('keydown', handler, { passive: true, capture: true });
+            document.addEventListener('wheel', handler, { passive: true, capture: true });
+            document.addEventListener('touchmove', handler, { passive: true, capture: true });
+            document.addEventListener('pointermove', handler, { passive: true, capture: true });
+        } catch (e) {
+            document.addEventListener('keydown', handler, true);
+        }
+        if (Lampa.Listener && Lampa.Listener.follow) {
+            try {
+                Lampa.Listener.follow('activity', function () { markActivity(); });
+            } catch (e2) {}
+        }
+    }
+
     function init() {
-        if (window.__lampaReleaseBadgesV1) return;
+        if (window.__lampaReleaseBadgesV2) return;
         if (!document.body || !window.Lampa || !Lampa.Storage || !Lampa.Parser) return;
+        window.__lampaReleaseBadgesV2 = true;
         window.__lampaReleaseBadgesV1 = true;
         addStyle();
         addSettings();
+        bindActivityHints();
         if (window.IntersectionObserver) {
             visibilityObserver = new IntersectionObserver(function (entries) {
-                entries.forEach(function (entry) {
+                for (var i = 0; i < entries.length; i++) {
+                    var entry = entries[i];
                     if (entry.isIntersecting) {
                         visibilityObserver.unobserve(entry.target);
-                        loadCard(entry.target);
+                        scheduleLoad(entry.target);
                     }
-                });
-            }, { rootMargin: '80px' });
+                }
+            }, { rootMargin: '40px', threshold: 0.01 });
         }
         cardObserver = new MutationObserver(function (mutations) {
+            markActivity();
             for (var m = 0; m < mutations.length; m++) {
                 var mutation = mutations[m];
                 for (var i = 0; i < mutation.addedNodes.length; i++) {
@@ -689,14 +785,17 @@
             Lampa.Storage.listener.follow('change', function (event) {
                 if (event && event.name === 'language') {
                     clearTimeout(settingsRefreshTimer);
-                    settingsRefreshTimer = setTimeout(refresh, 300);
+                    settingsRefreshTimer = setTimeout(refresh, 400);
                     return;
                 }
                 if (!event || !/^(?:parser_use|parser_torrent_type|parser_use_link|parse_timeout|torrserver_use_link|jackett_(?:url|key)(?:_two)?|prowlarr_(?:url|key)(?:_two)?|torrserver_url(?:_two)?)$/.test(event.name)) return;
                 sourceVersion++;
                 cache = {};
+                queue = [];
+                pending = {};
+                active = 0;
                 clearTimeout(settingsRefreshTimer);
-                settingsRefreshTimer = setTimeout(refresh, 300);
+                settingsRefreshTimer = setTimeout(refresh, 400);
             });
         }
         window.LAMPA_RELEASE_BADGES_REFRESH = refresh;
@@ -704,7 +803,7 @@
     }
 
     function waitForLampa(attempt) {
-        if (window.__lampaReleaseBadgesV1) return;
+        if (window.__lampaReleaseBadgesV2) return;
         if (window.Lampa && Lampa.Storage && Lampa.Parser && document.body) {
             init();
         } else if (attempt < 60) {
