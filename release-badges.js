@@ -5,6 +5,11 @@
     var EMPTY_TTL = 10 * 60 * 1000;
     var ERROR_TTL = 60 * 1000;
     var MAX_CACHE = 150;
+    var DISK_CACHE_KEY = 'release_badges_disk_v1';
+    var DISK_MAX = 300;
+    var DISK_TTL = 7 * 24 * 60 * 60 * 1000;
+    var DISK_EMPTY_TTL = 24 * 60 * 60 * 1000;
+    var DISK_SAVE_DELAY = 2000;
     var MAX_ACTIVE = 1;
     var MAX_QUEUE = 6;
     var REQUEST_TIMEOUT = 20000;
@@ -12,6 +17,9 @@
     var SCAN_PER_FRAME = 6;
     var LOAD_IDLE_MS = 450;
     var cache = {};
+    var diskCache = null;
+    var diskDirty = false;
+    var diskSaveTimer = null;
     var pending = {};
     var queue = [];
     var active = 0;
@@ -343,6 +351,116 @@
             info.id + ':' + normal(info.title) + ':' + info.year;
     }
 
+    function diskKey(movie) {
+        var info = movieIdentity(movie);
+        return (info.series ? 'tv:' : 'movie:') + (movie.source || 'tmdb') + ':' +
+            info.id + ':' + normal(info.title) + ':' + info.year;
+    }
+
+    function ensureDiskCache() {
+        if (diskCache) return diskCache;
+        diskCache = { entries: {}, order: [] };
+        try {
+            var raw = Lampa.Storage.get(DISK_CACHE_KEY, null);
+            if (raw && typeof raw === 'object' && raw.entries && Array.isArray(raw.order)) {
+                diskCache.entries = raw.entries || {};
+                diskCache.order = raw.order || [];
+            }
+        } catch (e) {}
+        pruneDiskCache();
+        return diskCache;
+    }
+
+    function pruneDiskCache() {
+        if (!diskCache) return;
+        var now = Date.now();
+        var order = diskCache.order;
+        var entries = diskCache.entries;
+        var next = [];
+        for (var i = 0; i < order.length; i++) {
+            var k = order[i];
+            var item = entries[k];
+            if (!item || !item.expires || item.expires <= now) {
+                delete entries[k];
+            } else {
+                next.push(k);
+            }
+        }
+        while (next.length > DISK_MAX) {
+            var old = next.shift();
+            delete entries[old];
+        }
+        diskCache.order = next;
+    }
+
+    function scheduleDiskSave() {
+        diskDirty = true;
+        if (diskSaveTimer) return;
+        diskSaveTimer = setTimeout(function () {
+            diskSaveTimer = null;
+            if (!diskDirty || !diskCache) return;
+            diskDirty = false;
+            pruneDiskCache();
+            try {
+                Lampa.Storage.set(DISK_CACHE_KEY, {
+                    entries: diskCache.entries,
+                    order: diskCache.order
+                });
+            } catch (e) {}
+        }, DISK_SAVE_DELAY);
+    }
+
+    function readDiskSummary(movie) {
+        var key = diskKey(movie);
+        var store = ensureDiskCache();
+        var item = store.entries[key];
+        if (!item || !item.expires || item.expires <= Date.now()) {
+            if (item) {
+                delete store.entries[key];
+                var idx = store.order.indexOf(key);
+                if (idx !== -1) store.order.splice(idx, 1);
+                scheduleDiskSave();
+            }
+            return null;
+        }
+        var order = store.order;
+        var pos = order.indexOf(key);
+        if (pos !== -1) {
+            order.splice(pos, 1);
+            order.push(key);
+        }
+        return item.summary;
+    }
+
+    function writeDiskSummary(movie, summary, ttl) {
+        if (summary === undefined) return;
+        var key = diskKey(movie);
+        var store = ensureDiskCache();
+        var order = store.order;
+        var pos = order.indexOf(key);
+        if (pos !== -1) order.splice(pos, 1);
+        order.push(key);
+        store.entries[key] = {
+            summary: summary,
+            expires: Date.now() + ttl
+        };
+        while (order.length > DISK_MAX) {
+            var old = order.shift();
+            delete store.entries[old];
+        }
+        scheduleDiskSave();
+    }
+
+    function clearDiskCache() {
+        diskCache = { entries: {}, order: [] };
+        diskDirty = false;
+        if (diskSaveTimer) {
+            clearTimeout(diskSaveTimer);
+            diskSaveTimer = null;
+        }
+        try { Lampa.Storage.set(DISK_CACHE_KEY, diskCache); } catch (e) {}
+    }
+
     function markActivity() {
         lastActivity = Date.now();
     }
@@ -351,6 +469,13 @@
         var key = cacheKey(movie);
         var hit = cache[key];
         if (hit && hit.expires > Date.now()) return callback(hit.summary);
+
+        var diskHit = readDiskSummary(movie);
+        if (diskHit !== null) {
+            cache[key] = { summary: diskHit, expires: Date.now() + CACHE_TTL };
+            return callback(diskHit);
+        }
+
         if (!sourceReady()) return callback(null);
         if (pending[key]) {
             pending[key].push(callback);
@@ -390,6 +515,10 @@
             cache[task.key] = { summary: summary, expires: Date.now() + ttl };
             var keys = Object.keys(cache);
             if (keys.length > MAX_CACHE) delete cache[keys[0]];
+            if (summary !== null && summary !== undefined) {
+                var diskTtl = summary && summary.matches ? DISK_TTL : DISK_EMPTY_TTL;
+                writeDiskSummary(task.movie, summary, diskTtl);
+            }
             var callbacks = pending[task.key] || [];
             delete pending[task.key];
             callbacks.forEach(function (callback) {
@@ -794,6 +923,7 @@
                 queue = [];
                 pending = {};
                 active = 0;
+                clearDiskCache();
                 clearTimeout(settingsRefreshTimer);
                 settingsRefreshTimer = setTimeout(refresh, 400);
             });
