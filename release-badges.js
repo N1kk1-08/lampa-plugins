@@ -7,15 +7,15 @@
     var MAX_CACHE = 150;
     var DISK_CACHE_KEY = 'release_badges_disk_v1';
     var DISK_MAX = 300;
-    var DISK_TTL = 7 * 24 * 60 * 60 * 1000;
-    var DISK_EMPTY_TTL = 24 * 60 * 60 * 1000;
+    var DISK_TTL = 24 * 60 * 60 * 1000;
+    var DISK_EMPTY_TTL = 30 * 60 * 1000;
     var DISK_SAVE_DELAY = 2000;
     var MAX_ACTIVE = 1;
-    var MAX_QUEUE = 6;
     var REQUEST_TIMEOUT = 20000;
-    var ANALYSE_LIMIT = 50;
+    var ANALYSE_LIMIT = 200;
     var SCAN_PER_FRAME = 6;
     var LOAD_IDLE_MS = 450;
+    var LOAD_MAX_WAIT_MS = 1500;
     var cache = {};
     var diskCache = null;
     var diskDirty = false;
@@ -31,6 +31,7 @@
     var scanRoots = [];
     var loadWaiting = [];
     var loadIdleTimer = null;
+    var loadWaitingSince = 0;
     var lastActivity = 0;
     var MESSAGES = {
         uk: {
@@ -357,17 +358,37 @@
             info.id + ':' + normal(info.title) + ':' + info.year;
     }
 
+    function sourceFingerprint() {
+        var names = ['parser_use', 'parser_torrent_type', 'parser_use_link',
+            'jackett_url', 'jackett_url_two', 'jackett_key', 'jackett_key_two',
+            'prowlarr_url', 'prowlarr_url_two', 'prowlarr_key', 'prowlarr_key_two',
+            'torrserver_use_link', 'torrserver_url', 'torrserver_url_two', 'parse_lang'];
+        var hash = 5381;
+        for (var i = 0; i < names.length; i++) {
+            var value = String(field(names[i]));
+            for (var j = 0; j < value.length; j++) {
+                hash = ((hash << 5) + hash) ^ value.charCodeAt(j);
+            }
+            hash = ((hash << 5) + hash) ^ 31;
+        }
+        return (hash >>> 0).toString(36);
+    }
+
     function ensureDiskCache() {
         if (diskCache) return diskCache;
-        diskCache = { entries: {}, order: [] };
+        var source = sourceFingerprint();
+        diskCache = { source: source, entries: {}, order: [] };
+        var stale = false;
         try {
             var raw = Lampa.Storage.get(DISK_CACHE_KEY, null);
-            if (raw && typeof raw === 'object' && raw.entries && Array.isArray(raw.order)) {
+            if (raw && typeof raw === 'object' && raw.source === source &&
+                raw.entries && typeof raw.entries === 'object' && Array.isArray(raw.order)) {
                 diskCache.entries = raw.entries || {};
                 diskCache.order = raw.order || [];
-            }
+            } else if (raw) stale = true;
         } catch (e) {}
         pruneDiskCache();
+        if (stale) scheduleDiskSave();
         return diskCache;
     }
 
@@ -403,6 +424,7 @@
             pruneDiskCache();
             try {
                 Lampa.Storage.set(DISK_CACHE_KEY, {
+                    source: diskCache.source,
                     entries: diskCache.entries,
                     order: diskCache.order
                 });
@@ -429,7 +451,7 @@
             order.splice(pos, 1);
             order.push(key);
         }
-        return item.summary;
+        return item;
     }
 
     function writeDiskSummary(movie, summary, ttl) {
@@ -452,7 +474,7 @@
     }
 
     function clearDiskCache() {
-        diskCache = { entries: {}, order: [] };
+        diskCache = { source: sourceFingerprint(), entries: {}, order: [] };
         diskDirty = false;
         if (diskSaveTimer) {
             clearTimeout(diskSaveTimer);
@@ -467,30 +489,23 @@
 
     function fetchSummary(movie, callback) {
         var key = cacheKey(movie);
+        if (!sourceReady()) return callback(null);
         var hit = cache[key];
         if (hit && hit.expires > Date.now()) return callback(hit.summary);
 
         var diskHit = readDiskSummary(movie);
         if (diskHit !== null) {
-            cache[key] = { summary: diskHit, expires: Date.now() + CACHE_TTL };
-            return callback(diskHit);
+            cache[key] = { summary: diskHit.summary,
+                expires: Math.min(diskHit.expires, Date.now() + CACHE_TTL) };
+            return callback(diskHit.summary);
         }
 
-        if (!sourceReady()) return callback(null);
         if (pending[key]) {
             pending[key].push(callback);
             return;
         }
         pending[key] = [callback];
-        if (queue.length >= MAX_QUEUE) {
-            var dropped = queue.shift();
-            if (dropped) {
-                var dropCbs = pending[dropped.key] || [];
-                delete pending[dropped.key];
-                dropCbs.forEach(function (cb) { try { cb(null); } catch (e) {} });
-            }
-        }
-        queue.push({ key: key, movie: movie });
+        queue.push({ key: key, movie: movie, version: sourceVersion });
         pump();
     }
 
@@ -512,6 +527,7 @@
             if (completed) return;
             completed = true;
             clearTimeout(timer);
+            if (task.version !== sourceVersion) return;
             cache[task.key] = { summary: summary, expires: Date.now() + ttl };
             var keys = Object.keys(cache);
             if (keys.length > MAX_CACHE) delete cache[keys[0]];
@@ -535,6 +551,7 @@
 
             function trySearch(index) {
                 if (completed) return;
+                if (task.version !== sourceVersion) return finish(null, ERROR_TTL);
                 if (index >= searches.length) return finish(null, ERROR_TTL);
                 Lampa.Parser.get({
                     search: searches[index],
@@ -544,6 +561,7 @@
                     page: 1
                 }, function (data) {
                     if (completed) return;
+                    if (task.version !== sourceVersion) return finish(null, ERROR_TTL);
                     var results = data && data.Results;
                     if (!Array.isArray(results)) return trySearch(index + 1);
                     var summary = analyse(results, info);
@@ -658,8 +676,15 @@
     }
 
     function scheduleLoad(card) {
-        if (!card || card.__releaseBadgesQueued) return;
+        if (!card) return;
+        var movie = getMovie(card);
+        if (movie && movie.id) {
+            card.__releaseBadgesKey = cacheKey(movie);
+            render(ensureContainer(hostForCard(card)), null, movie);
+        }
+        if (card.__releaseBadgesQueued) return;
         card.__releaseBadgesQueued = true;
+        if (!loadWaiting.length) loadWaitingSince = Date.now();
         loadWaiting.push(card);
         markActivity();
         clearTimeout(loadIdleTimer);
@@ -667,11 +692,14 @@
     }
 
     function flushLoads() {
-        if (Date.now() - lastActivity < LOAD_IDLE_MS - 50) {
-            loadIdleTimer = setTimeout(flushLoads, LOAD_IDLE_MS);
+        if (!loadWaiting.length) return;
+        var waitRemaining = LOAD_MAX_WAIT_MS - (Date.now() - loadWaitingSince);
+        if (Date.now() - lastActivity < LOAD_IDLE_MS - 50 && waitRemaining > 0) {
+            loadIdleTimer = setTimeout(flushLoads, Math.min(LOAD_IDLE_MS, waitRemaining));
             return;
         }
         var list = loadWaiting.splice(0);
+        loadWaitingSince = 0;
         var i = 0;
         function step() {
             var count = 0;
@@ -706,16 +734,17 @@
         if (root.classList && root.classList.contains('card')) processCard(root);
         if (root.querySelectorAll) {
             var cards = root.querySelectorAll('.card');
-            var max = Math.min(cards.length, 40);
-            for (var i = 0; i < max; i++) processCard(cards[i]);
+            for (var i = 0; i < cards.length; i++) processCard(cards[i]);
             var parent = root.closest && root.closest('.card');
             if (parent) processCard(parent);
         }
     }
 
     function scheduleScan(root) {
-        if (root) scanRoots.push(root);
-        markActivity();
+        if (root) {
+            scanRoots.push(root);
+            markActivity();
+        }
         if (scanPending) return;
         scanPending = true;
         var runner = window.requestAnimationFrame || function (cb) { setTimeout(cb, 16); };
@@ -733,8 +762,8 @@
                     processed++;
                 }
             }
-            if (roots.length > seen.length) {
-                for (var j = seen.length; j < roots.length; j++) scanRoots.push(roots[j]);
+            if (i < roots.length) {
+                for (var j = i; j < roots.length; j++) scanRoots.push(roots[j]);
                 scheduleScan(null);
             }
         });
@@ -761,6 +790,8 @@
     function refresh() {
         clearTimeout(loadIdleTimer);
         loadWaiting = [];
+        loadWaitingSince = 0;
+        scanRoots = [];
         var containers = document.querySelectorAll('.release-badges');
         for (var i = 0; i < containers.length; i++) {
             containers[i].__releaseBadgesSig = null;
@@ -917,7 +948,7 @@
                     settingsRefreshTimer = setTimeout(refresh, 400);
                     return;
                 }
-                if (!event || !/^(?:parser_use|parser_torrent_type|parser_use_link|parse_timeout|torrserver_use_link|jackett_(?:url|key)(?:_two)?|prowlarr_(?:url|key)(?:_two)?|torrserver_url(?:_two)?)$/.test(event.name)) return;
+                if (!event || !/^(?:parser_use|parser_torrent_type|parser_use_link|parse_lang|torrserver_use_link|jackett_(?:url|key)(?:_two)?|prowlarr_(?:url|key)(?:_two)?|torrserver_url(?:_two)?)$/.test(event.name)) return;
                 sourceVersion++;
                 cache = {};
                 queue = [];
