@@ -646,51 +646,73 @@
                     const oldVal = isJson ? JSON.stringify(extra.jsonObj[rawId], null, 2) : (oldStorageValue || '');
 
                     Lampa.Input.edit({ title: 'Редагування (JSON):', value: oldVal, free: true, nosave: true }, (nv) => {
-                        // Cancel / back: Lampa may pass undefined/null OR the current field value.
-                        // Never treat cancel as save. Only save when value really changed.
+                        // Input.edit часто віддає текст і при «Готово», і при «Отмена».
+                        // Зберігаємо лише після явного підтвердження, якщо зміст реально змінився.
+                        const finish = () => setTimeout(() => Lampa.Controller.toggle('content'), 200);
+
                         if (nv === undefined || nv === null) {
                             Lampa.Noty.show('Скасовано');
-                        } else {
-                            const newStr = String(nv);
-                            let reallyChanged = false;
-                            if (isJson) {
-                                try {
-                                    const parsedNew = JSON.parse(newStr);
-                                    const parsedOld = extra.jsonObj[rawId];
-                                    reallyChanged = JSON.stringify(parsedNew) !== JSON.stringify(parsedOld);
-                                } catch (e) {
-                                    // invalid JSON — treat as change so user sees the error below
-                                    reallyChanged = true;
-                                }
-                            } else {
-                                reallyChanged = newStr !== String(oldVal);
-                            }
-
-                            if (!reallyChanged) {
-                                Lampa.Noty.show('Скасовано (без змін)');
-                            } else if (localStorage.getItem(storageKey) !== oldStorageValue) {
-                                Lampa.Noty.show('Запис змінився, відкрийте його знову');
-                                self.buildData();
-                            } else {
-                                try {
-                                    if (isJson) {
-                                        extra.jsonObj[rawId] = JSON.parse(newStr);
-                                        writeStorage(extra.parentKey, JSON.stringify(extra.jsonObj));
-                                        Lampa.Noty.show('Збережено');
-                                        self.buildData();
-                                    } else {
-                                        writeStorage(rawId, newStr);
-                                        Lampa.Noty.show('Збережено');
-                                        self.buildData();
-                                    }
-                                } catch (err) {
-                                    Lampa.Noty.show(isJson && err instanceof SyntaxError ? 'Помилка: Невірний JSON формат' : 'Не вдалося зберегти запис');
-                                }
-                            }
+                            return finish();
                         }
-                        setTimeout(() => {
-                            Lampa.Controller.toggle('content');
-                        }, 200);
+
+                        const newStr = String(nv);
+                        let reallyChanged = false;
+                        let parsedForSave = null;
+
+                        if (isJson) {
+                            try {
+                                parsedForSave = JSON.parse(newStr);
+                                reallyChanged = JSON.stringify(parsedForSave) !== JSON.stringify(extra.jsonObj[rawId]);
+                            } catch (e) {
+                                Lampa.Noty.show('Помилка: Невірний JSON формат');
+                                return finish();
+                            }
+                        } else {
+                            reallyChanged = newStr !== String(oldVal);
+                        }
+
+                        if (!reallyChanged) {
+                            Lampa.Noty.show('Скасовано (без змін)');
+                            return finish();
+                        }
+
+                        if (localStorage.getItem(storageKey) !== oldStorageValue) {
+                            Lampa.Noty.show('Запис змінився, відкрийте його знову');
+                            self.buildData();
+                            return finish();
+                        }
+
+                        Lampa.Select.show({
+                            title: 'Зберегти зміни?',
+                            nomark: true,
+                            items: [
+                                { title: '✅ Зберегти', id: 'yes' },
+                                { title: '❌ Скасувати', id: 'no' }
+                            ],
+                            onSelect: (a) => {
+                                if (a.id === 'yes') {
+                                    try {
+                                        if (isJson) {
+                                            extra.jsonObj[rawId] = parsedForSave;
+                                            writeStorage(extra.parentKey, JSON.stringify(extra.jsonObj));
+                                        } else {
+                                            writeStorage(rawId, newStr);
+                                        }
+                                        Lampa.Noty.show('Збережено');
+                                        self.buildData();
+                                    } catch (err) {
+                                        Lampa.Noty.show('Не вдалося зберегти запис');
+                                    }
+                                } else {
+                                    Lampa.Noty.show('Скасовано');
+                                }
+                                Lampa.Controller.toggle('content');
+                            },
+                            onBack: () => {
+                                Lampa.Noty.show('Скасовано');
+                                Lampa.Controller.toggle('content');
+                            }
+                        });
                     });
                 }
             };
