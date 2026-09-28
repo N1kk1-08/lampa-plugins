@@ -1,7 +1,7 @@
 (function() {
     'use strict';
 
-    const PLUGIN_VERSION = '1.0';
+    const PLUGIN_VERSION = '1.0.1';
 
     // ==========================================
     // СТИЛІ (template literal + responsive)
@@ -179,6 +179,7 @@
                 arr.push(entry);
                 return saveTrash(arr) ? entry : null;
             };
+            // Спочатку пишемо в кошик, потім видаляємо. При помилці — копія лишається.
             const moveToTrash = (entry, removeFn) => {
                 const saved = pushToTrash(entry);
                 if (!saved) return false;
@@ -236,7 +237,7 @@
                 }
             };
 
-            // --- Дублікати ---
+            // --- Дублікати (коректна обробка колізій hash) ---
             this.findDuplicateSets = function(useCache) {
                 if (useCache && duplicatesCache.signature === 'built' && duplicatesCache.sets) return duplicatesCache.sets;
                 const map = Object.create(null);
@@ -266,7 +267,7 @@
                 return sets;
             };
 
-            // --- Hash-індекс метаданих ---
+            // --- Hash-індекс метаданих (будується один раз) ---
             const buildHashIndex = () => {
                 hashIndex = Object.create(null);
                 const cards = [];
@@ -395,7 +396,7 @@
                 return metaCache[k];
             };
 
-            // --- UI builders ---
+            // --- UI builders (DocumentFragment) ---
             const createCardNode = (fragment, title, rawId, desc, type, extra) => {
                 const safeDesc = typeof desc === 'string' && desc.length > 90 ? desc.substring(0, 90) + '...' : desc;
                 const card = $('<div class="cache-card selector"></div>');
@@ -645,75 +646,48 @@
                     const oldStorageValue = localStorage.getItem(storageKey);
                     const oldVal = isJson ? JSON.stringify(extra.jsonObj[rawId], null, 2) : (oldStorageValue || '');
 
-                    Lampa.Input.edit({ title: 'Редагування (JSON):', value: oldVal, free: true, nosave: true }, (nv) => {
-                        // Input.edit часто віддає текст і при «Готово», і при «Отмена».
-                        // Зберігаємо лише після явного підтвердження, якщо зміст реально змінився.
-                        const finish = () => setTimeout(() => Lampa.Controller.toggle('content'), 200);
+                    // Input.edit викликає колбек і для Enter, і для Back.
+                    // Відкладена перевірка події дозволяє зберігати лише після Enter.
+                    let editConfirmed = false;
+                    let inputHandled = false;
+                    const finishEdit = () => setTimeout(() => Lampa.Controller.toggle('content'), 200);
+                    const editor = Lampa.Input.edit({ title: 'Редагування (JSON):', value: oldVal, free: true, nosave: true }, (nv) => {
+                        setTimeout(() => {
+                            if (inputHandled) return;
+                            inputHandled = true;
 
-                        if (nv === undefined || nv === null) {
-                            Lampa.Noty.show('Скасовано');
-                            return finish();
-                        }
-
-                        const newStr = String(nv);
-                        let reallyChanged = false;
-                        let parsedForSave = null;
-
-                        if (isJson) {
-                            try {
-                                parsedForSave = JSON.parse(newStr);
-                                reallyChanged = JSON.stringify(parsedForSave) !== JSON.stringify(extra.jsonObj[rawId]);
-                            } catch (e) {
-                                Lampa.Noty.show('Помилка: Невірний JSON формат');
-                                return finish();
+                            if (!editConfirmed) {
+                                Lampa.Noty.show('Скасовано');
+                                return finishEdit();
                             }
-                        } else {
-                            reallyChanged = newStr !== String(oldVal);
-                        }
 
-                        if (!reallyChanged) {
-                            Lampa.Noty.show('Скасовано (без змін)');
-                            return finish();
-                        }
-
-                        if (localStorage.getItem(storageKey) !== oldStorageValue) {
-                            Lampa.Noty.show('Запис змінився, відкрийте його знову');
-                            self.buildData();
-                            return finish();
-                        }
-
-                        Lampa.Select.show({
-                            title: 'Зберегти зміни?',
-                            nomark: true,
-                            items: [
-                                { title: '✅ Зберегти', id: 'yes' },
-                                { title: '❌ Скасувати', id: 'no' }
-                            ],
-                            onSelect: (a) => {
-                                if (a.id === 'yes') {
-                                    try {
-                                        if (isJson) {
-                                            extra.jsonObj[rawId] = parsedForSave;
-                                            writeStorage(extra.parentKey, JSON.stringify(extra.jsonObj));
-                                        } else {
-                                            writeStorage(rawId, newStr);
-                                        }
+                            if (nv === undefined || nv === null || nv === oldVal) {
+                                Lampa.Noty.show('Без змін');
+                            } else if (localStorage.getItem(storageKey) !== oldStorageValue) {
+                                Lampa.Noty.show('Запис змінився, відкрийте його знову');
+                                self.buildData();
+                            } else {
+                                try {
+                                    if (isJson) {
+                                        extra.jsonObj[rawId] = JSON.parse(nv);
+                                        writeStorage(extra.parentKey, JSON.stringify(extra.jsonObj));
                                         Lampa.Noty.show('Збережено');
                                         self.buildData();
-                                    } catch (err) {
-                                        Lampa.Noty.show('Не вдалося зберегти запис');
+                                    } else {
+                                        writeStorage(rawId, String(nv));
+                                        Lampa.Noty.show('Збережено');
+                                        self.buildData();
                                     }
-                                } else {
-                                    Lampa.Noty.show('Скасовано');
+                                } catch (err) {
+                                    Lampa.Noty.show(isJson && err instanceof SyntaxError ? 'Помилка: Невірний JSON формат' : 'Не вдалося зберегти запис');
                                 }
-                                Lampa.Controller.toggle('content');
-                            },
-                            onBack: () => {
-                                Lampa.Noty.show('Скасовано');
-                                Lampa.Controller.toggle('content');
                             }
-                        });
+                            finishEdit();
+                        }, 0);
                     });
+
+                    editor.listener.follow('enter', () => { editConfirmed = true; });
+                    editor.listener.follow('back', () => { editConfirmed = false; });
                 }
             };
 
