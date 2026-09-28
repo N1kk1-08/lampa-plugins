@@ -1,12 +1,10 @@
-//orig  https://yarikrazor-star.github.io/lmp/redaktor.js
 (function() {
     'use strict';
 
-    const PLUGIN_VERSION = '1.0.6.1 (Optimized)';
-    const PLUGIN_AUTHOR = '@Yaroslav_Films (modded & optimized)';
+    const PLUGIN_VERSION = '1.0';
 
     // ==========================================
-    // СТИЛІ РЕДАКТОРА (Використання Template Literals)
+    // СТИЛІ (template literal + responsive)
     // ==========================================
     const styles = `
     <style>
@@ -38,28 +36,36 @@
         .cc-chart-track { flex: 1; height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden; }
         .cc-chart-fill { height: 100%; border-radius: 5px; background: linear-gradient(to right, #4caf50, #8bc34a); }
         .cc-chart-value { width: 72px; flex-shrink: 0; text-align: right; font-size: 0.8em; color: #999; }
-        @media (max-width: 768px), (orientation: portrait) { 
-            .cache-editor-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 10px; padding: 10px 10px 50px 10px; } 
-            .cache-card { height: 130px; padding: 10px; } 
-            .cc-title { font-size: 1em; margin-bottom: 2px; } 
-            .cc-subtitle { font-size: 0.65em; margin-bottom: 5px; } 
-            .cc-desc { font-size: 0.85em; -webkit-line-clamp: 2; } 
-            .cc-chart-label { width: 80px; font-size: 0.75em; } 
-            .cc-chart-value { width: 55px; font-size: 0.72em; } 
+        @media (max-width: 768px), (orientation: portrait) {
+            .cache-editor-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 10px; padding: 10px 10px 50px 10px; }
+            .cache-card { height: 130px; padding: 10px; }
+            .cc-title { font-size: 1em; margin-bottom: 2px; }
+            .cc-subtitle { font-size: 0.65em; margin-bottom: 5px; }
+            .cc-desc { font-size: 0.85em; -webkit-line-clamp: 2; }
+            .cc-chart-label { width: 80px; font-size: 0.75em; }
+            .cc-chart-value { width: 55px; font-size: 0.72em; }
         }
     </style>
     `;
     $('head').append(styles);
 
     // ==========================================
-    // УТИЛІТИ ДЛЯ РОБОТИ З ДАНИМИ
+    // УТИЛІТИ
     // ==========================================
-    // Безпечний парсинг JSON, щоб не крашити додаток на битих даних
     const safeJsonParse = (data, defaultReturn = {}) => {
         if (!data) return defaultReturn;
-        try { return JSON.parse(data); } 
+        try { return JSON.parse(data); }
         catch (e) { return defaultReturn; }
     };
+
+    const safeJsonObject = (data) => {
+        const parsed = safeJsonParse(data, {});
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    };
+
+    const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[char]);
 
     const byteSize = (str) => {
         const s = String(str === null || str === undefined ? '' : str);
@@ -83,13 +89,13 @@
         const s = String(str);
         for (let i = 0; i < s.length; i++) {
             hash = ((hash << 5) - hash) + s.charCodeAt(i);
-            hash |= 0; 
+            hash |= 0;
         }
         return String(Math.abs(hash));
     };
 
     // ==========================================
-    // ЛОГІКА КОМПОНЕНТА РЕДАКТОРА
+    // КОМПОНЕНТ РЕДАКТОРА
     // ==========================================
     function initCacheEditorActivity() {
         if (Lampa.Component.get('cache_editor_grid')) return;
@@ -99,18 +105,17 @@
             const html = $('<div class="cache-editor-module"></div>');
             const scroll = new Lampa.Scroll({ mask: true, over: true, scroll_by_item: true });
             const grid = $('<div class="cache-editor-grid"></div>');
-            
+
             let action_busy = false;
             let last_back_time = 0;
             let search_query = '';
             let render_limit = 60;
             const PAGE_SIZE = 60;
-            const metaCache = {};
+            const metaCache = Object.create(null);
 
             let hashIndex = null;
             let paginating = false;
-            
-            // Кешування стану для швидкої пагінації
+
             let groupsCache = { signature: null };
             let keysCache = { signature: null };
             let jsonCache = { signature: null };
@@ -120,85 +125,150 @@
             const TRASH_KEY = 'lampaCacheEditorTrash';
             const TRASH_RETENTION_DAYS = 3;
             const TRASH_MAX_ITEMS = 300;
-            const STORAGE_QUOTA_BYTES = 4.88 * 1024 * 1024;
             const TECHNICAL_KEYS = [TRASH_KEY];
-            
-            let sort_mode = 'size'; 
-            let filter_min_kb = 0; 
 
-            const isTechnicalKey = (k) => TECHNICAL_KEYS.includes(k);
+            let sort_mode = 'size';
+            let filter_min_kb = 0;
 
-            // --- Кошик ---
-            const getTrash = () => safeJsonParse(localStorage.getItem(TRASH_KEY), []);
-            const saveTrash = (arr) => { try { localStorage.setItem(TRASH_KEY, JSON.stringify(arr)); } catch(e) {} };
-            
+            const isTechnicalKey = (k) => TECHNICAL_KEYS.indexOf(k) !== -1;
+
+            // --- Синхронізація з Lampa.Storage ---
+            const writeStorage = (key, value) => {
+                localStorage.setItem(key, value);
+                if (Lampa.Storage && Lampa.Storage.set) Lampa.Storage.set(key, value);
+            };
+            const deleteStorage = (key) => {
+                localStorage.removeItem(key);
+                if (Lampa.Storage && Lampa.Storage.set) {
+                    Lampa.Storage.set(key, '');
+                    localStorage.removeItem(key);
+                }
+            };
+
+            // --- Кошик (безпечний) ---
+            const getTrash = () => {
+                try {
+                    const parsed = JSON.parse(localStorage.getItem(TRASH_KEY) || '[]');
+                    return Array.isArray(parsed) ? parsed : [];
+                } catch (e) { return []; }
+            };
+            const saveTrash = (arr) => {
+                try {
+                    localStorage.setItem(TRASH_KEY, JSON.stringify(arr));
+                    return true;
+                } catch (e) {
+                    Lampa.Noty.show('Не вдалося записати кошик: бракує місця');
+                    return false;
+                }
+            };
             const purgeOldTrash = () => {
-                let arr = getTrash();
+                const arr = getTrash();
                 const cutoff = Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-                let filtered = arr.filter(t => t && t.deletedAt >= cutoff);
-                if (filtered.length > TRASH_MAX_ITEMS) filtered = filtered.slice(filtered.length - TRASH_MAX_ITEMS);
+                const filtered = arr.filter(t => t && t.deletedAt >= cutoff);
                 if (filtered.length !== arr.length) saveTrash(filtered);
                 return filtered;
             };
-
             const pushToTrash = (entry) => {
                 let arr = purgeOldTrash();
+                if (arr.length >= TRASH_MAX_ITEMS) {
+                    Lampa.Noty.show('Кошик заповнений; очистіть його або видаліть запис назавжди');
+                    return null;
+                }
                 entry.id = 't_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
                 entry.deletedAt = Date.now();
                 arr.push(entry);
-                if (arr.length > TRASH_MAX_ITEMS) arr = arr.slice(arr.length - TRASH_MAX_ITEMS);
-                saveTrash(arr);
-                return entry;
+                return saveTrash(arr) ? entry : null;
             };
-
+            const moveToTrash = (entry, removeFn) => {
+                const saved = pushToTrash(entry);
+                if (!saved) return false;
+                try {
+                    removeFn();
+                    return true;
+                } catch (e) {
+                    Lampa.Noty.show('Видалення перервано; копія залишилась у кошику');
+                    return false;
+                }
+            };
             const removeFromTrash = (id) => saveTrash(getTrash().filter(t => t.id !== id));
 
             const restoreTrashEntry = (entry) => {
-                if (entry.type === 'key') {
-                    localStorage.setItem(entry.payload.key, entry.payload.value);
-                } else if (entry.type === 'group') {
-                    entry.payload.items.forEach(it => localStorage.setItem(it.key, it.value));
-                } else if (entry.type === 'json_item') {
-                    const obj = safeJsonParse(localStorage.getItem(entry.payload.storageKey));
-                    obj[entry.payload.itemKey] = entry.payload.itemValue;
-                    localStorage.setItem(entry.payload.storageKey, JSON.stringify(obj));
-                } else if (entry.type === 'json_bulk') {
-                    const obj2 = safeJsonParse(localStorage.getItem(entry.payload.storageKey));
-                    for (let kk in entry.payload.items) obj2[kk] = entry.payload.items[kk];
-                    localStorage.setItem(entry.payload.storageKey, JSON.stringify(obj2));
+                try {
+                    if (entry.type === 'key' || entry.type === 'group') {
+                        const items = entry.type === 'key' ? [entry.payload] : entry.payload.items;
+                        if (items.some(it => {
+                            const current = localStorage.getItem(it.key);
+                            return current !== null && current !== it.value;
+                        })) {
+                            Lampa.Noty.show('Відновлення скасовано: ключ уже існує');
+                            return false;
+                        }
+                        items.forEach(it => {
+                            if (localStorage.getItem(it.key) === null) writeStorage(it.key, it.value);
+                        });
+                    } else if (entry.type === 'json_item' || entry.type === 'json_bulk') {
+                        const raw = localStorage.getItem(entry.payload.storageKey);
+                        const obj = raw === null ? {} : safeJsonParse(raw, null);
+                        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('invalid JSON');
+                        const restored = entry.type === 'json_item'
+                            ? [[entry.payload.itemKey, entry.payload.itemValue]]
+                            : Object.keys(entry.payload.items).map(k => [k, entry.payload.items[k]]);
+                        if (restored.some(pair =>
+                            Object.prototype.hasOwnProperty.call(obj, pair[0]) &&
+                            JSON.stringify(obj[pair[0]]) !== JSON.stringify(pair[1])
+                        )) {
+                            Lampa.Noty.show('Відновлення скасовано: запис уже існує');
+                            return false;
+                        }
+                        restored.forEach(pair => {
+                            if (!Object.prototype.hasOwnProperty.call(obj, pair[0])) {
+                                Object.defineProperty(obj, pair[0], {
+                                    value: pair[1], enumerable: true, writable: true, configurable: true
+                                });
+                            }
+                        });
+                        writeStorage(entry.payload.storageKey, JSON.stringify(obj));
+                    } else return false;
+                    return removeFromTrash(entry.id);
+                } catch (e) {
+                    Lampa.Noty.show('Не вдалося відновити запис');
+                    return false;
                 }
-                removeFromTrash(entry.id);
             };
 
-            // --- Пошук дублікатів ---
+            // --- Дублікати ---
             this.findDuplicateSets = function(useCache) {
                 if (useCache && duplicatesCache.signature === 'built' && duplicatesCache.sets) return duplicatesCache.sets;
-                const map = {};
+                const map = Object.create(null);
                 for (let i = 0; i < localStorage.length; i++) {
                     const k = localStorage.key(i);
                     if (!k || isTechnicalKey(k)) continue;
                     const val = localStorage.getItem(k) || '';
                     if (val.length < 20) continue;
-                    const hk = `${val.length}_${localHash(val)}`;
+                    const hk = val.length + '_' + localHash(val);
                     if (!map[hk]) map[hk] = [];
                     map[hk].push(k);
                 }
                 const sets = [];
-                for (let hkKey in map) {
-                    const candidates = map[hkKey];
-                    if (candidates.length < 2) continue;
-                    const refVal = localStorage.getItem(candidates[0]);
-                    const confirmed = candidates.filter(kk => localStorage.getItem(kk) === refVal);
-                    if (confirmed.length > 1) sets.push({ id: hkKey, keys: confirmed, valueSize: byteSize(refVal) });
+                for (const hkKey in map) {
+                    let candidates = map[hkKey].slice();
+                    while (candidates.length > 1) {
+                        const refVal = localStorage.getItem(candidates[0]);
+                        const confirmed = candidates.filter(kk => localStorage.getItem(kk) === refVal);
+                        candidates = candidates.filter(kk => localStorage.getItem(kk) !== refVal);
+                        if (confirmed.length > 1) {
+                            sets.push({ id: hkKey + '_' + sets.length, keys: confirmed, valueSize: byteSize(refVal) });
+                        }
+                    }
                 }
                 sets.sort((a, b) => (b.keys.length * b.valueSize) - (a.keys.length * a.valueSize));
-                duplicatesCache = { signature: 'built', sets: sets };
+                duplicatesCache = { signature: 'built', sets };
                 return sets;
             };
 
-            // --- Дешифрування ---
+            // --- Hash-індекс метаданих ---
             const buildHashIndex = () => {
-                hashIndex = {};
+                hashIndex = Object.create(null);
                 const cards = [];
                 const addCard = (c) => {
                     if (!c || typeof c !== 'object') return;
@@ -211,18 +281,18 @@
                 if (Array.isArray(hist)) hist.forEach(addCard);
 
                 const fav = Lampa.Storage.get('favorite', {});
-                for (let fKey in fav) if (Array.isArray(fav[fKey])) fav[fKey].forEach(addCard);
+                for (const fKey in fav) if (Array.isArray(fav[fKey])) fav[fKey].forEach(addCard);
 
                 const ov = Lampa.Storage.get('online_view', {});
-                for (let oKey in ov) addCard(ov[oKey]);
+                for (const oKey in ov) addCard(ov[oKey]);
 
                 const tv = Lampa.Storage.get('torrents_view', {});
-                for (let tKey in tv) addCard(tv[tKey]);
+                for (const tKey in tv) addCard(tv[tKey]);
 
                 const uniqueCards = [];
-                const seenKeys = {};
-                cards.forEach((c) => {
-                    const uniqKey = `${c.original_title || c.original_name || c.title || c.name || ''}_${c.id || ''}`;
+                const seenKeys = Object.create(null);
+                cards.forEach(c => {
+                    const uniqKey = (c.original_title || c.original_name || c.title || c.name || '') + '_' + (c.id || '');
                     if (uniqKey && !seenKeys[uniqKey]) {
                         seenKeys[uniqKey] = true;
                         uniqueCards.push(c);
@@ -233,13 +303,13 @@
                     if (hashIndex[hashStr]) return;
                     const imgPath = card.backdrop_path || card.poster_path;
                     hashIndex[hashStr] = {
-                        title: title,
-                        subtitle: subtitle,
-                        bg: imgPath ? (imgPath.indexOf('http') === 0 ? imgPath : `https://image.tmdb.org/t/p/w300${imgPath}`) : null
+                        title,
+                        subtitle,
+                        bg: imgPath ? (imgPath.indexOf('http') === 0 ? imgPath : 'https://image.tmdb.org/t/p/w300' + imgPath) : null
                     };
                 };
 
-                uniqueCards.forEach((card) => {
+                uniqueCards.forEach(card => {
                     const origTitle = card.original_title || '';
                     const origName = card.original_name || card.original_title || '';
                     const localTitle = card.title || card.name || '';
@@ -247,7 +317,7 @@
 
                     const registerMovieTitle = (t) => {
                         if (!t) return;
-                        register(localHash(t), card.title || card.name || t, `Фільм (ID: ${idLabel})`, card);
+                        register(localHash(t), card.title || card.name || t, 'Фільм (ID: ' + idLabel + ')', card);
                     };
                     registerMovieTitle(origTitle);
                     registerMovieTitle(localTitle);
@@ -255,7 +325,7 @@
                     const registerSerialProgress = (nameStr) => {
                         if (!nameStr) return;
                         for (let ep = 1; ep <= 50; ep++) {
-                            register(localHash(`1${ep}${nameStr}`), `${card.title || card.name || nameStr} (Серія ${ep})`, `Серіал (ID: ${idLabel})`, card);
+                            register(localHash('1' + ep + nameStr), (card.title || card.name || nameStr) + ' (Серія ' + ep + ')', 'Серіал (ID: ' + idLabel + ')', card);
                         }
                     };
                     registerSerialProgress(origName);
@@ -266,7 +336,7 @@
                         for (let s = 1; s <= 20; s++) {
                             const delimiter = s > 10 ? ':' : '';
                             for (let e = 1; e <= 60; e++) {
-                                register(localHash(`${s}${delimiter}${e}${nameStr}`), `${card.title || card.name || nameStr} (Сезон ${s}, Серія ${e})`, `Серіал (ID: ${idLabel})`, card);
+                                register(localHash(s + delimiter + e + nameStr), (card.title || card.name || nameStr) + ' (Сезон ' + s + ', Серія ' + e + ')', 'Серіал (ID: ' + idLabel + ')', card);
                             }
                         }
                     };
@@ -280,19 +350,18 @@
                 if (!hashIndex) buildHashIndex();
                 if (hashIndex[hashStr]) return hashIndex[hashStr];
 
-                const meta = { title: 'Невідомий файл', bg: null, subtitle: `Хеш: ${hashStr}` };
+                const meta = { title: 'Невідомий файл', bg: null, subtitle: 'Хеш: ' + hashStr };
 
                 for (let j = 0; j < localStorage.length; j++) {
                     const key = localStorage.key(j);
                     if (key === object.storage_key) continue;
-
                     const val = localStorage.getItem(key);
                     if (!val || val.indexOf(hashStr) === -1) continue;
 
                     try {
                         const parsed = JSON.parse(val);
                         if (typeof parsed === 'object' && parsed !== null) {
-                            for (let mKey in parsed) {
+                            for (const mKey in parsed) {
                                 const movie = parsed[mKey];
                                 if (typeof movie === 'object' && movie !== null) {
                                     if (JSON.stringify(movie).indexOf(hashStr) !== -1 || String(movie.id) === hashStr) {
@@ -300,21 +369,21 @@
                                         if (title) {
                                             meta.title = title;
                                             const source = key === 'online_view' ? 'Онлайн' : (key === 'torrents_view' ? 'Торрент' : (key === 'history' ? 'Історія' : 'Кеш'));
-                                            meta.subtitle = `${source} (ID: ${movie.id || mKey})`;
+                                            meta.subtitle = source + ' (ID: ' + (movie.id || mKey) + ')';
                                             const imgPath = movie.backdrop_path || movie.poster_path || (movie.movie && movie.movie.backdrop_path);
-                                            if (imgPath) meta.bg = imgPath.indexOf('http') === 0 ? imgPath : `https://image.tmdb.org/t/p/w300${imgPath}`;
+                                            if (imgPath) meta.bg = imgPath.indexOf('http') === 0 ? imgPath : 'https://image.tmdb.org/t/p/w300' + imgPath;
                                             return meta;
                                         }
                                     }
                                 }
                             }
                         }
-                    } catch(e) {
+                    } catch (e) {
                         if (hashStr.indexOf('http') === 0 && meta.title === 'Невідомий файл') {
                             try {
                                 const parts = hashStr.split('/');
                                 meta.title = decodeURIComponent(parts[parts.length - 1] || parts[parts.length - 2]);
-                            } catch(err) {}
+                            } catch (err) {}
                         }
                     }
                 }
@@ -326,49 +395,45 @@
                 return metaCache[k];
             };
 
-            // --- UI Builders ---
+            // --- UI builders ---
             const createCardNode = (fragment, title, rawId, desc, type, extra) => {
                 const safeDesc = typeof desc === 'string' && desc.length > 90 ? desc.substring(0, 90) + '...' : desc;
-                let bgStyle = '', overlay = '';
+                const card = $('<div class="cache-card selector"></div>');
+                card.attr('data-id', rawId).attr('data-type', type);
                 if (extra && extra.bg) {
-                    bgStyle = ` style="background-image: url('${extra.bg}'); background-size: cover; background-position: center;"`;
-                    overlay = '<div class="cc-bg-overlay"></div>';
+                    const bg = String(extra.bg);
+                    if (/^https?:\/\//i.test(bg)) {
+                        card.addClass('has-bg').css({
+                            backgroundImage: 'url("' + bg.replace(/["\\\r\n]/g, '') + '")',
+                            backgroundSize: 'cover', backgroundPosition: 'center'
+                        });
+                        card.append($('<div class="cc-bg-overlay"></div>'));
+                    }
                 }
-                const subT = type !== 'group' ? `<div class="cc-subtitle">${extra && extra.rawSubtitle ? extra.rawSubtitle : rawId}</div>` : '';
-                
-                const html = `
-                <div class="cache-card selector${extra && extra.bg ? ' has-bg' : ''}" data-id="${rawId}" data-type="${type}"${bgStyle}>
-                    ${overlay}
-                    <div class="cc-title">${title}</div>
-                    ${subT}
-                    <div class="cc-desc">${safeDesc}</div>
-                </div>`;
-                
-                const card = $(html);
-                if (extra) card.data('extra', extra); // Ховаємо додаткові дані прямо в вузол
+                card.append($('<div class="cc-title"></div>').text(title));
+                if (type !== 'group') {
+                    card.append($('<div class="cc-subtitle"></div>').text(extra && extra.rawSubtitle ? extra.rawSubtitle : rawId));
+                }
+                card.append($('<div class="cc-desc"></div>').text(safeDesc == null ? '' : safeDesc));
+                if (extra) card.data('extra', extra);
                 $(fragment).append(card);
             };
 
             const createControlNode = (fragment, title, desc, onEnter, opts = {}) => {
-                const cls = opts.danger ? ' control-danger' : '';
-                const gridCol = opts.wide ? ' style="grid-column: 1 / -1;"' : '';
-                let barHtml = '';
-                
+                const card = $('<div class="cache-card selector control-card"></div>');
+                card.attr('data-id', '__ctrl_' + title).attr('data-type', 'control');
+                if (opts.danger) card.addClass('control-danger');
+                if (opts.wide) card.css('grid-column', '1 / -1');
+                card.append($('<div class="cc-title"></div>').text(title));
+                if (desc) card.append($('<div class="cc-desc"></div>').text(desc));
                 if (typeof opts.percent === 'number') {
                     const pct = Math.max(0, Math.min(100, opts.percent));
                     const barColor = pct < 60 ? '#4caf50' : (pct < 85 ? '#ffc107' : '#f44336');
-                    barHtml = `<div class="cc-bar-outer"><div class="cc-bar-inner" style="width: ${pct}%; background: ${barColor};"></div></div>`;
+                    const bar = $('<div class="cc-bar-outer"></div>');
+                    bar.append($('<div class="cc-bar-inner"></div>').css({ width: pct + '%', background: barColor }));
+                    card.append(bar);
                 }
-
-                const html = `
-                <div class="cache-card selector control-card${cls}" data-id="__ctrl_${title}" data-type="control"${gridCol}>
-                    <div class="cc-title">${title}</div>
-                    ${desc ? `<div class="cc-desc">${desc}</div>` : ''}
-                    ${barHtml}
-                </div>`;
-                
-                const card = $(html);
-                card.data('onEnter', onEnter); // Ховаємо функцію-колбек в вузол
+                card.data('onEnter', onEnter);
                 $(fragment).append(card);
             };
 
@@ -376,25 +441,25 @@
                 const top = namesSortedBySize.slice(0, 8);
                 if (!top.length) return null;
                 const maxB = sizeMap[top[0]] || 1;
-                
-                const rows = top.map(name => {
+                const chart = $('<div class="cache-chart-card"></div>');
+                chart.append($('<div class="cc-chart-title"></div>').text('📈 Топ груп за розміром'));
+                top.forEach(name => {
                     const bytes = sizeMap[name] || 0;
                     const pct = Math.max(4, Math.round((bytes / maxB) * 100));
                     const safeName = name.length > 18 ? name.substring(0, 18) + '…' : name;
-                    return `
-                    <div class="cc-chart-row">
-                        <div class="cc-chart-label">${safeName}</div>
-                        <div class="cc-chart-track"><div class="cc-chart-fill" style="width:${pct}%"></div></div>
-                        <div class="cc-chart-value">${formatBytes(bytes)}</div>
-                    </div>`;
-                }).join('');
-                
-                return `<div class="cache-chart-card"><div class="cc-chart-title">📈 Топ груп за розміром</div>${rows}</div>`;
+                    const row = $('<div class="cc-chart-row"></div>');
+                    row.append($('<div class="cc-chart-label"></div>').text(safeName));
+                    const track = $('<div class="cc-chart-track"></div>');
+                    track.append($('<div class="cc-chart-fill"></div>').css('width', pct + '%'));
+                    row.append(track, $('<div class="cc-chart-value"></div>').text(formatBytes(bytes)));
+                    chart.append(row);
+                });
+                return chart;
             };
 
-            // --- Дії з UI ---
+            // --- Дії UI ---
             this.openSizeFilter = function() {
-                Lampa.Input.edit({ title: 'Мінімальний розмір, КБ (0 = без фільтра)', value: String(filter_min_kb || 0), free: true, nosave: true }, function(val) {
+                Lampa.Input.edit({ title: 'Мінімальний розмір, КБ (0 = без фільтра)', value: String(filter_min_kb || 0), free: true, nosave: true }, (val) => {
                     const num = parseFloat(val);
                     filter_min_kb = (isNaN(num) || num < 0) ? 0 : num;
                     render_limit = PAGE_SIZE;
@@ -406,7 +471,7 @@
             const sortLabel = () => sort_mode === 'size' ? 'за розміром' : (sort_mode === 'date' ? 'за датою' : 'за назвою');
 
             this.openSearch = function() {
-                Lampa.Input.edit({ title: 'Пошук', value: search_query, free: true, nosave: true }, function(val) {
+                Lampa.Input.edit({ title: 'Пошук', value: search_query, free: true, nosave: true }, (val) => {
                     search_query = (val === undefined || val === null) ? '' : String(val).trim();
                     render_limit = PAGE_SIZE;
                     self.buildData();
@@ -422,9 +487,8 @@
             };
 
             this.bulkCleanup = function(mode) {
-                const parsedObj = safeJsonParse(object.storage_key);
+                const parsedObj = safeJsonObject(localStorage.getItem(object.storage_key));
                 const toDelete = [];
-                
                 Object.keys(parsedObj).forEach(k => {
                     const item = parsedObj[k];
                     if (mode === 'watched' && item && typeof item.percent === 'number' && item.percent >= 95) toDelete.push(k);
@@ -433,29 +497,33 @@
                         if (!meta || meta.title === 'Невідомий файл') toDelete.push(k);
                     }
                 });
-
                 if (!toDelete.length) return Lampa.Noty.show('Немає записів для видалення');
 
                 let freedBytes = 0;
                 toDelete.forEach(k => { freedBytes += byteSize(JSON.stringify(parsedObj[k])); });
 
                 Lampa.Select.show({
-                    title: `Видалити ${toDelete.length} записів (${formatBytes(freedBytes)})?`,
+                    title: 'Видалити ' + toDelete.length + ' записів (' + formatBytes(freedBytes) + ')?',
                     nomark: true,
-                    items: [ { title: '✅ Так, видалити', id: 'yes' }, { title: '❌ Скасувати', id: 'no' } ],
+                    items: [{ title: '✅ Так, видалити', id: 'yes' }, { title: '❌ Скасувати', id: 'no' }],
                     onSelect: (a) => {
                         if (a.id === 'yes') {
-                            const trashItems = {};
+                            const trashItems = Object.create(null);
                             toDelete.forEach(k => {
                                 trashItems[k] = parsedObj[k];
                                 delete parsedObj[k];
                                 delete metaCache[k];
                             });
-                            localStorage.setItem(object.storage_key, JSON.stringify(parsedObj));
-                            pushToTrash({ type: 'json_bulk', label: `Масове видалення (${toDelete.length})`, sizeBytes: freedBytes, payload: { storageKey: object.storage_key, items: trashItems } });
-                            Lampa.Noty.show(`Видалено записів: ${toDelete.length} (у кошику, звільнено ${formatBytes(freedBytes)})`);
-                            render_limit = PAGE_SIZE;
-                            self.buildData();
+                            if (moveToTrash({
+                                type: 'json_bulk',
+                                label: 'Масове видалення (' + toDelete.length + ')',
+                                sizeBytes: freedBytes,
+                                payload: { storageKey: object.storage_key, items: trashItems }
+                            }, () => writeStorage(object.storage_key, JSON.stringify(parsedObj)))) {
+                                Lampa.Noty.show('Переміщено в кошик: ' + toDelete.length + ' записів');
+                                render_limit = PAGE_SIZE;
+                                self.buildData();
+                            }
                         }
                         Lampa.Controller.toggle('content');
                     },
@@ -465,98 +533,142 @@
 
             this.emptyTrash = function() {
                 Lampa.Select.show({
-                    title: 'Очистити кошик назавжди?', nomark: true,
-                    items: [ { title: '✅ Так, очистити', id: 'yes' }, { title: '❌ Скасувати', id: 'no' } ],
+                    title: 'Очистити кошик назавжди?',
+                    nomark: true,
+                    items: [{ title: '✅ Так, очистити', id: 'yes' }, { title: '❌ Скасувати', id: 'no' }],
                     onSelect: (a) => {
-                        if (a.id === 'yes') { saveTrash([]); Lampa.Noty.show('Кошик очищено'); self.buildData(); }
+                        if (a.id === 'yes') {
+                            if (saveTrash([])) {
+                                Lampa.Noty.show('Кошик очищено');
+                                self.buildData();
+                            }
+                        }
                         Lampa.Controller.toggle('content');
                     },
                     onBack: () => Lampa.Controller.toggle('content')
                 });
             };
 
-            // ==========================================
-            // ДЕЛЕГОВАНА ЛОГІКА КАРТОК (БЕЗ ЗАМИКАНЬ)
-            // ==========================================
+            // --- Делегована логіка карток ---
             this.handleCardEnter = function(card, type, rawId, extra) {
                 if (type === 'group') {
-                    Lampa.Activity.push({ url: '', title: `Група: ${rawId}`, component: 'cache_editor_grid', level: 'keys', prefix: rawId });
+                    Lampa.Activity.push({ url: '', title: 'Група: ' + rawId, component: 'cache_editor_grid', level: 'keys', prefix: rawId });
                 } else if (type === 'trash_item') {
                     Lampa.Select.show({
-                        title: `Кошик: ${rawId}`, nomark: true,
-                        items: [ { title: '♻ Відновити', id: 'restore' }, { title: '🗑 Видалити назавжди', id: 'purge' }, { title: 'Скасувати', id: 'cancel' } ],
+                        title: 'Кошик: ' + rawId,
+                        nomark: true,
+                        items: [
+                            { title: '♻ Відновити', id: 'restore' },
+                            { title: '🗑 Видалити назавжди', id: 'purge' },
+                            { title: 'Скасувати', id: 'cancel' }
+                        ],
                         onSelect: (a) => {
-                            if (a.id === 'restore') { restoreTrashEntry(extra.trashEntry); Lampa.Noty.show('Відновлено'); self.buildData(); }
-                            else if (a.id === 'purge') { removeFromTrash(extra.trashEntry.id); Lampa.Noty.show('Видалено назавжди'); self.buildData(); }
+                            if (a.id === 'restore') {
+                                if (restoreTrashEntry(extra.trashEntry)) {
+                                    Lampa.Noty.show('Відновлено');
+                                    self.buildData();
+                                }
+                            } else if (a.id === 'purge') {
+                                if (removeFromTrash(extra.trashEntry.id)) {
+                                    Lampa.Noty.show('Видалено назавжди');
+                                    self.buildData();
+                                }
+                            }
                             Lampa.Controller.toggle('content');
                         },
                         onBack: () => Lampa.Controller.toggle('content')
                     });
                 } else if (type === 'dup_set') {
                     const set = extra.dupSet;
-                    const dupItems = set.keys.map(k => ({ title: k, id: k }));
-                    dupItems.push({ title: '🗑 Видалити всі копії, крім однієї', id: '__keep_one__' });
+                    const dupItems = set.keys.map((k, i) => {
+                        const option = $('<div class="selectbox-item selector"></div>');
+                        option.append($('<div class="selectbox-item__title"></div>').text(k));
+                        return { title: k, id: 'key_' + i, html: option };
+                    });
+                    dupItems.push({ title: '🗑 Видалити всі копії, крім однієї', id: 'keep_one' });
                     dupItems.push({ title: 'Скасувати', id: 'cancel' });
-                    
                     Lampa.Select.show({
-                        title: `Дублікати (${set.keys.length})`, nomark: true, items: dupItems,
+                        title: 'Дублікати (' + set.keys.length + ')',
+                        nomark: true,
+                        items: dupItems,
                         onSelect: (a) => {
-                            if (a.id === '__keep_one__') {
+                            if (a.id === 'keep_one') {
                                 const keep = set.keys[0];
                                 const toRemove = set.keys.slice(1);
-                                let freed = 0;
-                                toRemove.forEach(k => {
-                                    pushToTrash({ type: 'key', label: k, sizeBytes: getKeyByteSize(k), payload: { key: k, value: localStorage.getItem(k) } });
-                                    freed += getKeyByteSize(k);
-                                    localStorage.removeItem(k);
-                                });
-                                Lampa.Noty.show(`Видалено ${toRemove.length} копій (у кошику, звільнено ${formatBytes(freed)}), залишено «${keep}»`);
-                                self.buildData();
+                                const keepValue = localStorage.getItem(keep);
+                                if (keepValue === null || toRemove.some(k => localStorage.getItem(k) !== keepValue)) {
+                                    Lampa.Noty.show('Набір дублікатів змінився, оновіть список');
+                                    self.buildData();
+                                } else {
+                                    const items = toRemove.map(k => ({ key: k, value: localStorage.getItem(k) }));
+                                    const size = toRemove.reduce((sum, k) => sum + getKeyByteSize(k), 0);
+                                    if (moveToTrash({ type: 'group', label: 'Дублікати (' + keep + ')', sizeBytes: size, payload: { items } }, () => {
+                                        toRemove.forEach(deleteStorage);
+                                    })) {
+                                        Lampa.Noty.show('Копії переміщено в кошик: ' + toRemove.length);
+                                        self.buildData();
+                                    }
+                                }
                                 Lampa.Controller.toggle('content');
-                            } else if (a.id !== 'cancel') {
+                            } else if (a.id.indexOf('key_') === 0) {
+                                const selectedKey = set.keys[Number(a.id.slice(4))];
                                 Lampa.Select.show({
-                                    title: a.id, nomark: true,
-                                    items: [ { title: '🗑 Видалити цей запис', id: 'del' }, { title: 'Скасувати', id: 'cancel' } ],
+                                    title: selectedKey,
+                                    nomark: true,
+                                    items: [{ title: '🗑 Видалити цей запис', id: 'del' }, { title: 'Скасувати', id: 'cancel' }],
                                     onSelect: (b) => {
                                         if (b.id === 'del') {
-                                            pushToTrash({ type: 'key', label: a.id, sizeBytes: getKeyByteSize(a.id), payload: { key: a.id, value: localStorage.getItem(a.id) } });
-                                            localStorage.removeItem(a.id);
-                                            Lampa.Noty.show('Видалено (у кошику)');
-                                            self.buildData();
+                                            const selectedValue = localStorage.getItem(selectedKey);
+                                            if (selectedValue !== null && moveToTrash({
+                                                type: 'key',
+                                                label: selectedKey,
+                                                sizeBytes: getKeyByteSize(selectedKey),
+                                                payload: { key: selectedKey, value: selectedValue }
+                                            }, () => deleteStorage(selectedKey))) {
+                                                Lampa.Noty.show('Видалено (у кошику)');
+                                                self.buildData();
+                                            }
                                         }
                                         Lampa.Controller.toggle('content');
                                     },
                                     onBack: () => Lampa.Controller.toggle('content')
                                 });
-                            } else { Lampa.Controller.toggle('content'); }
+                            } else {
+                                Lampa.Controller.toggle('content');
+                            }
                         },
                         onBack: () => Lampa.Controller.toggle('content')
                     });
                 } else if (type === 'key' || type === 'json_item') {
                     const isJson = (type === 'json_item');
-                    const oldVal = isJson ? JSON.stringify(extra.jsonObj[rawId], null, 2) : (localStorage.getItem(rawId) || '');
-                    
+                    const storageKey = isJson ? extra.parentKey : rawId;
+                    const oldStorageValue = localStorage.getItem(storageKey);
+                    const oldVal = isJson ? JSON.stringify(extra.jsonObj[rawId], null, 2) : (oldStorageValue || '');
+
                     Lampa.Input.edit({ title: 'Редагування (JSON):', value: oldVal, free: true, nosave: true }, (nv) => {
-                        const checkVal = (nv === undefined || nv === null) ? '' : String(nv).trim();
-                        if (checkVal === '' || nv === oldVal) {
+                        if (nv === undefined || nv === null || nv === oldVal) {
                             Lampa.Noty.show('Скасовано (без змін)');
+                        } else if (localStorage.getItem(storageKey) !== oldStorageValue) {
+                            Lampa.Noty.show('Запис змінився, відкрийте його знову');
+                            self.buildData();
                         } else {
-                            if (isJson) {
-                                try {
+                            try {
+                                if (isJson) {
                                     extra.jsonObj[rawId] = JSON.parse(nv);
-                                    localStorage.setItem(extra.parentKey, JSON.stringify(extra.jsonObj));
+                                    writeStorage(extra.parentKey, JSON.stringify(extra.jsonObj));
                                     Lampa.Noty.show('Збережено');
                                     self.buildData();
-                                } catch(err) { Lampa.Noty.show('Помилка: Невірний JSON формат'); }
-                            } else {
-                                localStorage.setItem(rawId, nv);
-                                card.find('.cc-desc').text(nv.length > 90 ? nv.substring(0, 90) + '...' : nv);
-                                Lampa.Noty.show('Збережено');
+                                } else {
+                                    writeStorage(rawId, String(nv));
+                                    Lampa.Noty.show('Збережено');
+                                    self.buildData();
+                                }
+                            } catch (err) {
+                                Lampa.Noty.show(isJson && err instanceof SyntaxError ? 'Помилка: Невірний JSON формат' : 'Не вдалося зберегти запис');
                             }
                         }
                         setTimeout(() => {
                             Lampa.Controller.toggle('content');
-                            if (card && card.length) Lampa.Controller.collectionFocus(card[0], scroll.render());
                         }, 200);
                     });
                 }
@@ -566,70 +678,117 @@
                 const menuItems = [];
                 if (type === 'group') {
                     menuItems.push({ title: '🗑 Видалити групу', id: 'del' });
+                    menuItems.push({ title: '🗑 Видалити групу назавжди', id: 'purge' });
                     menuItems.push({ title: '➕ Створити нову групу', id: 'add' });
                 } else if (type === 'key') {
                     menuItems.push({ title: '🗑 Видалити запис', id: 'del' });
+                    menuItems.push({ title: '🗑 Видалити запис назавжди', id: 'purge' });
                     menuItems.push({ title: '➕ Створити новий запис', id: 'add' });
                 } else if (type === 'json_item') {
                     menuItems.push({ title: '🗑 Видалити таймкод', id: 'del' });
+                    menuItems.push({ title: '🗑 Видалити таймкод назавжди', id: 'purge' });
                 }
                 menuItems.push({ title: 'Скасувати', id: 'cancel' });
 
                 Lampa.Select.show({
-                    title: `Дія: ${type === 'group' ? rawId : 'Поточний запис'}`, nomark: true, items: menuItems,
+                    title: 'Дія: ' + (type === 'group' ? rawId : 'Поточний запис'),
+                    nomark: true,
+                    items: menuItems,
                     onSelect: (a) => {
                         if (a.id === 'del') {
                             if (type === 'group') {
                                 const toDel = [];
                                 let freedGroupBytes = 0;
                                 const groupItems = [];
-                                for (let i=0; i<localStorage.length; i++) {
+                                for (let i = 0; i < localStorage.length; i++) {
                                     const k = localStorage.key(i);
                                     if (k && !isTechnicalKey(k) && (k.split('_')[0] === rawId || k === rawId)) toDel.push(k);
                                 }
                                 toDel.forEach(k => {
                                     groupItems.push({ key: k, value: localStorage.getItem(k) });
                                     freedGroupBytes += getKeyByteSize(k);
-                                    localStorage.removeItem(k);
                                 });
-                                pushToTrash({ type: 'group', label: rawId, sizeBytes: freedGroupBytes, payload: { prefix: rawId, items: groupItems } });
-                                Lampa.Noty.show(`Групу ${rawId} переміщено в кошик (звільнено ${formatBytes(freedGroupBytes)})`);
+                                if (!moveToTrash({ type: 'group', label: rawId, sizeBytes: freedGroupBytes, payload: { prefix: rawId, items: groupItems } }, () => {
+                                    toDel.forEach(deleteStorage);
+                                })) {
+                                    Lampa.Controller.toggle('content');
+                                    return;
+                                }
+                                Lampa.Noty.show('Групу ' + escapeHtml(rawId) + ' переміщено в кошик');
                             } else if (type === 'json_item') {
                                 const oldItemVal = extra.jsonObj[rawId];
-                                pushToTrash({ type: 'json_item', label: (getMeta(rawId).title || rawId), sizeBytes: byteSize(JSON.stringify(oldItemVal)), payload: { storageKey: extra.parentKey, itemKey: rawId, itemValue: oldItemVal } });
-                                delete extra.jsonObj[rawId];
-                                localStorage.setItem(extra.parentKey, JSON.stringify(extra.jsonObj));
+                                if (!moveToTrash({
+                                    type: 'json_item',
+                                    label: (getMeta(rawId).title || rawId),
+                                    sizeBytes: byteSize(JSON.stringify(oldItemVal)),
+                                    payload: { storageKey: extra.parentKey, itemKey: rawId, itemValue: oldItemVal }
+                                }, () => {
+                                    delete extra.jsonObj[rawId];
+                                    writeStorage(extra.parentKey, JSON.stringify(extra.jsonObj));
+                                })) {
+                                    Lampa.Controller.toggle('content');
+                                    return;
+                                }
                                 Lampa.Noty.show('Таймкод переміщено в кошик');
                             } else {
-                                const oldKeyVal = localStorage.getItem(rawId) || '';
-                                pushToTrash({ type: 'key', label: rawId, sizeBytes: getKeyByteSize(rawId), payload: { key: rawId, value: oldKeyVal } });
-                                localStorage.removeItem(rawId);
+                                const oldKeyVal = localStorage.getItem(rawId);
+                                if (oldKeyVal === null || !moveToTrash({
+                                    type: 'key',
+                                    label: rawId,
+                                    sizeBytes: getKeyByteSize(rawId),
+                                    payload: { key: rawId, value: oldKeyVal }
+                                }, () => deleteStorage(rawId))) {
+                                    Lampa.Controller.toggle('content');
+                                    return;
+                                }
                                 Lampa.Noty.show('Запис переміщено в кошик');
                             }
-                            
                             const nextFocus = card.next('.selector')[0] || card.prev('.selector')[0];
-                            card.remove(); 
-                            
-                            if (grid.find('.selector').length > 0) {
-                                if (nextFocus) object.last_focus = $(nextFocus).attr('data-id'); 
-                                Lampa.Controller.toggle('content');
-                                if (nextFocus) Lampa.Controller.collectionFocus(nextFocus, scroll.render());
-                            } else {
-                                self.buildData();
-                                Lampa.Controller.toggle('content');
-                                Lampa.Controller.collectionFocus(scroll.render().find('.selector').eq(0)[0], scroll.render());
-                            }
-                        } 
-                        else if (a.id === 'add') {
+                            if (nextFocus) object.last_focus = $(nextFocus).attr('data-id');
+                            self.buildData();
+                            Lampa.Controller.toggle('content');
+                        } else if (a.id === 'purge') {
+                            Lampa.Select.show({
+                                title: 'Видалити назавжди без кошика?',
+                                nomark: true,
+                                items: [{ title: 'Так, видалити назавжди', id: 'yes' }, { title: 'Скасувати', id: 'cancel' }],
+                                onSelect: (confirm) => {
+                                    if (confirm.id === 'yes') {
+                                        try {
+                                            if (type === 'group') {
+                                                const keys = [];
+                                                for (let i = 0; i < localStorage.length; i++) {
+                                                    const key = localStorage.key(i);
+                                                    if (key && !isTechnicalKey(key) && (key.split('_')[0] === rawId || key === rawId)) keys.push(key);
+                                                }
+                                                keys.forEach(deleteStorage);
+                                            } else if (type === 'json_item') {
+                                                const current = safeJsonParse(localStorage.getItem(extra.parentKey), null);
+                                                if (!current || typeof current !== 'object' || Array.isArray(current)) throw new Error('invalid JSON');
+                                                delete current[rawId];
+                                                writeStorage(extra.parentKey, JSON.stringify(current));
+                                            } else {
+                                                deleteStorage(rawId);
+                                            }
+                                            Lampa.Noty.show('Видалено назавжди');
+                                            self.buildData();
+                                        } catch (e) {
+                                            Lampa.Noty.show('Не вдалося видалити запис');
+                                        }
+                                    }
+                                    Lampa.Controller.toggle('content');
+                                },
+                                onBack: () => Lampa.Controller.toggle('content')
+                            });
+                        } else if (a.id === 'add') {
                             if (type === 'group') self.createNewGroup();
                             if (type === 'key') self.createNewKey(object.prefix);
-                        }
-                        else {
+                        } else {
                             Lampa.Controller.toggle('content');
                             if (card && card.length) Lampa.Controller.collectionFocus(card[0], scroll.render());
                         }
                     },
-                    onBack: () => { 
+                    onBack: () => {
                         Lampa.Controller.toggle('content');
                         if (card && card.length) Lampa.Controller.collectionFocus(card[0], scroll.render());
                     }
@@ -637,54 +796,58 @@
             };
 
             // ==========================================
-            // ЗБИРАННЯ ДАНИХ (BUILD)
+            // BUILD DATA
             // ==========================================
             this.buildData = function() {
                 grid.empty();
-                scroll.clear(); 
-                
+                scroll.clear();
                 if (typeof scroll.minus === 'function') scroll.minus();
                 if (typeof scroll.reset === 'function') scroll.reset();
                 const bodyEl = scroll.render().find('.scroll__body');
                 if (bodyEl.length) bodyEl.css('transform', 'translate3d(0px, 0px, 0px)');
 
-                const fragment = document.createDocumentFragment(); // МАГІЯ ТУТ: Використовуємо фрагмент
+                const fragment = document.createDocumentFragment();
                 let hasItems = false;
                 const q = search_query ? search_query.toLowerCase() : '';
 
-                createControlNode(fragment, `🔍 Пошук${search_query ? ': ' + search_query : ''}`, search_query ? 'Натисніть, щоб змінити' : 'Натисніть, щоб шукати', () => self.openSearch());
+                createControlNode(fragment, '🔍 Пошук' + (search_query ? ': ' + search_query : ''), search_query ? 'Натисніть, щоб змінити' : 'Натисніть, щоб шукати', () => self.openSearch());
                 if (search_query) createControlNode(fragment, '❌ Скинути пошук', '', () => self.clearSearch());
 
                 const addSortFilterControls = (modes) => {
-                    if (!modes.includes(sort_mode)) sort_mode = modes[0];
-                    createControlNode(fragment, `🔀 Сортування: ${sortLabel()}`, 'Натисніть, щоб змінити', () => {
+                    if (modes.indexOf(sort_mode) === -1) sort_mode = modes[0];
+                    createControlNode(fragment, '🔀 Сортування: ' + sortLabel(), 'Натисніть, щоб змінити', () => {
                         sort_mode = modes[(modes.indexOf(sort_mode) + 1) % modes.length];
                         self.buildData();
                     });
-                    createControlNode(fragment, `📏 Фільтр розміру${filter_min_kb > 0 ? ': > ' + filter_min_kb + ' КБ' : ': вимкнено'}`, 'Натисніть, щоб змінити поріг', () => self.openSizeFilter());
+                    createControlNode(fragment, '📏 Фільтр розміру' + (filter_min_kb > 0 ? ': > ' + filter_min_kb + ' КБ' : ': вимкнено'), 'Натисніть, щоб змінити поріг', () => self.openSizeFilter());
                 };
 
-                // РІВЕНЬ: ГРУПИ
+                // --- GROUPS ---
                 if (object.level === 'groups') {
-                    const groupsSignature = `groups|${q}|${sort_mode}|${filter_min_kb}`;
+                    createControlNode(fragment, '➕ Створити групу', '', () => self.createNewGroup());
+                    const groupsSignature = 'groups|' + q + '|' + sort_mode + '|' + filter_min_kb;
                     let groups, groupBytes, allGroupNames, keysArr;
 
                     if (paginating && groupsCache.signature === groupsSignature) {
-                        groups = groupsCache.groups; groupBytes = groupsCache.groupBytes;
-                        allGroupNames = groupsCache.allGroupNames; keysArr = groupsCache.keysArr;
+                        groups = groupsCache.groups;
+                        groupBytes = groupsCache.groupBytes;
+                        allGroupNames = groupsCache.allGroupNames;
+                        keysArr = groupsCache.keysArr;
                     } else {
-                        groups = {}; groupBytes = {};
+                        groups = Object.create(null);
+                        groupBytes = Object.create(null);
                         for (let i = 0; i < localStorage.length; i++) {
-                            const k = localStorage.key(i); if (!k || isTechnicalKey(k)) continue;
+                            const k = localStorage.key(i);
+                            if (!k || isTechnicalKey(k)) continue;
                             const p = k.split('_')[0] || k;
                             if (!groups[p]) { groups[p] = 0; groupBytes[p] = 0; }
-                            groups[p]++; groupBytes[p] += getKeyByteSize(k);
+                            groups[p]++;
+                            groupBytes[p] += getKeyByteSize(k);
                         }
                         allGroupNames = Object.keys(groups);
                         keysArr = allGroupNames;
-                        if (q) keysArr = keysArr.filter(p => p.toLowerCase().includes(q));
+                        if (q) keysArr = keysArr.filter(p => p.toLowerCase().indexOf(q) !== -1);
                         if (filter_min_kb > 0) keysArr = keysArr.filter(p => (groupBytes[p] / 1024) >= filter_min_kb);
-
                         if (sort_mode === 'name') keysArr.sort();
                         else keysArr.sort((a, b) => groupBytes[b] - groupBytes[a]);
                         groupsCache = { signature: groupsSignature, groups, groupBytes, allGroupNames, keysArr };
@@ -692,40 +855,60 @@
 
                     if (!q) {
                         let totalStorageBytes = 0;
-                        for (let gKey in groupBytes) totalStorageBytes += groupBytes[gKey];
-                        const quotaPct = Math.round((totalStorageBytes / STORAGE_QUOTA_BYTES) * 100);
-                        createControlNode(fragment, '📊 Загальний розмір кешу', `${formatBytes(totalStorageBytes)} з ~${formatBytes(STORAGE_QUOTA_BYTES)} (${quotaPct}%) • ${allGroupNames.length} груп`, () => self.buildData(), { wide: true, percent: quotaPct });
-                        const namesBySize = [...allGroupNames].sort((a, b) => groupBytes[b] - groupBytes[a]);
+                        for (const gKey in groupBytes) totalStorageBytes += groupBytes[gKey];
+                        createControlNode(fragment, '📊 Загальний розмір кешу',
+                            'Оцінка: ' + formatBytes(totalStorageBytes) + ' • ' + allGroupNames.length + ' груп (без кошика)',
+                            () => self.buildData(),
+                            { wide: true }
+                        );
+                        const namesBySize = allGroupNames.slice().sort((a, b) => groupBytes[b] - groupBytes[a]);
                         const chartHtml = buildSizeChartHtml(namesBySize, groupBytes);
                         if (chartHtml) $(fragment).append(chartHtml);
                     }
 
                     addSortFilterControls(['size', 'name']);
                     const totalGroups = keysArr.length;
-                    keysArr.slice(0, render_limit).forEach(p => { createCardNode(fragment, `📁 ${p}`, p, `${groups[p]} записів • ${formatBytes(groupBytes[p])}`, 'group'); hasItems = true; });
-
+                    keysArr.slice(0, render_limit).forEach(p => {
+                        createCardNode(fragment, '📁 ' + p, p, groups[p] + ' записів • ' + formatBytes(groupBytes[p]), 'group');
+                        hasItems = true;
+                    });
                     if (totalGroups > render_limit) {
-                        createControlNode(fragment, '▶ Показати ще', `${totalGroups - render_limit} груп залишилось`, () => { paginating = true; render_limit += PAGE_SIZE; self.buildData(); paginating = false; }, { wide: true });
+                        createControlNode(fragment, '▶ Показати ще', (totalGroups - render_limit) + ' груп залишилось', () => {
+                            paginating = true;
+                            render_limit += PAGE_SIZE;
+                            self.buildData();
+                            paginating = false;
+                        }, { wide: true });
                     }
-                } 
-                // РІВЕНЬ: КЛЮЧІ
+                }
+                // --- KEYS ---
                 else if (object.level === 'keys') {
                     const prefix = object.prefix;
-                    const keysSignature = `keys|${prefix}|${q}|${sort_mode}|${filter_min_kb}`;
+                    const keysSignature = 'keys|' + prefix + '|' + q + '|' + sort_mode + '|' + filter_min_kb;
                     let keyNames, keySizeMap, rawKeyNames;
 
                     if (paginating && keysCache.signature === keysSignature) {
-                        keyNames = keysCache.keyNames; keySizeMap = keysCache.keySizeMap; rawKeyNames = keysCache.rawKeyNames;
+                        keyNames = keysCache.keyNames;
+                        keySizeMap = keysCache.keySizeMap;
+                        rawKeyNames = keysCache.rawKeyNames;
                     } else {
-                        rawKeyNames = []; keySizeMap = {};
+                        rawKeyNames = [];
+                        keySizeMap = Object.create(null);
                         for (let j = 0; j < localStorage.length; j++) {
                             const keyName = localStorage.key(j);
                             if (keyName && !isTechnicalKey(keyName) && (keyName.split('_')[0] === prefix || keyName === prefix)) {
-                                rawKeyNames.push(keyName); keySizeMap[keyName] = getKeyByteSize(keyName);
+                                rawKeyNames.push(keyName);
+                                keySizeMap[keyName] = getKeyByteSize(keyName);
                             }
                         }
                         keyNames = rawKeyNames;
-                        if (q) keyNames = keyNames.filter(keyName => keyName.toLowerCase().includes(q) || (localStorage.getItem(keyName) || '').toLowerCase().includes(q));
+                        if (q) {
+                            keyNames = keyNames.filter(keyName => {
+                                if (keyName.toLowerCase().indexOf(q) !== -1) return true;
+                                const val = localStorage.getItem(keyName) || '';
+                                return val.toLowerCase().indexOf(q) !== -1;
+                            });
+                        }
                         if (filter_min_kb > 0) keyNames = keyNames.filter(kn => (keySizeMap[kn] / 1024) >= filter_min_kb);
                         if (sort_mode === 'name') keyNames.sort();
                         else keyNames.sort((a, b) => keySizeMap[b] - keySizeMap[a]);
@@ -735,38 +918,53 @@
                     if (!q) {
                         let groupTotalBytes = 0;
                         rawKeyNames.forEach(kn => { groupTotalBytes += keySizeMap[kn]; });
-                        createControlNode(fragment, `📊 Розмір групи «${prefix}»`, `${formatBytes(groupTotalBytes)} • ${rawKeyNames.length} записів`, () => self.buildData(), { wide: true });
+                        createControlNode(fragment, '📊 Розмір групи «' + prefix + '»',
+                            formatBytes(groupTotalBytes) + ' • ' + rawKeyNames.length + ' записів',
+                            () => self.buildData(),
+                            { wide: true }
+                        );
                     }
 
                     addSortFilterControls(['size', 'name']);
                     const totalKeys = keyNames.length;
                     keyNames.slice(0, render_limit).forEach(keyName => {
-                        createCardNode(fragment, `📄 ${keyName}`, keyName, localStorage.getItem(keyName) || '', 'key', { rawSubtitle: formatBytes(keySizeMap[keyName]) });
+                        createCardNode(fragment, '📄 ' + keyName, keyName, localStorage.getItem(keyName) || '', 'key', { rawSubtitle: formatBytes(keySizeMap[keyName]) });
                         hasItems = true;
                     });
-
                     if (totalKeys > render_limit) {
-                        createControlNode(fragment, '▶ Показати ще', `${totalKeys - render_limit} записів залишилось`, () => { paginating = true; render_limit += PAGE_SIZE; self.buildData(); paginating = false; }, { wide: true });
+                        createControlNode(fragment, '▶ Показати ще', (totalKeys - render_limit) + ' записів залишилось', () => {
+                            paginating = true;
+                            render_limit += PAGE_SIZE;
+                            self.buildData();
+                            paginating = false;
+                        }, { wide: true });
                     }
                 }
-                // РІВЕНЬ: JSON
+                // --- JSON (таймкоди) ---
                 else if (object.level === 'json') {
-                    const parsedObj = safeJsonParse(object.storage_key);
+                    const parsedObj = safeJsonObject(localStorage.getItem(object.storage_key));
 
                     if (!q) {
-                        createControlNode(fragment, '📊 Розмір даних', `${formatBytes(getKeyByteSize(object.storage_key))} • ${Object.keys(parsedObj).length} записів`, () => self.buildData(), { wide: true });
+                        createControlNode(fragment, '📊 Розмір даних',
+                            formatBytes(getKeyByteSize(object.storage_key)) + ' • ' + Object.keys(parsedObj).length + ' записів',
+                            () => self.buildData(),
+                            { wide: true }
+                        );
                     }
 
                     createControlNode(fragment, '🧹 Очистити переглянуті', 'Видалити таймкоди з прогресом ≥95%', () => self.bulkCleanup('watched'), { danger: true });
                     createControlNode(fragment, '🧹 Видалити невідомі', 'Видалити записи без визначеної назви', () => self.bulkCleanup('orphan'), { danger: true });
 
-                    const jsonSignature = `json|${object.storage_key}|${q}|${sort_mode}|${filter_min_kb}`;
+                    const jsonSignature = 'json|' + object.storage_key + '|' + q + '|' + sort_mode + '|' + filter_min_kb;
                     let pKeys, jsonSizeMap, dateField;
 
                     if (paginating && jsonCache.signature === jsonSignature) {
-                        pKeys = jsonCache.pKeys; jsonSizeMap = jsonCache.jsonSizeMap; dateField = jsonCache.dateField;
+                        pKeys = jsonCache.pKeys;
+                        jsonSizeMap = jsonCache.jsonSizeMap;
+                        dateField = jsonCache.dateField;
                     } else {
-                        pKeys = Object.keys(parsedObj); jsonSizeMap = {};
+                        pKeys = Object.keys(parsedObj);
+                        jsonSizeMap = Object.create(null);
                         pKeys.forEach(k => { jsonSizeMap[k] = byteSize(JSON.stringify(parsedObj[k])); });
 
                         dateField = null;
@@ -775,7 +973,10 @@
                             const dItem = parsedObj[pKeys[dpk]];
                             if (dItem && typeof dItem === 'object') {
                                 for (let dci = 0; dci < dateCandidates.length; dci++) {
-                                    if (typeof dItem[dateCandidates[dci]] === 'number') { dateField = dateCandidates[dci]; break findDate; }
+                                    if (typeof dItem[dateCandidates[dci]] === 'number') {
+                                        dateField = dateCandidates[dci];
+                                        break findDate;
+                                    }
                                 }
                             }
                         }
@@ -783,7 +984,9 @@
                         if (q) {
                             pKeys = pKeys.filter(k => {
                                 const meta = getMeta(k);
-                                return k.toLowerCase().includes(q) || (meta.title && meta.title.toLowerCase().includes(q)) || (meta.subtitle && meta.subtitle.toLowerCase().includes(q));
+                                return k.toLowerCase().indexOf(q) !== -1 ||
+                                    (meta.title && meta.title.toLowerCase().indexOf(q) !== -1) ||
+                                    (meta.subtitle && meta.subtitle.toLowerCase().indexOf(q) !== -1);
                             });
                         }
                         if (filter_min_kb > 0) pKeys = pKeys.filter(k => (jsonSizeMap[k] / 1024) >= filter_min_kb);
@@ -803,27 +1006,34 @@
                             const item = parsedObj[k];
                             const meta = getMeta(k);
                             let desc = JSON.stringify(item);
-                            
                             if (item && item.percent !== undefined) {
                                 const m = Math.floor((item.time || 0) / 60);
                                 const s = String(Math.floor((item.time || 0) % 60)).padStart(2, '0');
                                 const md = Math.floor((item.duration || 0) / 60);
                                 const sd = String(Math.floor((item.duration || 0) % 60)).padStart(2, '0');
-                                desc = `⏳ ${item.percent}% ( ${m}:${s} / ${md}:${sd} )`;
+                                desc = '⏳ ' + item.percent + '% ( ' + m + ':' + s + ' / ' + md + ':' + sd + ' )';
                             }
-                            
-                            createCardNode(fragment, meta.title, k, desc, 'json_item', { bg: meta.bg, parentKey: object.storage_key, jsonObj: parsedObj, rawSubtitle: `${meta.subtitle} • ${formatBytes(jsonSizeMap[k])}` });
+                            createCardNode(fragment, meta.title, k, desc, 'json_item', {
+                                bg: meta.bg,
+                                parentKey: object.storage_key,
+                                jsonObj: parsedObj,
+                                rawSubtitle: meta.subtitle + ' • ' + formatBytes(jsonSizeMap[k])
+                            });
                             hasItems = true;
                         });
                     }
-
                     if (totalJson > render_limit) {
-                        createControlNode(fragment, '▶ Показати ще', `${totalJson - render_limit} записів залишилось`, () => { paginating = true; render_limit += PAGE_SIZE; self.buildData(); paginating = false; }, { wide: true });
+                        createControlNode(fragment, '▶ Показати ще', (totalJson - render_limit) + ' записів залишилось', () => {
+                            paginating = true;
+                            render_limit += PAGE_SIZE;
+                            self.buildData();
+                            paginating = false;
+                        }, { wide: true });
                     }
                 }
-                // РІВЕНЬ: КОШИК
+                // --- TRASH ---
                 else if (object.level === 'trash') {
-                    const trashSignature = `trash|${q}`;
+                    const trashSignature = 'trash|' + q;
                     let trashArr;
 
                     if (paginating && trashCache.signature === trashSignature) {
@@ -831,14 +1041,18 @@
                     } else {
                         trashArr = purgeOldTrash();
                         trashArr.sort((a, b) => b.deletedAt - a.deletedAt);
-                        if (q) trashArr = trashArr.filter(t => (t.label || t.type || '').toLowerCase().includes(q));
+                        if (q) trashArr = trashArr.filter(t => (t.label || t.type || '').toLowerCase().indexOf(q) !== -1);
                         trashCache = { signature: trashSignature, trashArr };
                     }
 
                     if (!q && trashArr.length) {
                         let trashTotalBytes = 0;
                         trashArr.forEach(t => { trashTotalBytes += (t.sizeBytes || 0); });
-                        createControlNode(fragment, '🗑 У кошику', `${formatBytes(trashTotalBytes)} • ${trashArr.length} записів • автоочищення через ${TRASH_RETENTION_DAYS} дн.`, () => self.buildData(), { wide: true });
+                        createControlNode(fragment, '🗑 У кошику',
+                            formatBytes(trashTotalBytes) + ' • ' + trashArr.length + ' записів • займає місце до очищення',
+                            () => self.buildData(),
+                            { wide: true }
+                        );
                         createControlNode(fragment, '🧹 Очистити кошик назавжди', 'Видалити всі записи без можливості відновлення', () => self.emptyTrash(), { danger: true, wide: true });
                     }
 
@@ -846,118 +1060,174 @@
                     trashArr.slice(0, render_limit).forEach(t => {
                         const dateLabel = new Date(t.deletedAt).toLocaleString();
                         const typeLabel = t.type === 'group' ? 'Група' : (t.type === 'json_item' ? 'Таймкод' : (t.type === 'json_bulk' ? 'Масове видалення' : 'Запис'));
-                        createCardNode(fragment, `🗑 ${t.label || t.type}`, t.id, `${typeLabel} • видалено ${dateLabel}`, 'trash_item', { rawSubtitle: formatBytes(t.sizeBytes || 0), trashEntry: t });
+                        createCardNode(fragment, '🗑 ' + (t.label || t.type), t.id, typeLabel + ' • видалено ' + dateLabel, 'trash_item', {
+                            rawSubtitle: formatBytes(t.sizeBytes || 0),
+                            trashEntry: t
+                        });
                         hasItems = true;
                     });
-
                     if (totalTrash > render_limit) {
-                        createControlNode(fragment, '▶ Показати ще', `${totalTrash - render_limit} записів залишилось`, () => { paginating = true; render_limit += PAGE_SIZE; self.buildData(); paginating = false; }, { wide: true });
+                        createControlNode(fragment, '▶ Показати ще', (totalTrash - render_limit) + ' записів залишилось', () => {
+                            paginating = true;
+                            render_limit += PAGE_SIZE;
+                            self.buildData();
+                            paginating = false;
+                        }, { wide: true });
                     }
                 }
-                // РІВЕНЬ: ДУБЛІКАТИ
+                // --- DUPLICATES ---
                 else if (object.level === 'duplicates') {
                     let dupSets = self.findDuplicateSets(paginating);
-                    if (q) dupSets = dupSets.filter(s => s.keys.join(' ').toLowerCase().includes(q));
+                    if (q) dupSets = dupSets.filter(s => s.keys.join(' ').toLowerCase().indexOf(q) !== -1);
 
                     if (!q && dupSets.length) {
                         let wastedBytes = 0;
                         dupSets.forEach(s => { wastedBytes += s.valueSize * (s.keys.length - 1); });
-                        createControlNode(fragment, '🧬 Знайдено дублікатів', `${dupSets.length} наборів • можна звільнити ${formatBytes(wastedBytes)}`, () => self.buildData(), { wide: true });
+                        createControlNode(fragment, '🧬 Знайдено дублікатів',
+                            dupSets.length + ' наборів • повторюються дані на ' + formatBytes(wastedBytes),
+                            () => self.buildData(),
+                            { wide: true }
+                        );
                     }
 
                     const totalDup = dupSets.length;
                     dupSets.slice(0, render_limit).forEach(s => {
                         const sample = s.keys.slice(0, 3).join(', ') + (s.keys.length > 3 ? '…' : '');
-                        createCardNode(fragment, `🧬 ${s.keys.length} копії`, s.id, sample, 'dup_set', { rawSubtitle: `${formatBytes(s.valueSize)} кожна • ${formatBytes(s.valueSize * s.keys.length)} разом`, dupSet: s });
+                        createCardNode(fragment, '🧬 ' + s.keys.length + ' копії', s.id, sample, 'dup_set', {
+                            rawSubtitle: formatBytes(s.valueSize) + ' кожна • ' + formatBytes(s.valueSize * s.keys.length) + ' разом',
+                            dupSet: s
+                        });
                         hasItems = true;
                     });
-
                     if (totalDup > render_limit) {
-                        createControlNode(fragment, '▶ Показати ще', `${totalDup - render_limit} наборів залишилось`, () => { paginating = true; render_limit += PAGE_SIZE; self.buildData(); paginating = false; }, { wide: true });
+                        createControlNode(fragment, '▶ Показати ще', (totalDup - render_limit) + ' наборів залишилось', () => {
+                            paginating = true;
+                            render_limit += PAGE_SIZE;
+                            self.buildData();
+                            paginating = false;
+                        }, { wide: true });
                     }
-
                     if (!dupSets.length && !q) {
                         $(fragment).append('<div style="grid-column: 1 / -1; padding: 3em; text-align: center; font-size: 1.3em;">Дублікатів не знайдено 🎉</div>');
                         hasItems = true;
                     }
                 }
-                
+
                 if (!hasItems) {
-                    const emptyHtml = `<div style="grid-column: 1 / -1; padding: 3em; text-align: center; font-size: 1.3em;">
-                        ${search_query ? `Нічого не знайдено за запитом «${search_query}»` : 'Список порожній'}
-                    </div>`;
-                    if (object.level === 'keys' && !search_query) {
+                    if (search_query) {
+                        $(fragment).append($('<div style="grid-column: 1 / -1; padding: 3em; text-align: center; font-size: 1.3em;"></div>').text('Нічого не знайдено за запитом «' + search_query + '»'));
+                    } else if (object.level === 'keys') {
                         createControlNode(fragment, '➕ Створити перший запис', '', () => self.createNewKey(object.prefix));
                     } else {
-                        $(fragment).append(emptyHtml);
+                        $(fragment).append('<div style="grid-column: 1 / -1; padding: 3em; text-align: center; font-size: 1.3em;">Список порожній</div>');
                     }
                 }
-                
-                grid.append(fragment); // ЗАКИДАЄМО ВСЕ РАЗОМ У DOM
+
+                grid.append(fragment);
                 scroll.append(grid);
             };
 
             this.createNewGroup = function() {
                 Lampa.Input.edit({ title: 'Префікс нової групи', value: '', free: true, nosave: true }, (newPrefix) => {
                     if (newPrefix && newPrefix.trim()) {
-                        localStorage.setItem(`${newPrefix.trim()}_new_record`, 'новий запис');
-                        self.buildData();
+                        const key = newPrefix.trim() + '_new_record';
+                        if (key === TRASH_KEY || localStorage.getItem(key) !== null) {
+                            Lampa.Noty.show('Ключ уже існує');
+                        } else {
+                            try {
+                                writeStorage(key, 'новий запис');
+                                self.buildData();
+                            } catch (e) {
+                                Lampa.Noty.show('Не вдалося створити групу');
+                            }
+                        }
                     }
                     setTimeout(() => Lampa.Controller.toggle('content'), 100);
                 });
             };
 
             this.createNewKey = function(prefix) {
-                Lampa.Input.edit({ title: `Ключ (починайте з ${prefix}_):`, value: `${prefix}_`, free: true, nosave: true }, (newKey) => {
+                Lampa.Input.edit({ title: 'Ключ (починайте з ' + escapeHtml(prefix) + '_):', value: prefix + '_', free: true, nosave: true }, (newKey) => {
                     if (newKey && newKey.trim()) {
+                        newKey = newKey.trim();
+                        if (newKey.indexOf(prefix + '_') !== 0 || isTechnicalKey(newKey)) {
+                            Lampa.Noty.show('Ключ має починатися з ' + escapeHtml(prefix) + '_');
+                            Lampa.Controller.toggle('content');
+                            return;
+                        }
+                        if (localStorage.getItem(newKey) !== null) {
+                            Lampa.Noty.show('Ключ уже існує');
+                            Lampa.Controller.toggle('content');
+                            return;
+                        }
                         setTimeout(() => {
-                            Lampa.Input.edit({ title: `Значення для ${newKey.trim()}:`, value: '', free: true, nosave: true }, (newVal) => {
-                                localStorage.setItem(newKey.trim(), newVal || '');
-                                self.buildData();
+                            Lampa.Input.edit({ title: 'Значення для ' + escapeHtml(newKey) + ':', value: '', free: true, nosave: true }, (newVal) => {
+                                if (newVal !== undefined && newVal !== null) {
+                                    try {
+                                        writeStorage(newKey, String(newVal));
+                                        self.buildData();
+                                    } catch (e) {
+                                        Lampa.Noty.show('Не вдалося створити запис');
+                                    }
+                                }
                                 setTimeout(() => Lampa.Controller.toggle('content'), 100);
                             });
                         }, 300);
-                    } else { setTimeout(() => Lampa.Controller.toggle('content'), 100); }
+                    } else {
+                        setTimeout(() => Lampa.Controller.toggle('content'), 100);
+                    }
                 });
             };
 
             this.create = function() {
                 purgeOldTrash();
-                
-                // ДЕЛЕГОВАНІ ПОДІЇ ТІЛЬКИ ОДИН РАЗ
-                if (!grid.data('events_bound')) {
-                    grid.on('hover:focus', '.selector', function() {
-                        object.last_focus = $(this).attr('data-id'); 
-                        scroll.update($(this));
-                    });
 
-                    grid.on('hover:enter', '.selector', function() {
+                if (!grid.data('events_bound')) {
+                    const eventCard = (event) => {
+                        let node = event.target;
+                        while (node && node !== grid[0]) {
+                            if (node.nodeType === 1 && $(node).hasClass('cache-card')) return $(node);
+                            node = node.parentNode;
+                        }
+                        return null;
+                    };
+
+                    grid[0].addEventListener('hover:focus', (event) => {
+                        const card = eventCard(event);
+                        if (!card) return;
+                        object.last_focus = card.attr('data-id');
+                        scroll.update(card);
+                    }, true);
+
+                    grid[0].addEventListener('hover:enter', (event) => {
+                        const card = eventCard(event);
+                        if (!card) return;
                         if (action_busy) return;
-                        action_busy = true; setTimeout(() => { action_busy = false; }, 300);
-                        
-                        const card = $(this);
+                        action_busy = true;
+                        setTimeout(() => { action_busy = false; }, 300);
+
                         const type = card.attr('data-type');
-                        
                         if (type === 'control') {
                             const cb = card.data('onEnter');
                             if (cb) cb();
                             return;
                         }
                         self.handleCardEnter(card, type, card.attr('data-id'), card.data('extra'));
-                    });
+                    }, true);
 
-                    grid.on('hover:long contextmenu', '.cache-card', function(e) {
-                        if (e.type === 'contextmenu') { e.preventDefault(); e.stopPropagation(); }
+                    const openContextMenu = (event) => {
+                        if (event.type === 'contextmenu') { event.preventDefault(); event.stopPropagation(); }
+                        const card = eventCard(event);
+                        if (!card || card.attr('data-type') === 'control') return;
                         if (action_busy) return;
-                        action_busy = true; setTimeout(() => { action_busy = false; }, 1000);
-                        
-                        const card = $(this);
-                        const type = card.attr('data-type');
-                        if (type === 'control') return;
-                        
-                        self.handleCardContextMenu(card, type, card.attr('data-id'), card.data('extra'));
-                    });
-                    
+                        action_busy = true;
+                        setTimeout(() => { action_busy = false; }, 1000);
+
+                        self.handleCardContextMenu(card, card.attr('data-type'), card.attr('data-id'), card.data('extra'));
+                    };
+                    grid[0].addEventListener('hover:long', openContextMenu, true);
+                    grid[0].addEventListener('contextmenu', openContextMenu, true);
+
                     grid.data('events_bound', true);
                 }
 
@@ -972,16 +1242,23 @@
                         Lampa.Controller.collectionSet(scroll.render());
                         const elements = scroll.render().find('.selector');
                         let target = false;
-
                         if (object.last_focus) {
-                            elements.each(function() { if ($(this).attr('data-id') === object.last_focus) target = this; });
+                            elements.each(function() {
+                                if ($(this).attr('data-id') === object.last_focus) target = this;
+                            });
                         }
                         if (!target && elements.length) target = elements.eq(0)[0];
                         Lampa.Controller.collectionFocus(target || false, scroll.render());
                     },
-                    left: () => { if (window.Navigator && window.Navigator.canmove('left')) window.Navigator.move('left'); else Lampa.Controller.toggle('menu'); },
+                    left: () => {
+                        if (window.Navigator && window.Navigator.canmove('left')) window.Navigator.move('left');
+                        else Lampa.Controller.toggle('menu');
+                    },
                     right: () => { if (window.Navigator && window.Navigator.canmove('right')) window.Navigator.move('right'); },
-                    up: () => { if (window.Navigator && window.Navigator.canmove('up')) window.Navigator.move('up'); else Lampa.Controller.toggle('head'); },
+                    up: () => {
+                        if (window.Navigator && window.Navigator.canmove('up')) window.Navigator.move('up');
+                        else Lampa.Controller.toggle('head');
+                    },
                     down: () => { if (window.Navigator && window.Navigator.canmove('down')) window.Navigator.move('down'); },
                     back: () => {
                         const now = Date.now();
@@ -995,13 +1272,13 @@
 
             this.pause = function() {};
             this.stop = function() {};
-            this.render = function() { return html; }; 
+            this.render = function() { return html; };
             this.destroy = function() { scroll.destroy(); html.remove(); };
         });
     }
 
     // ==========================================
-    // ІНІЦІАЛІЗАЦІЯ ПЛАГІНУ ТА МЕНЮ
+    // ІНІЦІАЛІЗАЦІЯ
     // ==========================================
     function initPlugin() {
         window.lampac_cache_editor_plugin = true;
@@ -1013,42 +1290,47 @@
             name: 'Редактор Кешу'
         });
 
-        Lampa.SettingsApi.addParam({ 
-            component: 'local_cache_editor_menu', param: { type: 'button' }, 
-            field: { name: `ℹ️ Версія: ${PLUGIN_VERSION}  •  Автор: ${PLUGIN_AUTHOR}` }, 
-            onChange: () => Lampa.Noty.show(`Редактор Кешу • Версія ${PLUGIN_VERSION} • Автор: ${PLUGIN_AUTHOR}`)
+        Lampa.SettingsApi.addParam({
+            component: 'local_cache_editor_menu',
+            param: { type: 'button' },
+            field: { name: 'ℹ️ Версія: ' + PLUGIN_VERSION },
+            onChange: () => Lampa.Noty.show('Редактор Кешу • Версія ' + PLUGIN_VERSION)
         });
 
-        Lampa.SettingsApi.addParam({ 
-            component: 'local_cache_editor_menu', param: { type: 'button' }, 
-            field: { name: '🛠 Відкрити загальний редактор кешу' }, 
+        Lampa.SettingsApi.addParam({
+            component: 'local_cache_editor_menu',
+            param: { type: 'button' },
+            field: { name: '🛠 Відкрити загальний редактор кешу' },
             onChange: () => Lampa.Activity.push({ url: '', title: 'Редактор Кешу', component: 'cache_editor_grid', level: 'groups' })
         });
-        
-        Lampa.SettingsApi.addParam({ 
-            component: 'local_cache_editor_menu', param: { type: 'button' }, 
-            field: { name: '⏱ Відкрити редактор Таймкодів' }, 
-            onChange: () => { 
+
+        Lampa.SettingsApi.addParam({
+            component: 'local_cache_editor_menu',
+            param: { type: 'button' },
+            field: { name: '⏱ Відкрити редактор Таймкодів' },
+            onChange: () => {
                 const tcKey = (typeof Lampa.Timeline === 'object' && typeof Lampa.Timeline.filename === 'function') ? Lampa.Timeline.filename() : 'file_view';
                 Lampa.Activity.push({ url: '', title: 'Редактор Таймкодів', component: 'cache_editor_grid', level: 'json', storage_key: tcKey });
             }
         });
 
-        Lampa.SettingsApi.addParam({ 
-            component: 'local_cache_editor_menu', param: { type: 'button' }, 
-            field: { name: '🗑 Кошик (відновити видалене)' }, 
+        Lampa.SettingsApi.addParam({
+            component: 'local_cache_editor_menu',
+            param: { type: 'button' },
+            field: { name: '🗑 Кошик (відновити видалене)' },
             onChange: () => Lampa.Activity.push({ url: '', title: 'Кошик', component: 'cache_editor_grid', level: 'trash' })
         });
 
-        Lampa.SettingsApi.addParam({ 
-            component: 'local_cache_editor_menu', param: { type: 'button' }, 
-            field: { name: '🧬 Знайти дублікати кешу' }, 
+        Lampa.SettingsApi.addParam({
+            component: 'local_cache_editor_menu',
+            param: { type: 'button' },
+            field: { name: '🧬 Знайти дублікати кешу' },
             onChange: () => Lampa.Activity.push({ url: '', title: 'Дублікати', component: 'cache_editor_grid', level: 'duplicates' })
         });
     }
 
     const checkTimer = setInterval(() => {
-        if (window.Lampa && window.Lampa.SettingsApi && typeof window.Lampa.Platform !== "undefined") {
+        if (window.Lampa && window.Lampa.SettingsApi && typeof window.Lampa.Platform !== 'undefined') {
             if (!window.lampac_cache_editor_plugin) initPlugin();
             clearInterval(checkTimer);
         }
