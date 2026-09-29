@@ -55,6 +55,80 @@
         return null;
     }
 
+    // TMDB Discover не повертає країни виробництва для фільмів, а параметр
+    // without_origin_country не підтримується API. Тому перевіряємо Details
+    // перед показом випадкової картки та зберігаємо результат у кеші сесії.
+    window.ai_country_filter_cache = window.ai_country_filter_cache || {};
+
+    function getExcludedCountries() {
+        var raw = Lampa.Storage.get('ai_exclude_countries_list', '');
+        return raw ? raw.split(',').map(function(code) {
+            return String(code).trim().toUpperCase();
+        }).filter(function(code) {
+            return /^[A-Z]{2}$/.test(code);
+        }).filter(function(code, index, all) {
+            return all.indexOf(code) === index;
+        }) : [];
+    }
+
+    function collectCountryCodes(item) {
+        var codes = [];
+        function add(code) {
+            code = String(code || '').trim().toUpperCase();
+            if (/^[A-Z]{2}$/.test(code) && codes.indexOf(code) === -1) codes.push(code);
+        }
+
+        (item && item.origin_country || []).forEach(add);
+        (item && item.production_countries || []).forEach(function(country) {
+            add(country && (country.iso_3166_1 || country));
+        });
+        return codes;
+    }
+
+    function isCountryExcluded(countries, excludeList) {
+        return countries.some(function(country) {
+            return excludeList.indexOf(country) !== -1;
+        });
+    }
+
+    function checkCountryFilter(item, mediaType, excludeList, strictMode, callback) {
+        if (!excludeList.length) return callback(false, item);
+
+        var cacheKey = mediaType + ':' + item.id;
+        var cached = window.ai_country_filter_cache[cacheKey];
+
+        function evaluate(detailsCountries, detailsLoaded) {
+            var countries = collectCountryCodes(item);
+            detailsCountries.forEach(function(country) {
+                if (countries.indexOf(country) === -1) countries.push(country);
+            });
+
+            // Передаємо достовірні дані в картку, щоб вони не підмінялися мовою.
+            if (countries.length) {
+                item.origin_country = countries.slice();
+                item.production_countries = countries.map(function(country) {
+                    return { iso_3166_1: country, name: country };
+                });
+            }
+
+            if (isCountryExcluded(countries, excludeList)) return callback(true, item);
+            if (!countries.length && strictMode) return callback(true, item);
+            callback(false, item);
+        }
+
+        if (cached) return evaluate(cached.countries, cached.loaded);
+
+        var url = mediaType + '/' + item.id + '?api_key=' + Lampa.TMDB.key() + '&language=uk-UA';
+        Lampa.Network.silent(Lampa.TMDB.api(url), function(details) {
+            var countries = collectCountryCodes(details || {});
+            window.ai_country_filter_cache[cacheKey] = { countries: countries, loaded: true };
+            evaluate(countries, true);
+        }, function() {
+            window.ai_country_filter_cache[cacheKey] = { countries: [], loaded: false };
+            evaluate([], false);
+        });
+    }
+
     // === БЕЗПЕЧНА КАРТКА V53 ===
     var GENRES_MAP = {28:"Бойовик",12:"Пригоди",16:"Мультфільм",35:"Комедія",80:"Кримінал",99:"Документальний",18:"Драма",10751:"Сімейний",14:"Фентезі",36:"Історія",27:"Жахи",10402:"Музика",9648:"Детектив",10749:"Мелодрама",878:"Фантастика",10770:"Телефільм",53:"Трилер",10752:"Військовий",37:"Вестерн"};
 
@@ -771,11 +845,8 @@
             var minRate = parseFloat(Lampa.Storage.get('ai_min_rating', '6')); 
             var yearLimit = parseInt(Lampa.Storage.get('ai_year_limit', '0'));
             
-            // Нормалізуємо список країн
-            var excludeCountriesRaw = Lampa.Storage.get('ai_exclude_countries_list', '');
-            var excludeList = excludeCountriesRaw 
-                ? excludeCountriesRaw.split(',').map(function(c){ return c.trim().toUpperCase(); }).filter(Boolean) 
-                : [];
+            var excludeList = getExcludedCountries();
+            var strictCountryFilter = Lampa.Storage.get('ai_country_filter_mode', 'relaxed') === 'strict';
             
             if (params.page === 1) {
                 window.plugin_ai_session_ids.clear();
@@ -808,11 +879,6 @@
 
             if (minRate > 0) { query.push("vote_average.gte=" + minRate); query.push("vote_count.gte=50"); } else { query.push("vote_count.gte=20"); }
             
-            // Залишаємо API-фільтр (як додатковий рівень)
-            if (excludeList.length) { 
-                query.push('without_origin_country=' + excludeList.join(',')); 
-            }
-            
             query.push('include_adult=true');
 
             var baseQuery = "&" + query.join('&');
@@ -823,10 +889,68 @@
             if (yearLimit > 0 && yearLimit < 2020) maxPage = 50; 
             if (yearLimit >= 2020) maxPage = 30; 
 
-            var usedPagesInBatch = []; 
+            var usedPagesInBatch = [];
+            var batchCounter = 0;
+            var finalizedBatches = {};
+
+            function finishBatch(batchId) {
+                if (finalizedBatches[batchId]) return;
+                finalizedBatches[batchId] = true;
+                if (accumulatedCards.length >= 20 || attempts >= MAX_ATTEMPTS) {
+                    hideStatus();
+                    if (accumulatedCards.length === 0) oncomplite({ results: [], title: params.title, page: params.page, total_pages: 1 });
+                    else oncomplite({ results: accumulatedCards.slice(0, 20), title: params.title, page: params.page, total_pages: 100 });
+                } else {
+                    updateStatus('🎲 Відсіювання (спроба ' + attempts + '/' + MAX_ATTEMPTS + ')... Знайдено: ' + accumulatedCards.length);
+                    fetchBatch();
+                }
+            }
+
+            function addVerifiedCards(items, batchId) {
+                var queue = (items || []).slice();
+                var active = 0;
+                var MAX_DETAILS_REQUESTS = 4;
+
+                function addCard(item) {
+                    if (accumulatedCards.length >= 20 || window.plugin_ai_session_ids.has(item.id)) return;
+                    var card = buildSafeCard(item, type);
+                    if (card) {
+                        window.plugin_ai_session_ids.add(item.id);
+                        accumulatedCards.push(card);
+                    }
+                }
+
+                function next() {
+                    if (!queue.length && active === 0) return finishBatch(batchId);
+
+                    while (queue.length && active < MAX_DETAILS_REQUESTS) {
+                        var item = queue.shift();
+                        if (!item || !item.id || !item.backdrop_path) continue;
+                        if (type === 'cartoon' && item.original_language === 'ja') continue;
+                        if (window.plugin_ai_session_ids.has(item.id)) continue;
+
+                        if (!excludeList.length) {
+                            addCard(item);
+                            continue;
+                        }
+
+                        active++;
+                        checkCountryFilter(item, endpoint, excludeList, strictCountryFilter, function(skip, verifiedItem) {
+                            if (!skip) addCard(verifiedItem);
+                            active--;
+                            next();
+                        });
+                    }
+
+                    if (!queue.length && active === 0) finishBatch(batchId);
+                }
+
+                next();
+            }
 
             function fetchBatch() {
                 attempts++;
+                var batchId = ++batchCounter;
                 var randomPage, safeLoop = 0;
                 do { randomPage = Math.floor(Math.random() * maxPage) + 1; safeLoop++; } while (usedPagesInBatch.indexOf(randomPage) !== -1 && safeLoop < 20);
                 usedPagesInBatch.push(randomPage);
@@ -839,53 +963,7 @@
                         if (actualMaxPage < maxPage) { maxPage = actualMaxPage; if (randomPage > maxPage) return fetchBatch(); }
                     }
 
-                    if (data && data.results) {
-                        data.results.forEach(function(item) {
-                            if (type === 'cartoon' && item.original_language === 'ja') return;
-                            if (window.plugin_ai_session_ids.has(item.id)) return;
-
-                            // === НАДІЙНА ПЕРЕВІРКА КРАЇН ===
-                            if (excludeList.length > 0) {
-                                var countries = [];
-
-                                // 1. origin_country
-                                if (item.origin_country && item.origin_country.length) {
-                                    countries = item.origin_country.map(function(c){ return String(c).toUpperCase(); });
-                                }
-                                // 2. production_countries (рідше, але буває)
-                                else if (item.production_countries && item.production_countries.length) {
-                                    countries = item.production_countries.map(function(c){ 
-                                        return String(c.iso_3166_1 || c).toUpperCase(); 
-                                    });
-                                }
-                                // 3. Fallback по original_language (як у buildSafeCard)
-                                else if (item.original_language) {
-                                    countries = [String(item.original_language).toUpperCase()];
-                                }
-
-                                // Якщо хоча б одна країна в списку виключень — пропускаємо
-                                var skip = countries.some(function(c){ 
-                                    return excludeList.indexOf(c) !== -1; 
-                                });
-                                if (skip) return;
-                            }
-
-                            var card = buildSafeCard(item, type);
-                            if (card) { 
-                                window.plugin_ai_session_ids.add(item.id); 
-                                accumulatedCards.push(card); 
-                            }
-                        });
-                    }
-
-                    if (accumulatedCards.length >= 20 || attempts >= MAX_ATTEMPTS) {
-                        hideStatus();
-                        if (accumulatedCards.length === 0) oncomplite({ results: [], title: params.title, page: params.page, total_pages: 1 }); 
-                        else oncomplite({ results: accumulatedCards, title: params.title, page: params.page, total_pages: 100 });
-                    } else {
-                        updateStatus('🎲 Відсіювання (спроба ' + attempts + '/' + MAX_ATTEMPTS + ')... Знайдено: ' + accumulatedCards.length);
-                        fetchBatch();
-                    }
+                    addVerifiedCards(data && data.results, batchId);
                 }, function() { hideStatus(); oncomplite({ results: accumulatedCards.length ? accumulatedCards : [], title: params.title, page: params.page, total_pages: 1 }); });
             }
             fetchBatch();
@@ -1078,6 +1156,8 @@
                 showSelect();
             });
         }});
+
+        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_country_filter_mode', type: 'select', values: { 'relaxed': 'Звичайний', 'strict': 'Строгий' }, default: 'relaxed' }, field: { name: 'Перевірка країн (Random)', description: 'Строгий режим приховує тайтли, для яких TMDB не вказав країну виробництва' } });
         
         // 6. Мін. рейтинг (Для рандому)
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_min_rating', type: 'select', values: { '0': 'Будь-який', '5': '> 5', '6': '> 6', '7': '> 7', '8': '> 8' }, default: '6' }, field: { name: 'Мін. рейтинг (Random)' } });
@@ -1138,7 +1218,7 @@
             };
             Lampa.Storage.listener.follow('change', window.ai_menu_settings_listener);
         }
-        console.log('AI System: V56.0 (Personal recommendations) - UA Patched');
+        console.log('AI System: V56.1 (Personal recommendations + reliable country filter) - UA Patched');
     }
 
     if (!window.plugin_ai_search_ready) {
