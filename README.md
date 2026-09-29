@@ -17,7 +17,7 @@
 * **Посилання для Лампи:** `https://n1kk1-08.github.io/lampa-plugins/cache_editor.js`
 
 ### 🤖 AI Search
-Пошук з використанням ШІ.
+Пошук з використанням ШІ без ассистента.
 * **Посилання для Лампи:** `https://n1kk1-08.github.io/lampa-plugins/ai_search.js`
 
 ### 💬 AI Search Assistant
