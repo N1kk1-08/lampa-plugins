@@ -1129,7 +1129,14 @@
                         { title: 'Росія (RU)', id: 'RU' }, { title: 'СРСР (SU)', id: 'SU' }, { title: 'Індія (IN)', id: 'IN' },
                         { title: 'Китай (CN)', id: 'CN' }, { title: 'Туреччина (TR)', id: 'TR' }, { title: 'Південна Корея (KR)', id: 'KR' },
                         { title: 'Японія (JP)', id: 'JP' }, { title: 'США (US)', id: 'US' }, { title: 'Великобританія (GB)', id: 'GB' },
-                        { title: 'Франція (FR)', id: 'FR' }, { title: 'Іспанія (ES)', id: 'ES' }, { title: 'Німеччина (DE)', id: 'DE' }
+                        { title: 'Франція (FR)', id: 'FR' }, { title: 'Іспанія (ES)', id: 'ES' }, { title: 'Німеччина (DE)', id: 'DE' },
+                        { title: 'Мексика (MX)', id: 'MX' }, { title: 'Колумбія (CO)', id: 'CO' }, { title: 'Еквадор (EC)', id: 'EC' },
+                        { title: 'Бразилія (BR)', id: 'BR' }, { title: 'Аргентина (AR)', id: 'AR' }, { title: 'Чилі (CL)', id: 'CL' },
+                        { title: 'Перу (PE)', id: 'PE' }, { title: 'Болівія (BO)', id: 'BO' }, { title: 'Венесуела (VE)', id: 'VE' },
+                        { title: 'Парагвай (PY)', id: 'PY' }, { title: 'Уругвай (UY)', id: 'UY' }, { title: 'Гватемала (GT)', id: 'GT' },
+                        { title: 'Гондурас (HN)', id: 'HN' }, { title: 'Сальвадор (SV)', id: 'SV' }, { title: 'Нікарагуа (NI)', id: 'NI' },
+                        { title: 'Коста-Рика (CR)', id: 'CR' }, { title: 'Панама (PA)', id: 'PA' }, { title: 'Домініканська Республіка (DO)', id: 'DO' },
+                        { title: 'Куба (CU)', id: 'CU' }
                     ];
                     available.forEach(function(c) { 
                         var isSel = selected.indexOf(c.id) !== -1; 
