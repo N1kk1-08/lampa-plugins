@@ -293,7 +293,22 @@
                 '.ai-close-btn { width: 32px; height: 32px; background: #333; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; font-family: sans-serif; cursor: pointer; border: 2px solid transparent; line-height: 0; padding-bottom: 0px; }' +
                 '.ai-close-btn.focus { background: #fff; color: #000; outline: none; }' +
                 '.ai-content-scroll { flex: 1; overflow-y: auto; padding: 10px 20px 20px 20px; color: #efefef; line-height: 1.4; font-size: var(--ai-font-size, 1.25em); }' +
-                '.ai-fact-title { color: var(--safe-text-color, var(--main-color, #fff)); font-weight: bold; display: block; margin-bottom: 2px; }'
+                '.ai-fact-title { color: var(--safe-text-color, var(--main-color, #fff)); font-weight: bold; display: block; margin-bottom: 2px; }' +
+                '.ai-fallback-list { padding: 0 4px 12px; }' +
+                '.ai-fallback-controls { display:flex; gap:12px; padding:4px 2px 12px; border-bottom:1px solid rgba(255,255,255,0.14); }' +
+                '.fallback-ctrl-btn { flex:1; min-height:48px; padding:8px 12px; border-radius:8px; display:flex; align-items:center; justify-content:center; gap:8px; background:rgba(255,255,255,0.06); font-size:1.05em; }' +
+                '.fallback-ctrl-btn.is-active[data-action="off"] { color:#ff7d7d; background:rgba(255,80,80,0.14); }' +
+                '.fallback-ctrl-btn.is-active[data-action="all"] { color:#65e78a; background:rgba(80,220,130,0.14); }' +
+                '.ai-fallback-summary { padding:10px 12px; color:rgba(255,255,255,0.75); font-size:0.92em; }' +
+                '.ai-fallback-row { display:flex; align-items:center; justify-content:space-between; min-height:54px; padding:0 8px 0 12px; border-bottom:1px solid rgba(255,255,255,0.08); }' +
+                '.ai-fallback-row .source-name { flex:1; min-width:0; padding-right:10px; font-size:1em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }' +
+                '.ai-fallback-actions { display:flex; align-items:center; gap:8px; }' +
+                '.ai-fallback-list .move-up, .ai-fallback-list .move-down, .ai-fallback-list .toggle { width:38px; height:38px; border-radius:7px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.06); }' +
+                '.ai-fallback-list .toggle { margin-left:4px; }' +
+                '.ai-fallback-list .selector.focus { background:#fff !important; color:#07181c !important; outline:3px solid var(--main-color, #00c7b5); outline-offset:1px; box-shadow:0 0 18px rgba(255,255,255,0.55); transform:scale(1.06); z-index:2; }' +
+                '.ai-fallback-list .selector.focus svg { color:#07181c !important; }' +
+                '.ai-fallback-save { margin:16px 2px 8px; min-height:50px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:var(--main-color, #00c7b5); color:#07181c; font-size:1.08em; font-weight:bold; }' +
+                '.ai-fallback-hint { padding:0 10px; text-align:center; color:rgba(255,255,255,0.56); font-size:0.84em; line-height:1.35; }'
             ).appendTo('head');
         };
 
@@ -534,31 +549,35 @@
                 if (!workingList.find(function(w) { return w.id === m.id; })) workingList.push({ id: m.id, name: m.name, checked: mode === 'all' });
             });
 
-            var listContainer = $('<div class="menu-edit-list ai-fallback-list" style="padding-bottom:10px;"></div>');
+            var listContainer = $('<div class="menu-edit-list ai-fallback-list"></div>');
             var svgUp = '<svg width="16" height="10" viewBox="0 0 22 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 12L11 3L20 12" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
             var svgDown = '<svg width="16" height="10" viewBox="0 0 22 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 2L11 11L20 2" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
             var svgCheck = '<svg width="22" height="22" viewBox="0 0 26 26" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1.89111" y="1.78369" width="21.793" height="21.793" rx="3.5" stroke="currentColor" stroke-width="3"/><path d="M7.44873 12.9658L10.8179 16.3349L18.1269 9.02588" stroke="currentColor" stroke-width="3" class="dot" stroke-linecap="round"/></svg>';
             var svgRadioOn = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>';
             var svgRadioOff = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>';
             
-            var topControls = $('<div style="display:flex; justify-content:space-around; margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.1);">' +
-                '<div class="fallback-ctrl-btn selector" data-action="off" style="padding: 8px 15px; border-radius: 8px; display:flex; align-items:center; gap:8px;"></div>' +
-                '<div class="fallback-ctrl-btn selector" data-action="all" style="padding: 8px 15px; border-radius: 8px; display:flex; align-items:center; gap:8px;"></div>' +
+            var topControls = $('<div class="ai-fallback-controls">' +
+                '<div class="fallback-ctrl-btn selector" data-action="off"></div>' +
+                '<div class="fallback-ctrl-btn selector" data-action="all"></div>' +
                 '</div>');
             listContainer.append(topControls);
+            var selectionSummary = $('<div class="ai-fallback-summary"></div>');
+            listContainer.append(selectionSummary);
             var modelsContainer = $('<div></div>');
             listContainer.append(modelsContainer);
 
             function updateUIState() {
                 var isOff = mode === 'off', isAll = mode === 'all';
-                topControls.find('[data-action="off"]').html((isOff?svgRadioOn:svgRadioOff) + ' Вимкнути').css('color', isOff?'#f55':'');
-                topControls.find('[data-action="all"]').html((isAll?svgRadioOn:svgRadioOff) + ' Всі').css('color', isAll?'#4b5':'');
+                topControls.find('[data-action="off"]').html((isOff?svgRadioOn:svgRadioOff) + '<span>Вимкнути все</span>').toggleClass('is-active', isOff);
+                topControls.find('[data-action="all"]').html((isAll?svgRadioOn:svgRadioOff) + '<span>Увімкнути всі</span>').toggleClass('is-active', isAll);
                 modelsContainer.find('.source-item').each(function() {
                     var id = $(this).attr('data-id'), itm = workingList.find(function(w){return w.id===id;});
                     if (isOff) itm.checked = false; else if (isAll) itm.checked = true;
                     $(this).find('.dot').attr('opacity', itm.checked ? 1 : 0);
                     $(this).find('.source-name').css('opacity', itm.checked ? '1' : '0.4');
                 });
+                var selectedCount = workingList.filter(function(item) { return item.checked; }).length;
+                selectionSummary.text('Увімкнено моделей: ' + selectedCount + ' із ' + workingList.length);
                 updateArrowsState();
             }
 
@@ -570,21 +589,21 @@
                 });
             }
 
-            topControls.find('[data-action="off"]').on('hover:enter', function() { mode = 'off'; updateUIState(); });
-            topControls.find('[data-action="all"]').on('hover:enter', function() { mode = 'all'; updateUIState(); });
+            topControls.find('[data-action="off"]').on('hover:enter click', function() { mode = 'off'; updateUIState(); });
+            topControls.find('[data-action="all"]').on('hover:enter click', function() { mode = 'all'; updateUIState(); });
 
             workingList.forEach(function(src) {
-                var itemSort = $('<div class="source-item" data-id="' + src.id + '" style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid rgba(255,255,255,0.05);">' +
-                    '<div class="source-name" style="font-size:15px; opacity: ' + (src.checked ? '1' : '0.4') + ';">' + src.name + '</div>' +
-                    '<div style="display:flex; gap:8px; align-items:center;">' +
-                    '<div class="move-up selector" style="padding:6px; border-radius:6px; display:flex; align-items:center;">' + svgUp + '</div>' +
-                    '<div class="move-down selector" style="padding:6px; border-radius:6px; display:flex; align-items:center;">' + svgDown + '</div>' +
-                    '<div class="toggle selector" style="padding:4px; border-radius:6px; margin-left:5px; display:flex; align-items:center;">' + svgCheck + '</div>' +
+                var itemSort = $('<div class="source-item ai-fallback-row" data-id="' + src.id + '">' +
+                    '<div class="source-name">' + src.name + '</div>' +
+                    '<div class="ai-fallback-actions">' +
+                    '<div class="move-up selector" title="Перемістити вище">' + svgUp + '</div>' +
+                    '<div class="move-down selector" title="Перемістити нижче">' + svgDown + '</div>' +
+                    '<div class="toggle selector" title="Увімкнути або вимкнути модель">' + svgCheck + '</div>' +
                     '</div></div>');
                 itemSort.find('.dot').attr('opacity', src.checked ? 1 : 0);
-                itemSort.find('.move-up').on('hover:enter', function() { var p = itemSort.prev(); if(p.length){ itemSort.insertBefore(p); updateArrowsState(); }});
-                itemSort.find('.move-down').on('hover:enter', function() { var n = itemSort.next(); if(n.length){ itemSort.insertAfter(n); updateArrowsState(); }});
-                itemSort.find('.toggle').on('hover:enter', function() {
+                itemSort.find('.move-up').on('hover:enter click', function() { var p = itemSort.prev(); if(p.length){ itemSort.insertBefore(p); updateArrowsState(); }});
+                itemSort.find('.move-down').on('hover:enter click', function() { var n = itemSort.next(); if(n.length){ itemSort.insertAfter(n); updateArrowsState(); }});
+                itemSort.find('.toggle').on('hover:enter click', function() {
                     src.checked = !src.checked;
                     if (src.checked) { var allChecked = workingList.every(function(w){return w.checked;}); mode = allChecked ? 'all' : 'custom'; }
                     else { var noneChecked = workingList.every(function(w){return !w.checked;}); mode = noneChecked ? 'off' : 'custom'; }
@@ -594,22 +613,32 @@
             });
             updateUIState();
 
+            var saveButton = $('<div class="ai-fallback-save selector">Застосувати та повернутися</div>');
+            var navigationHint = $('<div class="ai-fallback-hint">OK — вибрати дію або перемкнути модель. Зміни збережуться після натискання цієї кнопки.</div>');
+            listContainer.append(saveButton).append(navigationHint);
+
+            var didSave = false;
+            function saveAndClose() {
+                if (didSave) return;
+                didSave = true;
+                var finalOrder = [], finalSavedChecked = [];
+                modelsContainer.find('.source-item').each(function() {
+                    var id = $(this).attr('data-id'), s = workingList.find(function(x) { return x.id === id; });
+                    if (s) { finalOrder.push(s.id); if (s.checked) finalSavedChecked.push(s.id); }
+                });
+                if (mode === 'all') Lampa.Storage.set('ai_fallback_mode', 'all');
+                else if (mode === 'off') Lampa.Storage.set('ai_fallback_mode', 'off');
+                else Lampa.Storage.set('ai_fallback_mode', finalSavedChecked.length > 0 ? 'custom' : 'off');
+                Lampa.Storage.set('ai_fallback_list', finalOrder);
+                Lampa.Storage.set('ai_fallback_checked', finalSavedChecked);
+                Lampa.Modal.close();
+                Lampa.Controller.toggle('settings_component');
+            }
+            saveButton.on('hover:enter click', saveAndClose);
+
             Lampa.Modal.open({
                 title: 'Автоперемикання моделей', html: listContainer, size: 'small', scroll_to_center: true,
-                onBack: function() {
-                    var finalOrder = [], finalSavedChecked = [];
-                    modelsContainer.find('.source-item').each(function() {
-                        var id = $(this).attr('data-id'), s = workingList.find(function(x) { return x.id === id; });
-                        if (s) { finalOrder.push(s.id); if (s.checked) finalSavedChecked.push(s.id); }
-                    });
-                    if (mode === 'all') Lampa.Storage.set('ai_fallback_mode', 'all');
-                    else if (mode === 'off') Lampa.Storage.set('ai_fallback_mode', 'off');
-                    else Lampa.Storage.set('ai_fallback_mode', finalSavedChecked.length > 0 ? 'custom' : 'off');
-                    Lampa.Storage.set('ai_fallback_list', finalOrder);
-                    Lampa.Storage.set('ai_fallback_checked', finalSavedChecked);
-                    Lampa.Modal.close();
-                    Lampa.Controller.toggle('settings_component');
-                }
+                onBack: saveAndClose
             });
         };
 
@@ -1225,7 +1254,7 @@
             };
             Lampa.Storage.listener.follow('change', window.ai_menu_settings_listener);
         }
-        console.log('AI System: V56.1 (Personal recommendations + reliable country filter) - UA Patched');
+        console.log('AI System: V56.2 (Remote-friendly fallback menu) - UA Patched');
     }
 
     if (!window.plugin_ai_search_ready) {
