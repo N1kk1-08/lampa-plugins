@@ -56,9 +56,22 @@
         network.silent(url, function(data) { done(onSuccess, data); }, function(error) { done(onError, error); }, false, { timeout: 10000 });
     }
 
-    function getListCardLimit() {
-        var limit = parseInt(Lampa.Storage.get('ai_list_card_limit', '200'), 10);
-        return [100, 200, 400].indexOf(limit) !== -1 ? limit : 200;
+    var LIST_WINDOW_SIZE = 100;
+    var RECENT_IDS_LIMIT = 300;
+    var aiPreloadTimer = null;
+
+    function scheduleAiPreload(assistant) {
+        clearTimeout(aiPreloadTimer);
+        var pagination = window.ai_pagination;
+        aiPreloadTimer = setTimeout(function() {
+            aiPreloadTimer = null;
+            if (window.ai_pagination === pagination) assistant.preloadNextPage();
+        }, 1000);
+    }
+
+    function trimAiExclusions(pagination) {
+        pagination.exclude_list = (pagination.exclude_list || []).slice(-LIST_WINDOW_SIZE);
+        pagination.exclude_ids = (pagination.exclude_ids || []).slice(-RECENT_IDS_LIMIT);
     }
 
     function parseJsonSafe(text) {
@@ -78,7 +91,7 @@
     // without_origin_country не підтримується API. Тому перевіряємо Details
     // перед показом випадкової картки та зберігаємо результат у кеші сесії.
     window.ai_country_filter_cache = window.ai_country_filter_cache || {};
-    var COUNTRY_CACHE_LIMIT = 400;
+    var COUNTRY_CACHE_LIMIT = 100;
     var countryCacheOrder = Object.keys(window.ai_country_filter_cache);
     while (countryCacheOrder.length > COUNTRY_CACHE_LIMIT) delete window.ai_country_filter_cache[countryCacheOrder.shift()];
 
@@ -86,6 +99,231 @@
         if (!Object.prototype.hasOwnProperty.call(window.ai_country_filter_cache, key)) countryCacheOrder.push(key);
         window.ai_country_filter_cache[key] = { countries: countries, loaded: true };
         while (countryCacheOrder.length > COUNTRY_CACHE_LIMIT) delete window.ai_country_filter_cache[countryCacheOrder.shift()];
+    }
+
+    function releaseCardCache(data) {
+        if (!data || data.is_load_more) return;
+        var key = (data.media_type === 'tv' || data.original_name ? 'tv' : 'movie') + ':' + data.id;
+        delete window.ai_country_filter_cache[key];
+        var index = countryCacheOrder.indexOf(key);
+        if (index !== -1) countryCacheOrder.splice(index, 1);
+    }
+
+    function disposeListCard(item) {
+        var data = item.data;
+        var render = $(item.render())[0];
+        // Прибираємо джерела зображень до destroy: декодовані постери більше не утримуються DOM.
+        var images = $(render).find('img');
+        images.each(function() {
+            this.onload = this.onerror = null;
+            this.removeAttribute('srcset');
+            this.removeAttribute('src');
+        });
+        $(render).off();
+        if (render) render.card_data = null;
+        item.destroy();
+        // Деякі старі Card.destroy знову призначають src=''; прибираємо і це.
+        images.each(function() { this.onload = this.onerror = null; this.removeAttribute('src'); });
+        item.data = null;
+        item.onFocus = item.onEnter = item.onMenu = null;
+        if (Array.isArray(item.components)) item.components = [];
+        releaseCardCache(data);
+    }
+
+    function trimListWindow(component) {
+        var excess = component.items.filter(function(item) { return !item.data.is_load_more; }).length - LIST_WINDOW_SIZE;
+        if (excess <= 0) return;
+        var anchor = component.last;
+        var oldTop = anchor && anchor.isConnected ? anchor.getBoundingClientRect().top : null;
+        var scroll = $(component.scroll.render())[0];
+        var removed = [];
+        component.items = component.items.filter(function(item) {
+            if (excess > 0 && !item.data.is_load_more) { excess--; removed.push(item); return false; }
+            return true;
+        });
+        removed.forEach(disposeListCard);
+        // Нативна сітка також утримує посилання у віртуальних сторінках.
+        Object.keys(component.pages || {}).forEach(function(key) {
+            var page = component.pages[key];
+            if (page.placeholder) page.placeholder.remove();
+        });
+        component.pages = {};
+        component.added = component.items.length;
+        component.items.forEach(function(item, index) {
+            var page = Math.floor(index / 60) + 1;
+            if (!component.pages[page]) component.pages[page] = { items: [] };
+            component.pages[page].items.push(item);
+        });
+        component.active = component.items.findIndex(function(item) { return $(item.render())[0] === anchor; });
+        if (component.active < 0) {
+            component.active = 0;
+            component.last = component.items.length ? $(component.items[0].render())[0] : null;
+        } else if (oldTop !== null) {
+            var shift = anchor.getBoundingClientRect().top - oldTop;
+            if (Lampa.Platform.screen('tv')) component.scroll.shift(shift);
+            else component.scroll.shift(component.scroll.position() + scroll.scrollTop + shift);
+        }
+        component.frament = null;
+        // Нативний Items.onScroll сам оновить навігатор. Не скидаємо його фокус тут.
+        if (anchor && !anchor.isConnected && anchor.getAttribute('data-id') !== 'ai_load_more' && Lampa.Controller.own(component)) {
+            Lampa.Controller.collectionSet(scroll);
+            if (component.last) Lampa.Controller.collectionFocus(component.last, scroll);
+        }
+    }
+
+    function openListCard(data) {
+        Lampa.Activity.push({ component: 'full', id: data.id, method: data.media_type === 'tv' || data.name ? 'tv' : 'movie',
+            card: data, source: data.source || 'tmdb', url: data.url });
+    }
+
+    // Власна оболонка використовує нативні картки, але не накопичує старі сторінки.
+    function BoundedListComponent(object) {
+        if (!Lampa.Maker || typeof Lampa.Maker.make !== 'function') return new LegacyBoundedList(object);
+        var component = Lampa.Maker.make('Category', object);
+        component.use({
+            onCreate: function() {
+                var current = this;
+                Lampa.Api.list(object, function(data) { if (!current.destroyed) current.build(data); },
+                    function(error) { if (!current.destroyed) current.empty(error); });
+            },
+            onNext: function(resolve, reject) {
+                var current = this;
+                Lampa.Api.list(object, function(data) {
+                    if (current.destroyed) return;
+                    current.total_pages = data.total_pages || object.page;
+                    resolve(data);
+                }, function() { object.page = Math.max(1, object.page - 1); reject(); });
+            },
+            onInstance: function(item, data) {
+                item.use({ onEnter: function() { openListCard(data); }, onFocus: function() {
+                    if (!data.is_load_more) Lampa.Background.change(Lampa.Utils.cardImgBackground(data));
+                } });
+            },
+            onPushLoaded: function() { trimListWindow(this); },
+            onDestroy: function() { this.destroyed = true; cancelRandomJobs(object); }
+        });
+        return component;
+    }
+
+    // Старі збірки Lampa не мають Maker і приховують масив карток category_full.
+    // Тому тут теж зберігаємо лише власні 100 екземплярів, а не видаляємо один лише DOM.
+    function LegacyBoundedList(object) {
+        var component = this;
+        this.items = [];
+        this.pages = {};
+        this.scroll = new Lampa.Scroll({ mask: true, over: true, step: 250, end_ratio: 2 });
+        var html = $('<div></div>');
+        var body = $('<div class="category-full mapping--grid cols--6"></div>');
+        this.render = function(js) { return js ? html[0] : html; };
+        function refresh() {
+            Lampa.Layer.visible(component.scroll.render());
+        }
+        this.append = function(data) {
+            var replacingMore = component.last && component.last.getAttribute('data-id') === 'ai_load_more';
+            var oldMore = component.items.filter(function(item) { return item.data.is_load_more; });
+            component.items = component.items.filter(function(item) { return !item.data.is_load_more; });
+            oldMore.forEach(disposeListCard);
+            data.forEach(function(cardData) {
+                var item = new Lampa.Card(cardData);
+                item.create();
+                var card = $(item.render());
+                card.attr('data-id', cardData.id);
+                item.onFocus = function() { component.last = card[0]; component.scroll.update(card); refresh(); };
+                item.onEnter = function() { openListCard(cardData); };
+                item.onMenu = function() { if (!cardData.is_load_more) item.menu(); };
+                body.append(card);
+                component.items.push(item);
+            });
+            trimListWindow(component);
+            refresh();
+            if (Lampa.Controller.own(component)) {
+                Lampa.Controller.collectionSet(component.scroll.render());
+                if (component.last && !replacingMore) {
+                    var top = component.last.getBoundingClientRect().top;
+                    var onEnd = component.scroll.onEnd;
+                    component.scroll.onEnd = null;
+                    Lampa.Controller.collectionFocus(component.last, component.scroll.render());
+                    var delta = component.last.getBoundingClientRect().top - top;
+                    var scroll = $(component.scroll.render())[0];
+                    component.scroll.shift(Lampa.Platform.screen('tv') ? delta : component.scroll.position() + scroll.scrollTop + delta);
+                    component.scroll.onEnd = onEnd;
+                }
+            }
+        };
+        function next() {
+            if (component.destroyed || component.next_wait || object.source !== 'ai_random' || object.page >= component.total_pages) return;
+            if (!Lampa.Controller.own(component)) return;
+            component.next_wait = true;
+            object.page++;
+            Lampa.Api.list(object, function(data) {
+                component.next_wait = false;
+                if (component.destroyed) return;
+                component.total_pages = data.total_pages || object.page;
+                component.append(data.results);
+            }, function() { component.next_wait = false; object.page--; });
+        }
+        this.create = function() {
+            component.scroll.minus();
+            component.scroll.append(body[0]);
+            html.append(component.scroll.render());
+            component.scroll.onEnd = next;
+            component.scroll.onScroll = refresh;
+            component.activity.loader(true);
+            Lampa.Api.list(object, function(data) {
+                if (component.destroyed) return;
+                component.total_pages = data.total_pages || 1;
+                component.append(data.results);
+                component.activity.loader(false);
+                component.activity.toggle();
+            }, function() { if (!component.destroyed) { component.activity.loader(false); component.activity.toggle(); } });
+        };
+        function move(direction) {
+            var elements = component.items.map(function(item) { return $(item.render())[0]; });
+            var current = component.last || elements[0];
+            if (!current) return;
+            var from = current.getBoundingClientRect(), best, distance = Infinity;
+            elements.forEach(function(element) {
+                if (element === current) return;
+                var to = element.getBoundingClientRect();
+                var dx = (to.left + to.right - from.left - from.right) / 2;
+                var dy = (to.top + to.bottom - from.top - from.bottom) / 2;
+                var horizontal = direction === 'left' || direction === 'right';
+                if (horizontal ? Math.abs(dy) > from.height / 2 : Math.abs(dx) > from.width) return;
+                var along = horizontal ? dx : dy;
+                if ((direction === 'left' || direction === 'up') ? along >= -1 : along <= 1) return;
+                var score = Math.abs(along) + Math.abs(horizontal ? dy : dx) * 3;
+                if (score < distance) { best = element; distance = score; }
+            });
+            if (best) Lampa.Controller.collectionFocus(best, component.scroll.render());
+            else if (direction === 'left') Lampa.Controller.toggle('menu');
+            else if (direction === 'up') Lampa.Controller.toggle('head');
+            else if (direction === 'down') next();
+        }
+        this.start = function() {
+            Lampa.Controller.add('content', { link: component, invisible: true,
+                toggle: function() {
+                    if (component.scroll.restorePosition) component.scroll.restorePosition();
+                    Lampa.Controller.collectionSet(component.scroll.render());
+                    Lampa.Controller.collectionFocus(component.last, component.scroll.render());
+                    refresh();
+                },
+                left: function() { move('left'); }, right: function() { move('right'); },
+                up: function() { move('up'); }, down: function() { move('down'); },
+                back: function() { Lampa.Activity.backward(); }
+            });
+            Lampa.Controller.toggle('content');
+        };
+        this.pause = function() {};
+        this.destroy = function() {
+            component.destroyed = true;
+            cancelRandomJobs(object);
+            component.items.forEach(disposeListCard);
+            component.items = [];
+            component.pages = {};
+            component.last = null;
+            component.scroll.destroy();
+            html.remove();
+        };
     }
 
     function getExcludedCountries() {
@@ -735,10 +973,12 @@
 
                     if (b && window.ai_pagination === pagination) {
                         var mediaKey = b.media_type + ':' + b.id;
-                        if (pagination.exclude_ids.indexOf(mediaKey) === -1 && pagination.exclude_ids.indexOf(b.id) === -1) {
+                        if (pagination.exclude_ids.indexOf(mediaKey) === -1 && pagination.exclude_ids.indexOf(b.id) === -1 &&
+                            (pagination.history_ids || []).indexOf(mediaKey) === -1) {
                             pagination.exclude_ids.push(mediaKey);
                             b.source = 'tmdb';
                             results.push(b);
+                            trimAiExclusions(pagination);
                         }
                     }
                     completeOne();
@@ -758,15 +998,14 @@
 
         this.fetchNextPageData = function(callback, isSilent) {
             var pagination = window.ai_pagination;
-            var remaining = getListCardLimit() - window.ai_cached_results.filter(function(card) { return !card.is_load_more; }).length;
-            var limit = Math.min(parseInt(Lampa.Storage.get('ai_result_count', '20'), 10) || 20, remaining);
-            if (limit <= 0) return callback(null, null);
+            var limit = Math.min(50, Math.max(1, parseInt(Lampa.Storage.get('ai_result_count', '20'), 10) || 20));
             var exclusions = window.ai_pagination.exclude_list.slice(-50).join(', ');
             var p = window.ai_pagination.base_prompt + ' IMPORTANT: You MUST EXCLUDE these titles from your suggestions: ' + exclusions + '. Provide strictly NEW ' + limit + ' suggestions. Respond ONLY with a valid JSON array: [{"uk":"Назва","orig":"Original Title","year":Year}]. No markdown, no intro text.';
             _this.askGemini(p, function(text) {
                 if (window.ai_pagination !== pagination) return callback(null, null);
-                var list = parseJsonSafe(text);
+            var list = parseJsonSafe(text);
                 if (!list || !list.length) { callback(null, null); return; }
+                list = list.slice(0, limit);
                 _this.processAiList(list, function(results) { callback(list, results); });
             }, function() { callback(null, null); }, isSilent);
         };
@@ -774,8 +1013,7 @@
         this.preloadNextPage = function() {
             var pagination = window.ai_pagination;
             var activity = Lampa.Activity.active();
-            if (!activity || activity.source !== 'ai_assistant_list' || pagination.is_preloading || pagination.preloaded_results ||
-                window.ai_cached_results.filter(function(card) { return !card.is_load_more; }).length >= getListCardLimit()) return;
+            if (!activity || activity.source !== 'ai_assistant_list' || pagination.is_preloading || pagination.preloaded_results) return;
             pagination.is_preloading = true;
             _this.fetchNextPageData(function(list, results) {
                 pagination.is_preloading = false;
@@ -795,7 +1033,6 @@
             var previousSelectors = render.find('.selector').toArray();
             var scroll = component.scroll && component.scroll.render ? $(component.scroll.render()) : render.find('.scroll').first();
             var scrollTop = scroll.length ? scroll[0].scrollTop : 0;
-            var firstNewIndex;
 
             if (modular) {
                 var oldMoreItems = component.items.filter(function(item) { return item.data && item.data.is_load_more; });
@@ -804,8 +1041,7 @@
                     component.pages[page].items = component.pages[page].items.filter(function(item) { return oldMoreItems.indexOf(item) === -1; });
                 });
                 component.added -= oldMoreItems.length;
-                oldMoreItems.forEach(function(item) { item.destroy(); });
-                firstNewIndex = component.items.length;
+                oldMoreItems.forEach(disposeListCard);
             }
             render.find('[data-id="ai_load_more"]').remove();
 
@@ -816,14 +1052,15 @@
                 component.emit('pushLoaded');
             } else component.append(items, true);
 
-            var firstNewCard = modular && component.items[firstNewIndex] ? component.items[firstNewIndex].render(true) : render.find('.selector').filter(function() {
+            var firstNewItem = modular && component.items.find(function(item) { return item.data === results[0]; });
+            var firstNewCard = firstNewItem ? firstNewItem.render(true) : render.find('.selector').filter(function() {
                 return previousSelectors.indexOf(this) === -1;
             })[0];
-            if (scroll.length) scroll[0].scrollTop = scrollTop;
+            if (scroll.length && !component.ai_bounded_list) scroll[0].scrollTop = scrollTop;
             if (firstNewCard) {
                 if (modular) {
                     component.last = firstNewCard;
-                    component.active = firstNewIndex;
+                    component.active = component.items.indexOf(firstNewItem);
                 }
                 Lampa.Controller.collectionSet(scroll.length ? scroll : render);
                 Lampa.Controller.collectionFocus(firstNewCard, scroll.length ? scroll : render);
@@ -833,10 +1070,6 @@
 
         this.loadMore = function(activeActivity) {
             if (window.ai_pagination.is_loading || !activeActivity || !activeActivity.activity) return;
-            if (window.ai_cached_results.filter(function(card) { return !card.is_load_more; }).length >= getListCardLimit()) {
-                Lampa.Noty.show('Добірка завершена. Для нових рекомендацій відкрийте розділ повторно');
-                return;
-            }
             var pagination = window.ai_pagination;
             window.ai_active_controller = Lampa.Controller.enabled().name;
             var renderResults = function(results, rawList) {
@@ -849,15 +1082,17 @@
                     return;
                 }
                 rawList.forEach(function(i) { window.ai_pagination.exclude_list.push(i.orig || i.uk); });
+                trimAiExclusions(pagination);
                 window.ai_pagination.preloaded_results = null; window.ai_pagination.preloaded_raw_list = null; window.ai_pagination.is_loading = false;
                 hideStatus();
                 if (!results.length) { Lampa.Noty.show('Більше нічого не знайдено'); if (window.ai_active_controller) Lampa.Controller.toggle(window.ai_active_controller); return; }
                 window.ai_cached_results = window.ai_cached_results.filter(function(r) { return !r.is_load_more; });
-                results = results.slice(0, Math.max(0, getListCardLimit() - window.ai_cached_results.length));
                 window.ai_cached_results = window.ai_cached_results.concat(results);
-                if (window.ai_cached_results.length < getListCardLimit()) window.ai_cached_results.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
+                var evicted = window.ai_cached_results.splice(0, Math.max(0, window.ai_cached_results.length - LIST_WINDOW_SIZE));
+                evicted.forEach(releaseCardCache);
+                window.ai_cached_results.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
                 if (!_this.appendListResults(activeActivity, results)) Lampa.Noty.show('Не вдалося додати рекомендації до списку');
-                setTimeout(function() { _this.preloadNextPage(); }, 1000);
+                scheduleAiPreload(_this);
             };
             if (window.ai_pagination.preloaded_results) {
                 window.ai_pagination.is_loading = true; renderResults(window.ai_pagination.preloaded_results, window.ai_pagination.preloaded_raw_list);
@@ -888,15 +1123,17 @@
                 var list = parseJsonSafe(text);
                 if (Lampa.Activity.active().component !== 'full') { hideStatus(); return; }
                 if (!list || !list.length) { hideStatus(); Lampa.Noty.show('Нічого не знайдено або помилка парсингу'); if (window.ai_active_controller) Lampa.Controller.toggle(window.ai_active_controller); return; }
+                list = list.slice(0, 50);
                 list.forEach(function(i) { window.ai_pagination.exclude_list.push(i.orig || i.uk); });
+                trimAiExclusions(pagination);
                 _this.processAiList(list, function(results) {
                     if (window.ai_pagination !== pagination) return;
                     hideStatus();
                     if (Lampa.Activity.active().component !== 'full') return;
                     if (!results.length) { Lampa.Noty.show('Нічого не знайдено'); if (window.ai_active_controller) Lampa.Controller.toggle(window.ai_active_controller); return; }
                     window.ai_cached_results = results; window.ai_cached_results.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
-                    Lampa.Activity.push({ url: 'ai_assistant_list', title: title, component: 'category_full', source: 'ai_assistant_list', page: 1 });
-                    setTimeout(function() { _this.preloadNextPage(); }, 1000);
+                    Lampa.Activity.push({ url: 'ai_assistant_list', title: title, component: 'ai_bounded_list', source: 'ai_assistant_list', page: 1 });
+                    scheduleAiPreload(_this);
                 });
             }, null, false);
         };
@@ -953,6 +1190,7 @@
                 base_prompt: '',
                 exclude_list: historyTitles.slice(),
                 exclude_ids: historyIds,
+                history_ids: historyIds.slice(),
                 preloaded_results: null,
                 preloaded_raw_list: null,
                 is_loading: false,
@@ -979,9 +1217,11 @@
                     return;
                 }
 
+                list = list.slice(0, 50);
                 list.forEach(function(item) {
                     window.ai_pagination.exclude_list.push(item.orig || item.original || item.uk || item.ru || '');
                 });
+                trimAiExclusions(pagination);
                 _this.processAiList(list, function(results) {
                     if (window.ai_personal_recommendation_request !== requestId || window.ai_pagination !== pagination) return;
                     hideStatus();
@@ -992,8 +1232,8 @@
 
                     window.ai_cached_results = results;
                     window.ai_cached_results.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
-                    Lampa.Activity.push({ url: 'ai_assistant_list', title: 'AI Рекомендації', component: 'category_full', source: 'ai_assistant_list', page: 1 });
-                    setTimeout(function() { _this.preloadNextPage(); }, 1000);
+                    Lampa.Activity.push({ url: 'ai_assistant_list', title: 'AI Рекомендації', component: 'ai_bounded_list', source: 'ai_assistant_list', page: 1 });
+                    scheduleAiPreload(_this);
                 });
             }, function() { hideStatus(); }, false);
         };
@@ -1029,9 +1269,7 @@
             
             var excludeList = getExcludedCountries();
             var strictCountryFilter = Lampa.Storage.get('ai_country_filter_mode', 'relaxed') === 'strict';
-            var limit = getListCardLimit();
-            var maxListPages = Math.ceil(limit / 20);
-            var signature = [type, minRate, yearLimit, excludeList.join(','), strictCountryFilter, limit].join('|');
+            var signature = [type, minRate, yearLimit, excludeList.join(','), strictCountryFilter].join('|');
             params.params = params.params || {};
             var session = params.params.ai_random_session;
             if (page === 1 || !session || session.signature !== signature) {
@@ -1039,11 +1277,7 @@
                 params.params.ai_random_session = session;
             }
             window.plugin_ai_session_ids = session.ids;
-            var targetCount = Math.min(20, limit - session.ids.size);
-            if (page > maxListPages || targetCount <= 0) {
-                oncomplite({ results: [], title: params.title, page: page, total_pages: Math.max(1, page - 1) });
-                return;
-            }
+            var targetCount = 20;
             
             if (page === 1) {
                 var yearText = '';
@@ -1115,15 +1349,16 @@
                 if (onerror) onerror();
             }
 
-            function finish(stop) {
+            function finish() {
                 if (completed) return;
                 completed = true;
                 release();
                 hideStatus();
                 var results = accumulatedCards.slice(0, targetCount);
                 results.forEach(function(card) { session.ids.add(endpoint + ':' + card.id); });
+                while (session.ids.size > RECENT_IDS_LIMIT) session.ids.delete(session.ids.values().next().value);
                 oncomplite({ results: results, title: params.title, page: page,
-                    total_pages: stop || !results.length || session.ids.size >= limit ? page : maxListPages });
+                    total_pages: !results.length ? page : page + 1 });
                 accumulatedCards.length = 0;
             }
 
@@ -1293,6 +1528,11 @@
     // === СТАРТ ТА НАЛАШТУВАННЯ ===
     function startPlugin() {
         window.plugin_ai_search_ready = true;
+        Lampa.Component.add('ai_bounded_list', function(object) {
+            var component = new BoundedListComponent(object);
+            component.ai_bounded_list = true;
+            return component;
+        });
 
         // Ініціалізація Асистента
         if (!window.plugin_ai_assistant_instance) {
@@ -1330,6 +1570,8 @@
             Lampa.Api.sources.ai_assistant_list = {
                 list: function(params, oncomplite) { oncomplite({ results: window.ai_cached_results, total_pages: 1 }); },
                 clear: function() {
+                    clearTimeout(aiPreloadTimer);
+                    aiPreloadTimer = null;
                     silentGeminiJobs.slice().forEach(function(job) { job.cancel(); });
                     window.ai_cached_results = [];
                     window.ai_pagination = { base_prompt: '', exclude_list: [], exclude_ids: [], preloaded_results: null, preloaded_raw_list: null, is_loading: false, is_preloading: false };
@@ -1423,7 +1665,6 @@
         }});
 
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_country_filter_mode', type: 'select', values: { 'relaxed': 'Звичайний', 'strict': 'Строгий' }, default: 'relaxed' }, field: { name: 'Перевірка країн (Random)', description: 'Строгий режим приховує тайтли, для яких TMDB не вказав країну виробництва' } });
-        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_list_card_limit', type: 'select', values: { '100': '100 (менше навантаження)', '200': '200', '400': '400' }, default: '200' }, field: { name: 'Максимум карток у добірці', description: 'Для випадкових та AI добірок. Менше карток — менше навантаження на ТВ. Для нової добірки відкрийте розділ повторно' } });
         
         // 6. Мін. рейтинг (Для рандому)
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_min_rating', type: 'select', values: { '0': 'Будь-який', '5': '> 5', '6': '> 6', '7': '> 7', '8': '> 8' }, default: '6' }, field: { name: 'Мін. рейтинг (Random)' } });
@@ -1465,7 +1706,7 @@
                     if (type === 'personal_recommendations') {
                         if (window.plugin_ai_assistant_instance) window.plugin_ai_assistant_instance.startPersonalRecommendations();
                     } else {
-                        Lampa.Activity.push({ url: type, title: title, component: 'category_full', source: 'ai_random', page: 1 });
+                        Lampa.Activity.push({ url: type, title: title, component: 'ai_bounded_list', source: 'ai_random', page: 1 });
                     }
                 });
                 list.append(el);
@@ -1484,7 +1725,7 @@
             };
             Lampa.Storage.listener.follow('change', window.ai_menu_settings_listener);
         }
-        console.log('AI System: V56.4 (Bounded random lists and TV memory optimizations) - UA Patched');
+        console.log('AI System: V56.5 (Rolling 100-card window and cache cleanup) - UA Patched');
     }
 
     if (!window.plugin_ai_search_ready) {
