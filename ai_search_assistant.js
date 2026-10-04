@@ -696,10 +696,66 @@
             }, true);
         };
 
+        this.appendListResults = function(activeActivity, results) {
+            var activity = activeActivity.activity;
+            // ActivitySlide є оболонкою; картки та скрол належать її компоненту.
+            var component = activity.component || activity;
+            var modular = typeof component.emit === 'function' && Array.isArray(component.items) && Array.isArray(component.loaded);
+            if (!modular && typeof component.append !== 'function') return false;
+
+            var render = $(component.render());
+            var previousSelectors = render.find('.selector').toArray();
+            var scroll = component.scroll && component.scroll.render ? $(component.scroll.render()) : render.find('.scroll').first();
+            var scrollTop = scroll.length ? scroll[0].scrollTop : 0;
+            var firstNewIndex;
+
+            if (modular) {
+                var oldMoreItems = component.items.filter(function(item) { return item.data && item.data.is_load_more; });
+                component.items = component.items.filter(function(item) { return oldMoreItems.indexOf(item) === -1; });
+                Object.keys(component.pages).forEach(function(page) {
+                    component.pages[page].items = component.pages[page].items.filter(function(item) { return oldMoreItems.indexOf(item) === -1; });
+                });
+                component.added -= oldMoreItems.length;
+                oldMoreItems.forEach(function(item) { item.destroy(); });
+                firstNewIndex = component.items.length;
+            }
+            render.find('[data-id="ai_load_more"]').remove();
+
+            var items = results.slice();
+            items.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
+            if (modular) {
+                component.loaded.push(items);
+                component.emit('pushLoaded');
+            } else component.append(items, true);
+
+            var firstNewCard = modular && component.items[firstNewIndex] ? component.items[firstNewIndex].render(true) : render.find('.selector').filter(function() {
+                return previousSelectors.indexOf(this) === -1;
+            })[0];
+            if (scroll.length) scroll[0].scrollTop = scrollTop;
+            if (firstNewCard) {
+                if (modular) {
+                    component.last = firstNewCard;
+                    component.active = firstNewIndex;
+                }
+                Lampa.Controller.collectionSet(scroll.length ? scroll : render);
+                Lampa.Controller.collectionFocus(firstNewCard, scroll.length ? scroll : render);
+            }
+            return true;
+        };
+
         this.loadMore = function(activeActivity) {
-            if (window.ai_pagination.is_loading) return;
+            if (window.ai_pagination.is_loading || !activeActivity || !activeActivity.activity) return;
+            var pagination = window.ai_pagination;
             window.ai_active_controller = Lampa.Controller.enabled().name;
             var renderResults = function(results, rawList) {
+                if (window.ai_pagination !== pagination) { pagination.is_loading = false; return; }
+                if (Lampa.Activity.active() !== activeActivity) {
+                    pagination.preloaded_results = results;
+                    pagination.preloaded_raw_list = rawList;
+                    pagination.is_loading = false;
+                    hideStatus();
+                    return;
+                }
                 rawList.forEach(function(i) { window.ai_pagination.exclude_list.push(i.orig || i.uk); });
                 window.ai_pagination.preloaded_results = null; window.ai_pagination.preloaded_raw_list = null; window.ai_pagination.is_loading = false;
                 hideStatus();
@@ -707,18 +763,7 @@
                 window.ai_cached_results = window.ai_cached_results.filter(function(r) { return !r.is_load_more; });
                 window.ai_cached_results = window.ai_cached_results.concat(results);
                 window.ai_cached_results.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
-                if (activeActivity && activeActivity.activity) {
-                    var act = activeActivity.activity; var rnder = act.render();
-                    var oldBtn = rnder.find('.item[data-id="ai_load_more"]'); if (oldBtn.length) oldBtn.remove();
-                    var items_to_append = results.slice(); items_to_append.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
-                    if (act.append) {
-                        act.append(items_to_append);
-                        setTimeout(function() {
-                            var cardToFocus = rnder.find('.item[data-id="' + results[0].id + '"]');
-                            if (cardToFocus.length) Lampa.Controller.collectionFocus(cardToFocus[0], rnder[0]);
-                        }, 100);
-                    } else Lampa.Activity.replace({ url: 'ai_assistant_list', title: activeActivity.title, component: 'category_full', source: 'ai_assistant_list', page: 1 });
-                }
+                if (!_this.appendListResults(activeActivity, results)) Lampa.Noty.show('Не вдалося додати рекомендації до списку');
                 setTimeout(function() { _this.preloadNextPage(); }, 1000);
             };
             if (window.ai_pagination.preloaded_results) {
@@ -1254,7 +1299,7 @@
             };
             Lampa.Storage.listener.follow('change', window.ai_menu_settings_listener);
         }
-        console.log('AI System: V56.2 (Remote-friendly fallback menu) - UA Patched');
+        console.log('AI System: V56.3 (Recommendations load-more focus fix) - UA Patched');
     }
 
     if (!window.plugin_ai_search_ready) {
