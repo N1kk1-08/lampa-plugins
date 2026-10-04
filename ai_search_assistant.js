@@ -20,6 +20,7 @@
     window.ai_cached_results = [];
     window.ai_active_controller = null;
     window.plugin_ai_session_ids = window.plugin_ai_session_ids || new Set();
+    var silentGeminiJobs = [];
 
     // === UI ТА ДОПОМІЖНІ ФУНКЦІЇ ===
     function addIcon(type) {
@@ -37,10 +38,28 @@
             statusBox = $('#ai-global-status');
         }
         statusBox.find('.status-text').text(text);
-        statusBox.fadeIn(200);
+        statusBox.stop(true, true).fadeIn(200);
     }
     
-    function hideStatus() { if(statusBox) statusBox.fadeOut(500); }
+    function hideStatus() { if(statusBox) statusBox.stop(true, true).fadeOut(200); }
+
+    function requestPluginData(url, onSuccess, onError) {
+        var network = new Lampa.Reguest();
+        var completed = false;
+        function done(callback, data) {
+            if (completed) return;
+            completed = true;
+            network.clear();
+            network = null;
+            if (callback) callback(data);
+        }
+        network.silent(url, function(data) { done(onSuccess, data); }, function(error) { done(onError, error); }, false, { timeout: 10000 });
+    }
+
+    function getListCardLimit() {
+        var limit = parseInt(Lampa.Storage.get('ai_list_card_limit', '200'), 10);
+        return [100, 200, 400].indexOf(limit) !== -1 ? limit : 200;
+    }
 
     function parseJsonSafe(text) {
         if (!text) return null;
@@ -59,6 +78,15 @@
     // without_origin_country не підтримується API. Тому перевіряємо Details
     // перед показом випадкової картки та зберігаємо результат у кеші сесії.
     window.ai_country_filter_cache = window.ai_country_filter_cache || {};
+    var COUNTRY_CACHE_LIMIT = 400;
+    var countryCacheOrder = Object.keys(window.ai_country_filter_cache);
+    while (countryCacheOrder.length > COUNTRY_CACHE_LIMIT) delete window.ai_country_filter_cache[countryCacheOrder.shift()];
+
+    function cacheCountryCodes(key, countries) {
+        if (!Object.prototype.hasOwnProperty.call(window.ai_country_filter_cache, key)) countryCacheOrder.push(key);
+        window.ai_country_filter_cache[key] = { countries: countries, loaded: true };
+        while (countryCacheOrder.length > COUNTRY_CACHE_LIMIT) delete window.ai_country_filter_cache[countryCacheOrder.shift()];
+    }
 
     function getExcludedCountries() {
         var raw = Lampa.Storage.get('ai_exclude_countries_list', '');
@@ -91,13 +119,13 @@
         });
     }
 
-    function checkCountryFilter(item, mediaType, excludeList, strictMode, callback) {
+    function checkCountryFilter(item, mediaType, excludeList, strictMode, callback, network) {
         if (!excludeList.length) return callback(false, item);
 
         var cacheKey = mediaType + ':' + item.id;
         var cached = window.ai_country_filter_cache[cacheKey];
 
-        function evaluate(detailsCountries, detailsLoaded) {
+        function evaluate(detailsCountries) {
             var countries = collectCountryCodes(item);
             detailsCountries.forEach(function(country) {
                 if (countries.indexOf(country) === -1) countries.push(country);
@@ -116,17 +144,16 @@
             callback(false, item);
         }
 
-        if (cached) return evaluate(cached.countries, cached.loaded);
+        if (cached && cached.loaded) return evaluate(cached.countries);
 
         var url = mediaType + '/' + item.id + '?api_key=' + Lampa.TMDB.key() + '&language=uk-UA';
-        Lampa.Network.silent(Lampa.TMDB.api(url), function(details) {
+        (network || Lampa.Network).silent(Lampa.TMDB.api(url), function(details) {
             var countries = collectCountryCodes(details || {});
-            window.ai_country_filter_cache[cacheKey] = { countries: countries, loaded: true };
-            evaluate(countries, true);
+            cacheCountryCodes(cacheKey, countries);
+            evaluate(countries);
         }, function() {
-            window.ai_country_filter_cache[cacheKey] = { countries: [], loaded: false };
-            evaluate([], false);
-        });
+            evaluate([]);
+        }, false, { timeout: 10000 });
     }
 
     // === БЕЗПЕЧНА КАРТКА V53 ===
@@ -210,7 +237,7 @@
         this.getTMDBDetails = function(card, callback) {
             var method = (card.name || card.original_name) ? 'tv' : 'movie';
             var url = Lampa.TMDB.api(method + '/' + card.id + '?api_key=' + Lampa.TMDB.key() + '&language=en-US&append_to_response=credits');
-            Lampa.Network.silent(url, function(res) {
+            requestPluginData(url, function(res) {
                 var overview = (res.overview || '').replace(/"/g, "'").replace(/\n/g, ' ');
                 var leadActor = 'unknown';
                 if (res.credits && res.credits.cast && res.credits.cast.length > 0) leadActor = res.credits.cast[0].name;
@@ -219,10 +246,13 @@
         };
 
         this.preloadTags = function(card) {
+            clearTimeout(_this.tagPreloadTimer);
             if (card.translated_tags) return;
+            var activity = Lampa.Activity.active();
             var attempts = 0, delays = [1000, 2000];
             var waitAndCheck = function() {
-                setTimeout(function() {
+                _this.tagPreloadTimer = setTimeout(function() {
+                    if (Lampa.Activity.active() !== activity) return;
                     if (card.translated_tags && card.translated_tags.length > 0) return;
                     attempts++;
                     if (attempts < delays.length) waitAndCheck();
@@ -237,7 +267,7 @@
             var method = (card.original_name || card.name) ? 'tv' : 'movie';
             var url = Lampa.TMDB.api(method + '/' + card.id + '/keywords?api_key=' + Lampa.TMDB.key());
             $.ajax({
-                url: url, dataType: 'json',
+                url: url, dataType: 'json', timeout: 10000,
                 success: function (resp) {
                     var tags = resp.keywords || resp.results || [];
                     if (tags.length > 0) _this.translateTags(tags, function(translatedTags) { card.translated_tags = translatedTags; });
@@ -399,7 +429,7 @@
             } else if (card.belongs_to_collection) {
                 window.ai_active_controller = ctrl || Lampa.Controller.enabled().name;
                 updateStatus('Збір історії');
-                Lampa.Network.silent(Lampa.TMDB.api('collection/' + card.belongs_to_collection.id + '?api_key=' + Lampa.TMDB.key() + '&language=uk-UA'), function(res) {
+                requestPluginData(Lampa.TMDB.api('collection/' + card.belongs_to_collection.id + '?api_key=' + Lampa.TMDB.key() + '&language=uk-UA'), function(res) {
                     hideStatus();
                     (res.parts || []).forEach(function(p) { if (p.id != card.id) items.push({ title: p.title, type: 'movie', value: p.original_title }); });
                     _this.showRecapSelect(items, card, btn, render, ctrl);
@@ -454,7 +484,7 @@
             var tagsWithContext = tags.map(function(t) { return "Movie tag: " + t.name; });
             var url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=uk&dt=t&q=' + encodeURIComponent(tagsWithContext.join(' ||| '));
             $.ajax({
-                url: url, dataType: 'json',
+                url: url, dataType: 'json', timeout: 10000,
                 success: function (result) {
                     try {
                         var translatedText = '';
@@ -509,9 +539,25 @@
                 }
                 modelsToAdd.forEach(function(modelId) { keys.forEach(function(k) { requestQueue.push({ model: modelId, key: k }); }); });
             }
+            var completed = false, currentAbort = null, currentTimer = null;
+            var job = { owner: Lampa.Activity.active(), cancel: function() {
+                if (completed) return;
+                if (currentAbort) currentAbort.abort();
+                release();
+                if (onError) onError('Cancelled');
+            } };
+            if (isSilent) silentGeminiJobs.push(job);
+            function release() {
+                completed = true;
+                clearTimeout(currentTimer);
+                currentAbort = null;
+                silentGeminiJobs = silentGeminiJobs.filter(function(current) { return current !== job; });
+            }
 
             var attemptRequest = function(queueIndex) {
+                if (completed) return;
                 if (queueIndex >= requestQueue.length) {
+                    release();
                     if (!isSilent) { hideStatus(); Lampa.Noty.show('Сервіс недоступний або ліміти вичерпано'); _this.restoreFocus(window.ai_active_controller); }
                     if (onError) onError('All attempts failed');
                     return;
@@ -519,17 +565,31 @@
                 var task = requestQueue[queueIndex];
                 var payload = { contents: [{ parts: [{ text: p }] }] };
                 if (useSearch && task.model.indexOf('gemini') === 0 && task.model.indexOf('gemini-3') === -1) payload.tools = [{ googleSearch: {} }];
-
-                fetch('https://generativelanguage.googleapis.com/v1beta/models/' + task.model + ':generateContent?key=' + task.key, {
-                    method: "POST", body: JSON.stringify(payload)
-                }).then(function(r) { return r.json().then(function(json) { return { status: r.status, ok: r.ok, data: json }; }); }).then(function(res) {
+                var abort = typeof AbortController === 'function' ? new AbortController() : null;
+                currentAbort = abort;
+                var options = { method: "POST", body: JSON.stringify(payload) };
+                if (abort) options.signal = abort.signal;
+                var timeoutTimer;
+                var response = fetch('https://generativelanguage.googleapis.com/v1beta/models/' + task.model + ':generateContent?key=' + task.key, options)
+                    .then(function(r) { return r.json().then(function(json) { return { status: r.status, ok: r.ok, data: json }; }); });
+                var timeout = new Promise(function(resolve, reject) {
+                    timeoutTimer = setTimeout(function() {
+                        if (abort) abort.abort();
+                        reject(new Error('Gemini request timed out'));
+                    }, 25000);
+                    currentTimer = timeoutTimer;
+                });
+                Promise.race([response, timeout]).then(function(res) {
+                    clearTimeout(timeoutTimer);
+                    if (completed) return;
                     if (res.status === 429 || res.status === 503) return attemptRequest(queueIndex + 1);
                     if (!res.ok) throw new Error(res.data.error ? res.data.error.message : 'Unknown error');
                     if (res.data.candidates && res.data.candidates[0].content) {
                         var fullText = res.data.candidates[0].content.parts.map(function(part) { return part.text || ""; }).join("\n");
+                        release();
                         onSuccess(fullText);
                     } else throw new Error('Empty response');
-                }).catch(function(e) { return attemptRequest(queueIndex + 1); });
+                }).catch(function(e) { clearTimeout(timeoutTimer); return attemptRequest(queueIndex + 1); });
             };
             attemptRequest(0);
         };
@@ -643,44 +703,68 @@
         };
 
         this.processAiList = function(list, callback) {
-            var results = [], processed = 0;
-            if (!window.ai_pagination.exclude_ids) window.ai_pagination.exclude_ids = [];
-            if (!list || !list.length) return callback(results);
+            var results = [], processed = 0, active = 0, index = 0, completed = false, nextTimer = null;
+            var pagination = window.ai_pagination;
+            if (!pagination.exclude_ids) pagination.exclude_ids = [];
+            list = Array.isArray(list) ? list.slice(0, 50) : [];
+            if (!list.length) return callback(results);
 
             function completeOne() {
                 processed++;
-                if (processed === list.length) callback(results);
+                active--;
+                if (processed === list.length && !completed) {
+                    completed = true;
+                    clearTimeout(nextTimer);
+                    callback(window.ai_pagination === pagination ? results : []);
+                } else if (!completed && nextTimer === null) {
+                    nextTimer = setTimeout(function() { nextTimer = null; next(); }, 0);
+                }
             }
 
-            list.forEach(function(item) {
+            function lookup(item) {
+                item = item || {};
                 var title = item.orig || item.original || item.uk || item.ru;
                 if (!title) return completeOne();
 
                 var q = encodeURIComponent(title);
-                Lampa.Network.silent(Lampa.TMDB.api('search/multi?query=' + q + '&api_key=' + Lampa.TMDB.key() + '&language=uk-UA'), function(res) {
+                requestPluginData(Lampa.TMDB.api('search/multi?query=' + q + '&api_key=' + Lampa.TMDB.key() + '&language=uk-UA'), function(res) {
                     var candidates = (res && res.results) || [];
                     var b = candidates.find(function(candidate) {
                         return candidate && (candidate.media_type === 'movie' || candidate.media_type === 'tv');
                     });
 
-                    if (b) {
+                    if (b && window.ai_pagination === pagination) {
                         var mediaKey = b.media_type + ':' + b.id;
-                        if (window.ai_pagination.exclude_ids.indexOf(mediaKey) === -1 && window.ai_pagination.exclude_ids.indexOf(b.id) === -1) {
-                            window.ai_pagination.exclude_ids.push(mediaKey);
+                        if (pagination.exclude_ids.indexOf(mediaKey) === -1 && pagination.exclude_ids.indexOf(b.id) === -1) {
+                            pagination.exclude_ids.push(mediaKey);
                             b.source = 'tmdb';
                             results.push(b);
                         }
                     }
                     completeOne();
                 }, completeOne);
-            });
+            }
+            function next() {
+                if (completed) return;
+                if (window.ai_pagination !== pagination) {
+                    completed = true;
+                    callback([]);
+                    return;
+                }
+                while (index < list.length && active < 3) { active++; lookup(list[index++]); }
+            }
+            next();
         };
 
         this.fetchNextPageData = function(callback, isSilent) {
-            var limit = Lampa.Storage.get('ai_result_count', '20');
+            var pagination = window.ai_pagination;
+            var remaining = getListCardLimit() - window.ai_cached_results.filter(function(card) { return !card.is_load_more; }).length;
+            var limit = Math.min(parseInt(Lampa.Storage.get('ai_result_count', '20'), 10) || 20, remaining);
+            if (limit <= 0) return callback(null, null);
             var exclusions = window.ai_pagination.exclude_list.slice(-50).join(', ');
             var p = window.ai_pagination.base_prompt + ' IMPORTANT: You MUST EXCLUDE these titles from your suggestions: ' + exclusions + '. Provide strictly NEW ' + limit + ' suggestions. Respond ONLY with a valid JSON array: [{"uk":"Назва","orig":"Original Title","year":Year}]. No markdown, no intro text.';
             _this.askGemini(p, function(text) {
+                if (window.ai_pagination !== pagination) return callback(null, null);
                 var list = parseJsonSafe(text);
                 if (!list || !list.length) { callback(null, null); return; }
                 _this.processAiList(list, function(results) { callback(list, results); });
@@ -688,11 +772,15 @@
         };
 
         this.preloadNextPage = function() {
-            if (window.ai_pagination.is_preloading) return;
-            window.ai_pagination.is_preloading = true;
+            var pagination = window.ai_pagination;
+            var activity = Lampa.Activity.active();
+            if (!activity || activity.source !== 'ai_assistant_list' || pagination.is_preloading || pagination.preloaded_results ||
+                window.ai_cached_results.filter(function(card) { return !card.is_load_more; }).length >= getListCardLimit()) return;
+            pagination.is_preloading = true;
             _this.fetchNextPageData(function(list, results) {
-                if (results && results.length) { window.ai_pagination.preloaded_results = results; window.ai_pagination.preloaded_raw_list = list; }
-                window.ai_pagination.is_preloading = false;
+                pagination.is_preloading = false;
+                if (window.ai_pagination !== pagination) return;
+                if (results && results.length) { pagination.preloaded_results = results; pagination.preloaded_raw_list = list; }
             }, true);
         };
 
@@ -722,7 +810,7 @@
             render.find('[data-id="ai_load_more"]').remove();
 
             var items = results.slice();
-            items.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
+            if (window.ai_cached_results.some(function(card) { return card.is_load_more; })) items.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
             if (modular) {
                 component.loaded.push(items);
                 component.emit('pushLoaded');
@@ -745,6 +833,10 @@
 
         this.loadMore = function(activeActivity) {
             if (window.ai_pagination.is_loading || !activeActivity || !activeActivity.activity) return;
+            if (window.ai_cached_results.filter(function(card) { return !card.is_load_more; }).length >= getListCardLimit()) {
+                Lampa.Noty.show('Добірка завершена. Для нових рекомендацій відкрийте розділ повторно');
+                return;
+            }
             var pagination = window.ai_pagination;
             window.ai_active_controller = Lampa.Controller.enabled().name;
             var renderResults = function(results, rawList) {
@@ -761,8 +853,9 @@
                 hideStatus();
                 if (!results.length) { Lampa.Noty.show('Більше нічого не знайдено'); if (window.ai_active_controller) Lampa.Controller.toggle(window.ai_active_controller); return; }
                 window.ai_cached_results = window.ai_cached_results.filter(function(r) { return !r.is_load_more; });
+                results = results.slice(0, Math.max(0, getListCardLimit() - window.ai_cached_results.length));
                 window.ai_cached_results = window.ai_cached_results.concat(results);
-                window.ai_cached_results.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
+                if (window.ai_cached_results.length < getListCardLimit()) window.ai_cached_results.push({ id: 'ai_load_more', is_load_more: true, name: '', poster: 'https://bodya-elven.github.io/different/icons/more.webp', img: 'https://bodya-elven.github.io/different/icons/more.webp' });
                 if (!_this.appendListResults(activeActivity, results)) Lampa.Noty.show('Не вдалося додати рекомендації до списку');
                 setTimeout(function() { _this.preloadNextPage(); }, 1000);
             };
@@ -771,29 +864,33 @@
             } else if (window.ai_pagination.is_preloading) {
                 window.ai_pagination.is_loading = true; updateStatus('Підбір результатів...');
                 var waitInterval = setInterval(function() {
-                    if (window.ai_pagination.preloaded_results) { clearInterval(waitInterval); renderResults(window.ai_pagination.preloaded_results, window.ai_pagination.preloaded_raw_list); }
-                    else if (!window.ai_pagination.is_preloading) { clearInterval(waitInterval); window.ai_pagination.is_loading = false; hideStatus(); Lampa.Noty.show('Помилка підбору, спробуйте ще'); if (window.ai_active_controller) Lampa.Controller.toggle(window.ai_active_controller); }
+                    if (window.ai_pagination !== pagination) { clearInterval(waitInterval); pagination.is_loading = false; return; }
+                    if (pagination.preloaded_results) { clearInterval(waitInterval); renderResults(pagination.preloaded_results, pagination.preloaded_raw_list); }
+                    else if (!pagination.is_preloading) { clearInterval(waitInterval); pagination.is_loading = false; if (Lampa.Activity.active() !== activeActivity) return; hideStatus(); Lampa.Noty.show('Помилка підбору, спробуйте ще'); if (window.ai_active_controller) Lampa.Controller.toggle(window.ai_active_controller); }
                 }, 500);
             } else {
                 window.ai_pagination.is_loading = true; updateStatus('Підбір результатів...');
                 _this.fetchNextPageData(function(list, results) {
                     if(results && results.length) renderResults(results, list);
-                    else { window.ai_pagination.is_loading = false; hideStatus(); Lampa.Noty.show('Нічого не знайдено'); if (window.ai_active_controller) Lampa.Controller.toggle(window.ai_active_controller); }
+                    else { pagination.is_loading = false; if (window.ai_pagination !== pagination || Lampa.Activity.active() !== activeActivity) return; hideStatus(); Lampa.Noty.show('Нічого не знайдено'); if (window.ai_active_controller) Lampa.Controller.toggle(window.ai_active_controller); }
                 }, false);
             }
         };
 
         this.fetchList = function(base_prompt_task, title, card, btn, render, ctrl) {
             window.ai_pagination = { base_prompt: base_prompt_task, exclude_list: [], exclude_ids: [], preloaded_results: null, preloaded_raw_list: null, is_loading: false, is_preloading: false };
+            var pagination = window.ai_pagination;
             window.ai_cached_results = []; window.ai_active_controller = ctrl || Lampa.Controller.enabled().name;
             var full_prompt = base_prompt_task + ' Respond ONLY with a valid JSON array: [{"uk":"Назва","orig":"Original Title","year":Year}]. No markdown, no intro text.';
             updateStatus('Підбір результатів');
             _this.askGemini(full_prompt, function(text) {
+                if (window.ai_pagination !== pagination) return;
                 var list = parseJsonSafe(text);
                 if (Lampa.Activity.active().component !== 'full') { hideStatus(); return; }
                 if (!list || !list.length) { hideStatus(); Lampa.Noty.show('Нічого не знайдено або помилка парсингу'); if (window.ai_active_controller) Lampa.Controller.toggle(window.ai_active_controller); return; }
                 list.forEach(function(i) { window.ai_pagination.exclude_list.push(i.orig || i.uk); });
                 _this.processAiList(list, function(results) {
+                    if (window.ai_pagination !== pagination) return;
                     hideStatus();
                     if (Lampa.Activity.active().component !== 'full') return;
                     if (!results.length) { Lampa.Noty.show('Нічого не знайдено'); if (window.ai_active_controller) Lampa.Controller.toggle(window.ai_active_controller); return; }
@@ -861,6 +958,7 @@
                 is_loading: false,
                 is_preloading: false
             };
+            var pagination = window.ai_pagination;
             window.ai_cached_results = [];
 
             var prompt = 'You are a careful personal movie recommender. Analyze the viewing history below to infer recurring genres, moods, themes, eras, countries, and preferred formats. ' +
@@ -872,7 +970,7 @@
             window.ai_pagination.base_prompt = prompt;
             updateStatus('AI аналізує історію переглядів');
             _this.askGemini(prompt, function(text) {
-                if (window.ai_personal_recommendation_request !== requestId) return;
+                if (window.ai_personal_recommendation_request !== requestId || window.ai_pagination !== pagination) return;
 
                 var list = parseJsonSafe(text);
                 if (!list || !Array.isArray(list) || !list.length) {
@@ -885,7 +983,7 @@
                     window.ai_pagination.exclude_list.push(item.orig || item.original || item.uk || item.ru || '');
                 });
                 _this.processAiList(list, function(results) {
-                    if (window.ai_personal_recommendation_request !== requestId) return;
+                    if (window.ai_personal_recommendation_request !== requestId || window.ai_pagination !== pagination) return;
                     hideStatus();
                     if (!results.length) {
                         Lampa.Noty.show('Рекомендації не знайдені в TMDB. Спробуйте ще раз');
@@ -913,17 +1011,41 @@
 
 
     // === RANDOM ДЖЕРЕЛО (ВИПРАВЛЕНА ФІЛЬТРАЦІЯ КРАЇН) ===
+    var randomJobs = [];
+
+    function cancelRandomJobs(owner) {
+        randomJobs.slice().forEach(function(job) {
+            if (!owner || job.owner === owner) job.cancel();
+        });
+    }
+
     var NativeRandomSource = {
         list: function(params, oncomplite, onerror) {
+            cancelRandomJobs(params);
             var type = params.url || 'movie'; 
+            var page = Math.max(1, parseInt(params.page, 10) || 1);
             var minRate = parseFloat(Lampa.Storage.get('ai_min_rating', '6')); 
             var yearLimit = parseInt(Lampa.Storage.get('ai_year_limit', '0'));
             
             var excludeList = getExcludedCountries();
             var strictCountryFilter = Lampa.Storage.get('ai_country_filter_mode', 'relaxed') === 'strict';
+            var limit = getListCardLimit();
+            var maxListPages = Math.ceil(limit / 20);
+            var signature = [type, minRate, yearLimit, excludeList.join(','), strictCountryFilter, limit].join('|');
+            params.params = params.params || {};
+            var session = params.params.ai_random_session;
+            if (page === 1 || !session || session.signature !== signature) {
+                session = { signature: signature, ids: new Set() };
+                params.params.ai_random_session = session;
+            }
+            window.plugin_ai_session_ids = session.ids;
+            var targetCount = Math.min(20, limit - session.ids.size);
+            if (page > maxListPages || targetCount <= 0) {
+                oncomplite({ results: [], title: params.title, page: page, total_pages: Math.max(1, page - 1) });
+                return;
+            }
             
-            if (params.page === 1) {
-                window.plugin_ai_session_ids.clear();
+            if (page === 1) {
                 var yearText = '';
                 if (yearLimit > 0) {
                     if (yearLimit === 2020) yearText = ' (2020+)';
@@ -957,90 +1079,130 @@
 
             var baseQuery = "&" + query.join('&');
             var accumulatedCards = [];
-            var attempts = 0, MAX_ATTEMPTS = 20, maxPage = 100; 
+            var batchIds = new Set();
+            var attempts = 0, MAX_ATTEMPTS = 12, maxPage = 100;
+            // Власний об'єкт запитів не накопичує обробники в Lampa.Network.
+            var network = new Lampa.Reguest();
+            var completed = false, nextTimer = null;
+            var queue = [], active = 0;
+            var MAX_DETAILS_REQUESTS = 2;
+            var job = { owner: params, cancel: cancel };
+            randomJobs.push(job);
+            var deadlineTimer = setTimeout(function() { finish(true); }, 30000);
             
             if (type === 'anime') maxPage = 20; 
             if (yearLimit > 0 && yearLimit < 2020) maxPage = 50; 
             if (yearLimit >= 2020) maxPage = 30; 
 
             var usedPagesInBatch = [];
-            var batchCounter = 0;
-            var finalizedBatches = {};
 
-            function finishBatch(batchId) {
-                if (finalizedBatches[batchId]) return;
-                finalizedBatches[batchId] = true;
-                if (accumulatedCards.length >= 20 || attempts >= MAX_ATTEMPTS) {
-                    hideStatus();
-                    if (accumulatedCards.length === 0) oncomplite({ results: [], title: params.title, page: params.page, total_pages: 1 });
-                    else oncomplite({ results: accumulatedCards.slice(0, 20), title: params.title, page: params.page, total_pages: 100 });
-                } else {
-                    updateStatus('🎲 Відсіювання (спроба ' + attempts + '/' + MAX_ATTEMPTS + ')... Знайдено: ' + accumulatedCards.length);
-                    fetchBatch();
+            function release() {
+                clearTimeout(deadlineTimer);
+                clearTimeout(nextTimer);
+                queue.length = 0;
+                network.clear();
+                network = null;
+                randomJobs = randomJobs.filter(function(current) { return current !== job; });
+            }
+
+            function cancel() {
+                if (completed) return;
+                completed = true;
+                release();
+                accumulatedCards.length = 0;
+                hideStatus();
+                // Знімаємо next_wait у сітці, щоб після повернення можна було догрузити.
+                if (onerror) onerror();
+            }
+
+            function finish(stop) {
+                if (completed) return;
+                completed = true;
+                release();
+                hideStatus();
+                var results = accumulatedCards.slice(0, targetCount);
+                results.forEach(function(card) { session.ids.add(endpoint + ':' + card.id); });
+                oncomplite({ results: results, title: params.title, page: page,
+                    total_pages: stop || !results.length || session.ids.size >= limit ? page : maxListPages });
+                accumulatedCards.length = 0;
+            }
+
+            function scheduleNext(call) {
+                if (completed || nextTimer !== null) return;
+                nextTimer = setTimeout(function() {
+                    nextTimer = null;
+                    if (!completed) call();
+                }, 0);
+            }
+
+            function addCard(item) {
+                var key = endpoint + ':' + item.id;
+                if (accumulatedCards.length >= targetCount || session.ids.has(key) || batchIds.has(key)) return;
+                var card = buildSafeCard(item, type);
+                if (card) {
+                    batchIds.add(key);
+                    accumulatedCards.push(card);
                 }
             }
 
-            function addVerifiedCards(items, batchId) {
-                var queue = (items || []).slice();
-                var active = 0;
-                var MAX_DETAILS_REQUESTS = 4;
-
-                function addCard(item) {
-                    if (accumulatedCards.length >= 20 || window.plugin_ai_session_ids.has(item.id)) return;
-                    var card = buildSafeCard(item, type);
-                    if (card) {
-                        window.plugin_ai_session_ids.add(item.id);
-                        accumulatedCards.push(card);
+            function next() {
+                if (completed) return;
+                if (accumulatedCards.length >= targetCount) queue.length = 0;
+                while (queue.length && active < MAX_DETAILS_REQUESTS && accumulatedCards.length < targetCount) {
+                    var item = queue.shift();
+                    if (!item || !item.id || !item.backdrop_path) continue;
+                    if (type === 'cartoon' && item.original_language === 'ja') continue;
+                    if (session.ids.has(endpoint + ':' + item.id) || batchIds.has(endpoint + ':' + item.id)) continue;
+                    if (!excludeList.length) {
+                        addCard(item);
+                        continue;
                     }
+                    active++;
+                    checkCountryFilter(item, endpoint, excludeList, strictCountryFilter, function(skip, verifiedItem) {
+                        if (completed) return;
+                        if (!skip) addCard(verifiedItem);
+                        active--;
+                        scheduleNext(next);
+                    }, network);
                 }
-
-                function next() {
-                    if (!queue.length && active === 0) return finishBatch(batchId);
-
-                    while (queue.length && active < MAX_DETAILS_REQUESTS) {
-                        var item = queue.shift();
-                        if (!item || !item.id || !item.backdrop_path) continue;
-                        if (type === 'cartoon' && item.original_language === 'ja') continue;
-                        if (window.plugin_ai_session_ids.has(item.id)) continue;
-
-                        if (!excludeList.length) {
-                            addCard(item);
-                            continue;
-                        }
-
-                        active++;
-                        checkCountryFilter(item, endpoint, excludeList, strictCountryFilter, function(skip, verifiedItem) {
-                            if (!skip) addCard(verifiedItem);
-                            active--;
-                            next();
-                        });
-                    }
-
-                    if (!queue.length && active === 0) finishBatch(batchId);
+                if (accumulatedCards.length >= targetCount) queue.length = 0;
+                if (!queue.length && active === 0) {
+                    if (accumulatedCards.length >= targetCount || attempts >= MAX_ATTEMPTS) finish(false);
+                    else scheduleNext(fetchBatch);
                 }
-
-                next();
             }
 
             function fetchBatch() {
+                if (completed) return;
+                if (attempts >= MAX_ATTEMPTS || maxPage < 1) return finish(false);
                 attempts++;
-                var batchId = ++batchCounter;
-                var randomPage, safeLoop = 0;
-                do { randomPage = Math.floor(Math.random() * maxPage) + 1; safeLoop++; } while (usedPagesInBatch.indexOf(randomPage) !== -1 && safeLoop < 20);
+                var availablePages = [];
+                for (var candidate = 1; candidate <= maxPage; candidate++) {
+                    if (usedPagesInBatch.indexOf(candidate) === -1) availablePages.push(candidate);
+                }
+                if (!availablePages.length) return finish(false);
+                var randomPage = availablePages[Math.floor(Math.random() * availablePages.length)];
                 usedPagesInBatch.push(randomPage);
+                if (attempts > 1) updateStatus('🎲 Відсіювання (спроба ' + attempts + '/' + MAX_ATTEMPTS + ')... Знайдено: ' + accumulatedCards.length);
 
                 var url = "discover/" + endpoint + "?api_key=" + Lampa.TMDB.key() + "&language=uk-UA&sort_by=popularity.desc&page=" + randomPage + baseQuery;
 
-                Lampa.Network.silent(Lampa.TMDB.api(url), function(data) {
-                    if (data && data.total_pages) {
-                        var actualMaxPage = Math.min(data.total_pages, 500); 
-                        if (actualMaxPage < maxPage) { maxPage = actualMaxPage; if (randomPage > maxPage) return fetchBatch(); }
+                network.silent(Lampa.TMDB.api(url), function(data) {
+                    if (completed) return;
+                    if (data && typeof data.total_pages === 'number') {
+                        maxPage = Math.min(maxPage, Math.max(0, data.total_pages), 500);
                     }
-
-                    addVerifiedCards(data && data.results, batchId);
-                }, function() { hideStatus(); oncomplite({ results: accumulatedCards.length ? accumulatedCards : [], title: params.title, page: params.page, total_pages: 1 }); });
+                    queue = data && Array.isArray(data.results) ? data.results.slice(0, 20) : [];
+                    scheduleNext(next);
+                }, function() { if (!completed) finish(true); }, false, { timeout: 10000 });
             }
             fetchBatch();
+        },
+        clear: function() {
+            cancelRandomJobs();
+            window.plugin_ai_session_ids.clear();
+            window.ai_country_filter_cache = {};
+            countryCacheOrder = [];
         }
     };
     NativeRandomSource.main = NativeRandomSource.list;
@@ -1089,7 +1251,7 @@
                                 var item = queue.shift(); active++;
                                 var qTmdb = item.orig || item.original || item.ru;
                                 
-                                Lampa.Network.silent(Lampa.TMDB.api("search/multi?query=" + encodeURIComponent(qTmdb) + "&api_key=" + Lampa.TMDB.key() + "&language=uk-UA"), function(t) {
+                                requestPluginData(Lampa.TMDB.api("search/multi?query=" + encodeURIComponent(qTmdb) + "&api_key=" + Lampa.TMDB.key() + "&language=uk-UA"), function(t) {
                                     processed++; updateStatus('🤖 TMDB: ' + results.length + ' знайдено (' + processed + '/' + totalToProcess + ')');
                                     if(t.results && t.results[0]) {
                                         var best = t.results[0];
@@ -1137,6 +1299,19 @@
             window.plugin_ai_assistant_instance = new AIAssistantPlugin();
             window.plugin_ai_assistant_instance.init();
         }
+        if (!window.ai_random_activity_listener) {
+            window.ai_random_activity_listener = function(e) {
+                if (e.type === 'init' || e.type === 'start') {
+                    randomJobs.slice().forEach(function(job) {
+                        if (job.owner !== e.object) job.cancel();
+                    });
+                    silentGeminiJobs.slice().forEach(function(job) {
+                        if (job.owner !== e.object) job.cancel();
+                    });
+                } else if (e.type === 'destroy') cancelRandomJobs(e.object);
+            };
+            Lampa.Listener.follow('activity', window.ai_random_activity_listener);
+        }
 
         // Патчі для пагінації (Load More)
         if (!window.ai_push_patched) {
@@ -1152,7 +1327,16 @@
             window.ai_push_patched = true;
         }
         if (window.Lampa && Lampa.Api) {
-            Lampa.Api.sources.ai_assistant_list = { list: function(params, oncomplite) { oncomplite({ results: window.ai_cached_results, total_pages: 1 }); } };
+            Lampa.Api.sources.ai_assistant_list = {
+                list: function(params, oncomplite) { oncomplite({ results: window.ai_cached_results, total_pages: 1 }); },
+                clear: function() {
+                    silentGeminiJobs.slice().forEach(function(job) { job.cancel(); });
+                    window.ai_cached_results = [];
+                    window.ai_pagination = { base_prompt: '', exclude_list: [], exclude_ids: [], preloaded_results: null, preloaded_raw_list: null, is_loading: false, is_preloading: false };
+                    window.ai_personal_recommendation_request = null;
+                    if (window.plugin_ai_assistant_instance) clearTimeout(window.plugin_ai_assistant_instance.tagPreloadTimer);
+                }
+            };
         }
 
         // --- МЕНЮ НАЛАШТУВАНЬ ---
@@ -1239,6 +1423,7 @@
         }});
 
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_country_filter_mode', type: 'select', values: { 'relaxed': 'Звичайний', 'strict': 'Строгий' }, default: 'relaxed' }, field: { name: 'Перевірка країн (Random)', description: 'Строгий режим приховує тайтли, для яких TMDB не вказав країну виробництва' } });
+        Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_list_card_limit', type: 'select', values: { '100': '100 (менше навантаження)', '200': '200', '400': '400' }, default: '200' }, field: { name: 'Максимум карток у добірці', description: 'Для випадкових та AI добірок. Менше карток — менше навантаження на ТВ. Для нової добірки відкрийте розділ повторно' } });
         
         // 6. Мін. рейтинг (Для рандому)
         Lampa.SettingsApi.addParam({ component: 'ai_search_cfg', param: { name: 'ai_min_rating', type: 'select', values: { '0': 'Будь-який', '5': '> 5', '6': '> 6', '7': '> 7', '8': '> 8' }, default: '6' }, field: { name: 'Мін. рейтинг (Random)' } });
@@ -1299,7 +1484,7 @@
             };
             Lampa.Storage.listener.follow('change', window.ai_menu_settings_listener);
         }
-        console.log('AI System: V56.3 (Recommendations load-more focus fix) - UA Patched');
+        console.log('AI System: V56.4 (Bounded random lists and TV memory optimizations) - UA Patched');
     }
 
     if (!window.plugin_ai_search_ready) {
