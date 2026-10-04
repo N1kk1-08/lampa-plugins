@@ -9,29 +9,30 @@
     var DISK_MAX = 300;
     var DISK_TTL = 24 * 60 * 60 * 1000;
     var DISK_EMPTY_TTL = 30 * 60 * 1000;
-    var DISK_SAVE_DELAY = 2000;
-    var MAX_ACTIVE = 1;
+    var DISK_SAVE_DELAY = 10000;
+    var MAX_QUEUE = 12;
+    var REQUEST_GAP_MS = 2500;
+    var REQUEST_WINDOW_MS = 60000;
+    var REQUESTS_PER_WINDOW = 12;
     var REQUEST_TIMEOUT = 20000;
     var ANALYSE_LIMIT = 200;
-    var SCAN_PER_FRAME = 6;
-    var LOAD_IDLE_MS = 450;
-    var LOAD_MAX_WAIT_MS = 1500;
+    var LOAD_IDLE_MS = 700;
     var cache = {};
     var diskCache = null;
     var diskDirty = false;
     var diskSaveTimer = null;
     var pending = {};
     var queue = [];
-    var active = 0;
+    var activeTask = null;
+    var requestStarts = [];
+    var pumpTimer = null;
     var sourceVersion = 0;
+    var viewVersion = 0;
     var settingsRefreshTimer = null;
     var cardObserver = null;
-    var visibilityObserver = null;
-    var scanPending = false;
-    var scanRoots = [];
-    var loadWaiting = [];
-    var loadIdleTimer = null;
-    var loadWaitingSince = 0;
+    var viewRoot = null;
+    var fullMovie = null;
+    var scanTimer = null;
     var lastActivity = 0;
     var MESSAGES = {
         uk: {
@@ -324,12 +325,19 @@
         return false;
     }
 
-    function copyForParser(movie) {
+    function compactMovie(movie) {
         var result = {};
-        Object.keys(movie).forEach(function (key) { result[key] = movie[key]; });
-        result.title = movie.title || movie.name || '';
-        result.original_title = movie.original_title || movie.original_name || result.title;
-        result.genres = Array.isArray(movie.genres) ? movie.genres : [];
+        // Never retain a card, component, or arbitrary nested data in a parser task.
+        ['id', 'source', 'title', 'name', 'original_title', 'original_name',
+            'release_date', 'first_air_date', 'number_of_seasons', 'original_language',
+            'vote_average'].forEach(function (key) {
+            if (typeof movie[key] === 'string' || typeof movie[key] === 'number') result[key] = movie[key];
+        });
+        result.title = result.title || result.name || '';
+        result.original_title = result.original_title || result.original_name || result.title;
+        result.genres = Array.isArray(movie.genres) ? movie.genres.slice(0, 20).map(function (genre) {
+            return { id: Number(genre && genre.id) || 0, name: String(genre && genre.name || '') };
+        }) : [];
         return result;
     }
 
@@ -417,19 +425,20 @@
     function scheduleDiskSave() {
         diskDirty = true;
         if (diskSaveTimer) return;
-        diskSaveTimer = setTimeout(function () {
-            diskSaveTimer = null;
-            if (!diskDirty || !diskCache) return;
+        diskSaveTimer = setTimeout(flushDiskSave, DISK_SAVE_DELAY);
+    }
+
+    function flushDiskSave() {
+        clearTimeout(diskSaveTimer);
+        diskSaveTimer = null;
+        if (!diskDirty || !diskCache) return;
+        pruneDiskCache();
+        try {
+            Lampa.Storage.set(DISK_CACHE_KEY, {
+                source: diskCache.source, entries: diskCache.entries, order: diskCache.order
+            });
             diskDirty = false;
-            pruneDiskCache();
-            try {
-                Lampa.Storage.set(DISK_CACHE_KEY, {
-                    source: diskCache.source,
-                    entries: diskCache.entries,
-                    order: diskCache.order
-                });
-            } catch (e) {}
-        }, DISK_SAVE_DELAY);
+        } catch (e) {}
     }
 
     function readDiskSummary(movie) {
@@ -485,93 +494,135 @@
 
     function markActivity() {
         lastActivity = Date.now();
+        scheduleScan(180);
+        schedulePump();
     }
 
-    function fetchSummary(movie, callback) {
-        var key = cacheKey(movie);
-        if (!sourceReady()) return callback(null);
-        var hit = cache[key];
-        if (hit && hit.expires > Date.now()) return callback(hit.summary);
+    function remember(key, summary, expires) {
+        cache[key] = { summary: summary, expires: expires };
+        var keys = Object.keys(cache);
+        while (keys.length > MAX_CACHE) delete cache[keys.shift()];
+    }
 
+    function cachedSummary(movie) {
+        var key = cacheKey(movie);
+        if (!sourceReady()) return null;
+        var hit = cache[key];
+        if (hit && hit.expires > Date.now()) return hit;
+        if (hit) delete cache[key];
         var diskHit = readDiskSummary(movie);
         if (diskHit !== null) {
-            cache[key] = { summary: diskHit.summary,
-                expires: Math.min(diskHit.expires, Date.now() + CACHE_TTL) };
-            return callback(diskHit.summary);
+            remember(key, diskHit.summary, Math.min(diskHit.expires, Date.now() + CACHE_TTL));
+            return cache[key];
         }
+        return null;
+    }
 
-        if (pending[key]) {
-            pending[key].push(callback);
-            return;
-        }
-        pending[key] = [callback];
-        queue.push({ key: key, movie: movie, version: sourceVersion });
-        pump();
+    function networkEnabled() {
+        return connected(viewRoot) && !document.hidden && setting('release_badges_enabled', true) &&
+            sourceReady() && ['quality', 'hdr', 'ua', 'ru', 'en'].some(function (name) {
+                return setting('release_badges_' + name, true);
+            });
+    }
+
+    function taskCurrent(task) {
+        return !task.obsolete && task.version === sourceVersion && task.view === viewVersion &&
+            networkEnabled();
+    }
+
+    function schedulePump() {
+        clearTimeout(pumpTimer);
+        pumpTimer = null;
+        if (!networkEnabled() || (activeTask && activeTask.inFlight)) return;
+        if (!activeTask && !queue.length) return;
+        var now = Date.now();
+        while (requestStarts.length && requestStarts[0] <= now - REQUEST_WINDOW_MS) requestStarts.shift();
+        var due = Math.max(now, lastActivity + LOAD_IDLE_MS);
+        if (requestStarts.length) due = Math.max(due, requestStarts[requestStarts.length - 1] + REQUEST_GAP_MS);
+        if (requestStarts.length >= REQUESTS_PER_WINDOW) due = Math.max(due, requestStarts[0] + REQUEST_WINDOW_MS);
+        pumpTimer = setTimeout(pump, Math.max(0, due - now));
     }
 
     function pump() {
-        while (active < MAX_ACTIVE && queue.length) {
-            request(queue.shift());
+        pumpTimer = null;
+        // Reconcile visibility immediately before every native request, including a fallback search.
+        scan();
+        if (!networkEnabled() || (activeTask && activeTask.inFlight)) return;
+        if (activeTask && !taskCurrent(activeTask)) finishTask(activeTask, null, ERROR_TTL);
+        if (!activeTask) {
+            while (queue.length) {
+                var next = queue.shift();
+                if (taskCurrent(next)) { activeTask = next; break; }
+                if (pending[next.key] === next) delete pending[next.key];
+            }
         }
+        if (!activeTask) return;
+        // Input or a rate limit may have changed while the timer was pending.
+        var now = Date.now();
+        while (requestStarts.length && requestStarts[0] <= now - REQUEST_WINDOW_MS) requestStarts.shift();
+        if (now - lastActivity < LOAD_IDLE_MS ||
+            (requestStarts.length && now - requestStarts[requestStarts.length - 1] < REQUEST_GAP_MS) ||
+            requestStarts.length >= REQUESTS_PER_WINDOW) return schedulePump();
+        request(activeTask);
+    }
+
+    function finishTask(task, summary, ttl) {
+        if (task.timer) clearTimeout(task.timer);
+        task.timer = null;
+        task.inFlight = false;
+        if (taskCurrent(task)) {
+            remember(task.key, summary, Date.now() + ttl);
+            if (summary !== null && summary !== undefined) {
+                writeDiskSummary(task.movie, summary, summary.matches ? DISK_TTL : DISK_EMPTY_TTL);
+            }
+        }
+        if (pending[task.key] === task) delete pending[task.key];
+        if (activeTask === task) activeTask = null;
+        // Parser callbacks hold plain task data only. Locate the current DOM anew.
+        scheduleScan(0);
+        schedulePump();
     }
 
     function request(task) {
-        active++;
-        var completed = false;
+        if (!taskCurrent(task)) return finishTask(task, null, ERROR_TTL);
+        var info = movieIdentity(task.movie);
+        var searches = searchCandidates(info);
+        if (task.index >= searches.length) return finishTask(task, null, ERROR_TTL);
+        clearTimeout(pumpTimer);
+        pumpTimer = null;
+        task.inFlight = true;
+        requestStarts.push(Date.now());
         var parserTimeout = Number(field('parse_timeout'));
         var timeout = isFinite(parserTimeout) && parserTimeout > 0 ?
             Math.min(parserTimeout * 2000 + 5000, 65000) : REQUEST_TIMEOUT * 2;
-        var timer = setTimeout(function () { finish(null, ERROR_TTL); }, timeout);
-
-        function finish(summary, ttl) {
-            if (completed) return;
-            completed = true;
-            clearTimeout(timer);
-            if (task.version !== sourceVersion) return;
-            cache[task.key] = { summary: summary, expires: Date.now() + ttl };
-            var keys = Object.keys(cache);
-            if (keys.length > MAX_CACHE) delete cache[keys[0]];
-            if (summary !== null && summary !== undefined) {
-                var diskTtl = summary && summary.matches ? DISK_TTL : DISK_EMPTY_TTL;
-                writeDiskSummary(task.movie, summary, diskTtl);
-            }
-            var callbacks = pending[task.key] || [];
-            delete pending[task.key];
-            callbacks.forEach(function (callback) {
-                try { callback(summary); } catch (e) {}
-            });
-            active--;
-            setTimeout(pump, 30);
+        task.timer = setTimeout(function () {
+            task.timer = null;
+            task.obsolete = true;
+            task.stalled = true;
+            if (pending[task.key] === task) delete pending[task.key];
+            // Parser.get exposes no per-request cancellation. Keep the native slot occupied
+            // until its callback arrives; a JS timeout must not create overlapping requests.
+        }, timeout);
+        var returned = false;
+        function receive(data) {
+            if (returned) return;
+            returned = true;
+            clearTimeout(task.timer);
+            task.timer = null;
+            scan();
+            task.inFlight = false;
+            if (!taskCurrent(task)) return finishTask(task, null, ERROR_TTL);
+            var results = data && data.Results;
+            var summary = Array.isArray(results) ? analyse(results, info) : null;
+            task.index++;
+            if ((!summary || !summary.matches) && task.index < searches.length) {
+                schedulePump();
+            } else finishTask(task, summary, summary && summary.matches ? CACHE_TTL : summary ? EMPTY_TTL : ERROR_TTL);
         }
-
         try {
-            var info = movieIdentity(task.movie);
-            var parserMovie = copyForParser(task.movie);
-            var searches = searchCandidates(info);
-
-            function trySearch(index) {
-                if (completed) return;
-                if (task.version !== sourceVersion) return finish(null, ERROR_TTL);
-                if (index >= searches.length) return finish(null, ERROR_TTL);
-                Lampa.Parser.get({
-                    search: searches[index],
-                    search_one: info.translated,
-                    search_two: info.title,
-                    movie: parserMovie,
-                    page: 1
-                }, function (data) {
-                    if (completed) return;
-                    if (task.version !== sourceVersion) return finish(null, ERROR_TTL);
-                    var results = data && data.Results;
-                    if (!Array.isArray(results)) return trySearch(index + 1);
-                    var summary = analyse(results, info);
-                    if (!summary.matches && index + 1 < searches.length) return trySearch(index + 1);
-                    finish(summary, summary.matches ? CACHE_TTL : EMPTY_TTL);
-                }, function () { trySearch(index + 1); });
-            }
-
-            trySearch(0);
-        } catch (e) { finish(null, ERROR_TTL); }
+            Lampa.Parser.get({ search: searches[task.index], search_one: info.translated,
+                search_two: info.title, movie: task.movie, page: 1 }, receive, function () { receive(null); });
+        } catch (e) { receive(null); }
     }
 
     function empty(element) {
@@ -659,139 +710,135 @@
         return container;
     }
 
-    function loadCardNow(card) {
-        if (!setting('release_badges_enabled', true)) return;
-        if (!card || !document.documentElement.contains(card)) return;
-        var movie = getMovie(card);
-        if (!movie || !movie.id) return;
-        var key = cacheKey(movie);
-        var host = hostForCard(card);
-        var container = ensureContainer(host);
-        card.__releaseBadgesKey = key;
-        render(container, null, movie);
-        fetchSummary(movie, function (summary) {
-            if (card.__releaseBadgesKey !== key || !document.documentElement.contains(card)) return;
-            render(container, summary, movie);
-        });
+    function connected(node) {
+        return Boolean(node && document.documentElement && document.documentElement.contains(node));
     }
 
-    function scheduleLoad(card) {
-        if (!card) return;
-        var movie = getMovie(card);
-        if (movie && movie.id) {
-            card.__releaseBadgesKey = cacheKey(movie);
-            render(ensureContainer(hostForCard(card)), null, movie);
-        }
-        if (card.__releaseBadgesQueued) return;
-        card.__releaseBadgesQueued = true;
-        if (!loadWaiting.length) loadWaitingSince = Date.now();
-        loadWaiting.push(card);
-        markActivity();
-        clearTimeout(loadIdleTimer);
-        loadIdleTimer = setTimeout(flushLoads, LOAD_IDLE_MS);
+    function visible(card) {
+        if (!connected(card)) return false;
+        if (!card.getBoundingClientRect) return true;
+        var rect = card.getBoundingClientRect();
+        var width = window.innerWidth || document.documentElement.clientWidth;
+        var height = window.innerHeight || document.documentElement.clientHeight;
+        return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 &&
+            rect.top < height && rect.left < width;
     }
 
-    function flushLoads() {
-        if (!loadWaiting.length) return;
-        var waitRemaining = LOAD_MAX_WAIT_MS - (Date.now() - loadWaitingSince);
-        if (Date.now() - lastActivity < LOAD_IDLE_MS - 50 && waitRemaining > 0) {
-            loadIdleTimer = setTimeout(flushLoads, Math.min(LOAD_IDLE_MS, waitRemaining));
-            return;
-        }
-        var list = loadWaiting.splice(0);
-        loadWaitingSince = 0;
-        var i = 0;
-        function step() {
-            var count = 0;
-            while (i < list.length && count < 2) {
-                var card = list[i++];
-                if (card) {
-                    card.__releaseBadgesQueued = false;
-                    if (document.documentElement.contains(card)) loadCardNow(card);
-                }
-                count++;
-            }
-            if (i < list.length) {
-                setTimeout(step, 40);
+    function scan() {
+        clearTimeout(scanTimer);
+        scanTimer = null;
+        if (!viewRoot || document.hidden || !setting('release_badges_enabled', true)) return;
+        if (!connected(viewRoot)) return stopView();
+        var candidates = [];
+        var wanted = {};
+        var useNetwork = networkEnabled();
+        function consider(movie, host, full) {
+            if (!movie || !movie.id) return;
+            var key = cacheKey(movie);
+            var hit = useNetwork ? cachedSummary(movie) : null;
+            var container = ensureContainer(host);
+            if (full) container.classList.add('release-badges--full');
+            render(container, hit ? hit.summary : null, movie);
+            if (!useNetwork || hit || wanted[key]) return;
+            wanted[key] = true;
+            if (activeTask && activeTask.key === key && taskCurrent(activeTask)) return;
+            if (candidates.length < MAX_QUEUE) {
+                candidates.push(pending[key] && taskCurrent(pending[key]) ? pending[key] : {
+                    key: key, movie: compactMovie(movie), version: sourceVersion,
+                    view: viewVersion, index: 0, inFlight: false, obsolete: false
+                });
             }
         }
-        step();
-    }
-
-    function processCard(card) {
-        if (!card || !card.classList || !card.classList.contains('card')) return;
-        var movie = getMovie(card);
-        if (!movie || !movie.id) return;
-        var key = cacheKey(movie);
-        if (card.__releaseBadgesKey === key && card.querySelector('.release-badges')) return;
-        if (visibilityObserver) visibilityObserver.observe(card);
-        else scheduleLoad(card);
-    }
-
-    function scan(root) {
-        if (!setting('release_badges_enabled', true)) return;
-        if (!root) return;
-        if (root.classList && root.classList.contains('card')) processCard(root);
-        if (root.querySelectorAll) {
-            var cards = root.querySelectorAll('.card');
-            for (var i = 0; i < cards.length; i++) processCard(cards[i]);
-            var parent = root.closest && root.closest('.card');
-            if (parent) processCard(parent);
+        if (fullMovie && viewRoot.querySelector) {
+            var poster = viewRoot.querySelector('.full-start__poster, .full-start-new__poster');
+            if (poster && connected(poster)) consider(fullMovie, poster, true);
         }
+        var cards = viewRoot.querySelectorAll ? viewRoot.querySelectorAll('.card') : [];
+        // Focus gets the first free queue slot; all other visible cards refill the bounded queue.
+        for (var pass = 0; pass < 2; pass++) {
+            for (var i = 0; i < cards.length; i++) {
+                var card = cards[i];
+                var focused = card.classList && card.classList.contains('focus');
+                if ((pass === 0) !== Boolean(focused) || !visible(card)) continue;
+                consider(getMovie(card), hostForCard(card), false);
+            }
+        }
+        if (activeTask && (!wanted[activeTask.key] || !taskCurrent(activeTask))) {
+            activeTask.obsolete = true;
+            if (!activeTask.inFlight) finishTask(activeTask, null, ERROR_TTL);
+        }
+        queue = candidates;
+        pending = {};
+        for (var j = 0; j < queue.length; j++) pending[queue[j].key] = queue[j];
+        if (activeTask && !activeTask.obsolete) pending[activeTask.key] = activeTask;
+        schedulePump();
     }
 
-    function scheduleScan(root) {
-        if (root) {
-            scanRoots.push(root);
-            markActivity();
+    function scheduleScan(delay) {
+        if (!viewRoot || document.hidden || !setting('release_badges_enabled', true)) return;
+        if (scanTimer !== null) return;
+        scanTimer = setTimeout(scan, delay == null ? 16 : delay);
+    }
+
+    function unwrap(element) {
+        return element && (element.nodeType ? element : element[0]) || null;
+    }
+
+    function activityRoot(object) {
+        try { return unwrap(object && object.activity && object.activity.render(true)); }
+        catch (e) { return null; }
+    }
+
+    function stopView() {
+        viewVersion++;
+        clearTimeout(scanTimer);
+        clearTimeout(pumpTimer);
+        scanTimer = pumpTimer = null;
+        if (cardObserver) cardObserver.disconnect();
+        if (activeTask) {
+            activeTask.obsolete = true;
+            if (!activeTask.inFlight) {
+                clearTimeout(activeTask.timer);
+                activeTask = null;
+            }
         }
-        if (scanPending) return;
-        scanPending = true;
-        var runner = window.requestAnimationFrame || function (cb) { setTimeout(cb, 16); };
-        runner(function () {
-            scanPending = false;
-            var roots = scanRoots.splice(0);
-            if (!roots.length) return;
-            var seen = [];
-            var processed = 0;
-            for (var i = 0; i < roots.length && processed < SCAN_PER_FRAME; i++) {
-                var r = roots[i];
-                if (r && seen.indexOf(r) === -1) {
-                    seen.push(r);
-                    scan(r);
-                    processed++;
-                }
-            }
-            if (i < roots.length) {
-                for (var j = i; j < roots.length; j++) scanRoots.push(roots[j]);
-                scheduleScan(null);
-            }
-        });
+        queue = [];
+        pending = {};
+        fullMovie = null;
+        viewRoot = null;
+        bindInput(false);
+    }
+
+    function startView(object) {
+        stopView();
+        if (!setting('release_badges_enabled', true) || document.hidden) return;
+        viewRoot = activityRoot(object) ||
+            (document.querySelector && document.querySelector('.activity--active')) || document.body;
+        if (!connected(viewRoot)) { viewRoot = null; return; }
+        if (object && object.component === 'full' && (object.card || object.movie)) {
+            fullMovie = compactMovie(object.card || object.movie);
+        }
+        lastActivity = Date.now();
+        bindInput(true);
+        if (cardObserver) cardObserver.observe(viewRoot, { childList: true, subtree: true });
+        scan();
     }
 
     function showFull(movie, renderElement) {
-        if (!setting('release_badges_enabled', true) || !movie || !movie.id || !renderElement) return;
-        var root = (window.$ ? $(renderElement)[0] : renderElement) || renderElement;
-        if (!root) return;
-        var host = root.querySelector('.full-start__poster, .full-start-new__poster') || root;
-        var container = ensureContainer(host);
-        container.classList.add('release-badges--full');
-        var key = cacheKey(movie);
-        container.setAttribute('data-release-key', key);
-        container.__releaseBadgesSig = null;
-        render(container, null, movie);
-        fetchSummary(movie, function (summary) {
-            if (!document.documentElement.contains(container) ||
-                container.getAttribute('data-release-key') !== key) return;
-            render(container, summary, movie);
-        });
+        var root = unwrap(renderElement);
+        if (!viewRoot || !movie || !movie.id || !connected(root)) return;
+        if (root !== viewRoot && viewRoot.contains && !viewRoot.contains(root)) return;
+        fullMovie = compactMovie(movie);
+        scan();
+    }
+
+    function currentActivity() {
+        try { return Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active(); }
+        catch (e) { return null; }
     }
 
     function refresh() {
-        clearTimeout(loadIdleTimer);
-        loadWaiting = [];
-        loadWaitingSince = 0;
-        scanRoots = [];
+        stopView();
         var containers = document.querySelectorAll('.release-badges');
         for (var i = 0; i < containers.length; i++) {
             containers[i].__releaseBadgesSig = null;
@@ -804,14 +851,13 @@
             cards[j].classList.remove('release-badges-has-rating', 'release-badges-has-quality');
         }
         if (!setting('release_badges_enabled', true)) return;
-        scheduleScan(document.body);
-        try {
-            var activity = Lampa.Activity && Lampa.Activity.active && Lampa.Activity.active();
-            if (activity && activity.component === 'full') {
-                showFull(activity.card || activity.movie, activity.activity &&
-                    activity.activity.render && activity.activity.render());
-            }
-        } catch (e) {}
+        startView(currentActivity());
+    }
+
+    function settingsMenuPosition() {
+        var item = document.querySelector && document.querySelector('[data-name="release_badges_open"]');
+        return item && item.parentNode ? Math.max(0,
+            Array.prototype.indexOf.call(item.parentNode.querySelectorAll('.selector'), item)) : 0;
     }
 
     function addSettings() {
@@ -819,17 +865,17 @@
             !Lampa.Settings || !Lampa.Settings.create ||
             !Lampa.Template || !Lampa.Template.add) return;
         var component = 'release_badges';
-        var menuItem = null;
         Lampa.Template.add('settings_' + component, '<div></div>');
         Lampa.SettingsApi.addParam({ component: 'interface',
             param: { name: 'release_badges_open', type: 'button' },
             field: { name: label('settings_menu') },
             onRender: function (item) {
-                menuItem = item;
                 item.find('.settings-param__name').text(label('settings_menu'));
             },
             onChange: function () {
-                var index = menuItem ? menuItem.parent().find('.selector').index(menuItem) : 0;
+                // onRender runs before Lampa inserts the item. Read its position when opened,
+                // without retaining the settings DOM after closing the menu.
+                var index = settingsMenuPosition();
                 Lampa.Settings.create(component, {
                     onBack: function () {
                         Lampa.Settings.create('interface', { last_index: Math.max(0, index) });
@@ -884,21 +930,16 @@
         document.head.appendChild(style);
     }
 
-    function bindActivityHints() {
-        var handler = function () { markActivity(); };
-        try {
-            document.addEventListener('keydown', handler, { passive: true, capture: true });
-            document.addEventListener('wheel', handler, { passive: true, capture: true });
-            document.addEventListener('touchmove', handler, { passive: true, capture: true });
-            document.addEventListener('pointermove', handler, { passive: true, capture: true });
-        } catch (e) {
-            document.addEventListener('keydown', handler, true);
-        }
-        if (Lampa.Listener && Lampa.Listener.follow) {
-            try {
-                Lampa.Listener.follow('activity', function () { markActivity(); });
-            } catch (e2) {}
-        }
+    var inputBound = false;
+    function bindInput(enabled) {
+        if (inputBound === enabled) return;
+        inputBound = enabled;
+        ['keydown', 'wheel', 'touchmove', 'scroll'].forEach(function (name) {
+            if (enabled) {
+                try { document.addEventListener(name, markActivity, { passive: true, capture: true }); }
+                catch (e) { document.addEventListener(name, markActivity, true); }
+            } else if (document.removeEventListener) document.removeEventListener(name, markActivity, true);
+        });
     }
 
     function init() {
@@ -908,32 +949,28 @@
         window.__lampaReleaseBadgesV1 = true;
         addStyle();
         addSettings();
-        bindActivityHints();
-        if (window.IntersectionObserver) {
-            visibilityObserver = new IntersectionObserver(function (entries) {
-                for (var i = 0; i < entries.length; i++) {
-                    var entry = entries[i];
-                    if (entry.isIntersecting) {
-                        visibilityObserver.unobserve(entry.target);
-                        scheduleLoad(entry.target);
-                    }
-                }
-            }, { rootMargin: '40px', threshold: 0.01 });
-        }
         cardObserver = new MutationObserver(function (mutations) {
-            markActivity();
             for (var m = 0; m < mutations.length; m++) {
                 var mutation = mutations[m];
-                for (var i = 0; i < mutation.addedNodes.length; i++) {
-                    if (mutation.addedNodes[i].nodeType === 1) {
-                        scheduleScan(mutation.addedNodes[i]);
-                    }
+                if (mutation.target && mutation.target.closest && mutation.target.closest('.release-badges')) continue;
+                var changed = Array.prototype.slice.call(mutation.addedNodes || []).concat(
+                    Array.prototype.slice.call(mutation.removedNodes || []));
+                for (var i = 0; i < changed.length; i++) {
+                    var node = changed[i];
+                    if (node.nodeType !== 1 || (node.classList && node.classList.contains('release-badges'))) continue;
+                    scheduleScan(16);
+                    return;
                 }
             }
         });
-        cardObserver.observe(document.getElementById('app') || document.body,
-            { childList: true, subtree: true });
         if (Lampa.Listener && Lampa.Listener.follow) {
+            Lampa.Listener.follow('activity', function (event) {
+                if (!event) return;
+                if (event.type === 'init') stopView();
+                else if (event.type === 'start') startView(event.object);
+                else if (event.type === 'destroy' && viewRoot &&
+                    (activityRoot(event.object) === viewRoot || !connected(viewRoot))) stopView();
+            });
             Lampa.Listener.follow('full', function (event) {
                 if (event.type !== 'complite') return;
                 var movie = event.data && event.data.movie;
@@ -943,6 +980,10 @@
         }
         if (Lampa.Storage.listener && Lampa.Storage.listener.follow) {
             Lampa.Storage.listener.follow('change', function (event) {
+                if (event && /^release_badges_(?:enabled|quality|hdr|ua|ru|en|rating)$/.test(event.name)) {
+                    refresh();
+                    return;
+                }
                 if (event && event.name === 'language') {
                     clearTimeout(settingsRefreshTimer);
                     settingsRefreshTimer = setTimeout(refresh, 400);
@@ -951,16 +992,32 @@
                 if (!event || !/^(?:parser_use|parser_torrent_type|parser_use_link|parse_lang|torrserver_use_link|jackett_(?:url|key)(?:_two)?|prowlarr_(?:url|key)(?:_two)?|torrserver_url(?:_two)?)$/.test(event.name)) return;
                 sourceVersion++;
                 cache = {};
-                queue = [];
-                pending = {};
-                active = 0;
+                stopView();
                 clearDiskCache();
                 clearTimeout(settingsRefreshTimer);
                 settingsRefreshTimer = setTimeout(refresh, 400);
             });
         }
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) { stopView(); flushDiskSave(); }
+            else startView(currentActivity());
+        });
+        if (window.addEventListener) window.addEventListener('pagehide', function () {
+            stopView();
+            flushDiskSave();
+        });
         window.LAMPA_RELEASE_BADGES_REFRESH = refresh;
-        scheduleScan(document.body);
+        // Counts only: no movie titles, parser addresses, or credentials in diagnostics.
+        window.LAMPA_RELEASE_BADGES_STATS = function () {
+            var now = Date.now();
+            return { queued: queue.length, pending: Object.keys(pending).length,
+                active: activeTask && activeTask.inFlight ? 1 : 0,
+                stalled: Boolean(activeTask && activeTask.stalled),
+                observing: Boolean(viewRoot), observedCards: 0,
+                memoryEntries: Object.keys(cache).length,
+                requestsLastMinute: requestStarts.filter(function (time) { return time > now - REQUEST_WINDOW_MS; }).length };
+        };
+        startView(currentActivity());
     }
 
     function waitForLampa(attempt) {
