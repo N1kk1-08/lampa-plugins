@@ -1,7 +1,7 @@
-/* MyLampa skin 0.2.0 — optional theme and editable native-menu shortcuts. */
+/* MyLampa skin 0.3.0 — optional theme and editable native-menu shortcuts. */
 (function (global) {
     'use strict';
-    var VERSION = '0.2.0';
+    var VERSION = '0.3.0';
     var COMPONENT = 'mylampa_skin';
     var BUTTONS_KEY = 'mylampa_skin_top_buttons_v1';
     var PREFIX = 'mylampa_skin_';
@@ -109,7 +109,37 @@
         return minutes >= 60 ? Math.floor(minutes / 60) + ' год ' + minutes % 60 + ' хв' : minutes + ' хв';
     }
 
-    var core = { featuredQuery: featuredQuery, resumeState: resumeState, minuteLabel: minuteLabel, normalizeButtons: normalizeButtons, editButtons: editButtons, safeLink: safeLink, defaults: copy(DEFAULT_BUTTONS) };
+
+    function metricNumber(value) {
+        if (typeof value === 'number') return isFinite(value) && value >= 0 ? value : null;
+        if (typeof value !== 'string' || !/^\s*\d+(?:[.,]\d+)?\s*$/.test(value)) return null;
+        return Number(value.trim().replace(',', '.'));
+    }
+    function ratingTone(value) {
+        var number = metricNumber(value);
+        return number === null || number === 0 || number > 10 ? 'neutral' : number >= 7 ? 'good' : number >= 5 ? 'warning' : 'bad';
+    }
+    function ageTone(value) {
+        var text = String(value || '').toUpperCase();
+        var match = text.match(/\d+/);
+        if (match) { var age = Number(match[0]); return age >= 18 ? 'bad' : age >= 16 ? 'orange' : age >= 12 ? 'warning' : 'good'; }
+        return /TV-MA/.test(text) ? 'bad' : /^R$/.test(text) ? 'orange' : /^(G|PG|TV-G|TV-Y)$/.test(text) ? 'good' : 'neutral';
+    }
+    function statusTone(value) {
+        var text = String(value || '').toLowerCase();
+        return /cancel|скас|отмен/.test(text) ? 'bad' : /ended|released|заверш|закін|випущ/.test(text) ? 'good' : /returning|ongoing|онго|трива|продовж/.test(text) ? 'warning' : 'info';
+    }
+    function torrentTones(data) {
+        data = data || {};
+        var seeds = metricNumber(data.seeds);
+        var bitrate = metricNumber(data.bitrate);
+        var speed = metricNumber(data.speedMbps);
+        var level = seeds === null ? 'neutral' : seeds >= 20 ? 'good' : seeds >= 5 ? 'warning' : 'bad';
+        if (speed !== null) level = bitrate > 0 ? speed >= bitrate * 1.5 ? 'good' : speed >= bitrate ? 'warning' : 'bad' : speed >= 20 ? 'good' : speed >= 5 ? 'warning' : 'bad';
+        return { torrent: level, bitrate: bitrate === null || bitrate === 0 ? 'neutral' : bitrate >= 15 ? 'good' : bitrate >= 5 ? 'warning' : 'bad', measured: speed !== null };
+    }
+
+    var core = { metricNumber: metricNumber, ratingTone: ratingTone, ageTone: ageTone, statusTone: statusTone, torrentTones: torrentTones, featuredQuery: featuredQuery, resumeState: resumeState, minuteLabel: minuteLabel, normalizeButtons: normalizeButtons, editButtons: editButtons, safeLink: safeLink, defaults: copy(DEFAULT_BUTTONS) };
     if (typeof module !== 'undefined' && module.exports) module.exports = core;
     if (!global || !global.document) return;
     if (global.MyLampaSkin) return;
@@ -126,17 +156,13 @@
     var editorController = 'settings_component';
     var palettes = { blue: '#78a0ff', sky: '#70c5ff', cyan: '#56d5dc', mint: '#91cdbb', emerald: '#67d6a0', lime: '#badb74', amber: '#deb789', gold: '#f1ce73', orange: '#ffb06b', coral: '#ff908c', red: '#ff7c84', pink: '#eda0d4', violet: '#b6a2f5', white: '#dce9f7' };
     var colorOptions = { blue: 'Синій', sky: 'Блакитний', cyan: 'Бірюзовий', mint: "М'ятний", emerald: 'Смарагдовий', lime: 'Лаймовий', amber: 'Теплий', gold: 'Золотий', orange: 'Помаранчевий', coral: 'Кораловий', red: 'Червоний', pink: 'Рожевий', violet: 'Фіолетовий', white: 'Крижаний білий' };
-    var highlightColors = { accent: 'Як колір акценту' };
-    Object.keys(colorOptions).forEach(function (key) { highlightColors[key] = colorOptions[key]; });
     function colorTint(color, alpha) {
         return 'rgba(' + parseInt(color.slice(1, 3), 16) + ',' + parseInt(color.slice(3, 5), 16) + ',' + parseInt(color.slice(5, 7), 16) + ',' + alpha + ')';
     }
     var definitions = [
         ['enabled', 'trigger', true, 'Увімкнути MyLampa skin'],
-        ['accent', 'select', 'blue', 'Акцентний колір', colorOptions],
-        ['card_color', 'select', 'accent', 'Колір підсвітки карток', highlightColors],
+        ['accent', 'select', 'blue', 'Колір теми', colorOptions],
         ['card_focus', 'select', 'outline_glow', 'Підсвітка карток', { outline: 'Рамка', glow: "М'яке сяйво", outline_glow: 'Рамка та сяйво', double: 'Подвійна рамка' }],
-        ['menu_color', 'select', 'accent', 'Колір підсвітки меню', highlightColors],
         ['menu_focus', 'select', 'fill', 'Підсвітка меню та кнопок', { fill: 'Заливка', outline: 'Рамка', glow: 'Сяйво', stripe: 'Акцентна смуга' }],
         ['radius', 'select', '14', 'Заокруглення карток', { '0': 'Без заокруглення', '8': 'Невелике', '14': 'Помірне', '20': 'Велике' }],
         ['sidebar', 'select', 'rail', 'Бічне меню', { rail: 'Іконки, підписи при відкритті', expanded: 'Іконки та підписи' }],
@@ -145,7 +171,10 @@
         ['hero_interval', 'select', '15', 'Зміна банера', { '0': 'Лише вручну', '15': 'Кожні 15 секунд', '30': 'Кожні 30 секунд' }],
         ['resume', 'trigger', true, 'Продовжити перегляд'],
         ['clock', 'trigger', true, 'Годинник, дата й день тижня'],
-        ['button_icons', 'trigger', true, 'Іконки верхніх кнопок']
+        ['button_icons', 'trigger', true, 'Іконки верхніх кнопок'],
+        ['colored_buttons', 'trigger', true, 'Кольорові кнопки', null, 'Іконки онлайн, торентів і трейлерів.'],
+        ['colored_metadata', 'trigger', true, 'Кольорові рейтинги, вік та інформація', null, 'Рейтинг, вікове обмеження, статус, серії, тривалість та жанри — за значенням.'],
+        ['torrent_colors', 'trigger', true, 'Кольорова рамка блоку торента і бітрета', null, 'Роздача: за сідами, під час перегляду — за виміряною швидкістю. Бітрейт — за обсягом даних за секунду.']
     ];
     function setting(name, fallback) {
         if (typeof fallback === 'boolean') {
@@ -284,10 +313,13 @@
         body.toggleClass('mls-wide-sidebar', enabled && setting('sidebar', 'rail') === 'expanded');
         body.toggleClass('mls-no-clock', enabled && !setting('clock', true));
         body.toggleClass('mls-no-button-icons', enabled && !setting('button_icons', true));
+        body.toggleClass('mls-colored-buttons', enabled && setting('colored_buttons', true));
+        body.toggleClass('mls-colored-metadata', enabled && setting('colored_metadata', true));
+        body.toggleClass('mls-torrent-colors', enabled && setting('torrent_colors', true));
         var accent = palettes[setting('accent', 'blue')] || palettes.blue;
         var radius = ['0', '8', '14', '20'].indexOf(String(setting('radius', '14'))) >= 0 ? setting('radius', '14') : '14';
-        var cardColor = palettes[setting('card_color', 'accent')] || accent;
-        var menuColor = palettes[setting('menu_color', 'accent')] || accent;
+        var cardColor = accent;
+        var menuColor = accent;
         var cardFocus = setting('card_focus', 'outline_glow');
         var menuFocus = setting('menu_focus', 'fill');
         var cardShadows = {
@@ -317,6 +349,7 @@
         renderNavigation();
         resizeHeader();
         syncHome(false);
+        if (visualObserver) scheduleVisuals();
     }
     function returnToSettings() { Lampa.Controller.toggle(editorController); }
     function showPicker(title, items, onSelect, onBack) {
@@ -744,12 +777,162 @@
         homeSyncTimer = setTimeout(function () { syncHome(true); }, 180);
     }
 
+
+    var visualObserver;
+    var visualTimer;
+    var playingTorrent;
+    var semanticColors = { good: '#77df97', warning: '#f5d16e', bad: '#ff818c', orange: '#ffad68', info: '#78c5f5', genre: '#b39bea', neutral: '#adbacb' };
+    function buttonHash(button) { return Lampa.Utils.hash(button.clone().removeClass('focus').prop('outerHTML')); }
+    function actionKind(button) {
+        var classes = button.attr('class') || '';
+        var text = button.text().trim().toLowerCase();
+        if (/view--trailer/.test(classes) || /трейлер|trailer/.test(text)) return 'trailer';
+        if (/view--torrent/.test(classes) || /торент|торрент|torrent/.test(text)) return 'torrent';
+        if (/view--online|button--online/.test(classes) || /онлайн|online/.test(text)) {
+            return /(?:^|\W)(ua|uk)(?:\W|$)|україн|украин/.test(text + ' ' + (button.attr('data-subtitle') || '').toLowerCase()) || /view--online[-_]ua|view--bandera-online/.test(classes) ? 'online-ua' : 'online';
+        }
+        if (button.hasClass('button--play')) return 'play';
+        return '';
+    }
+    function actionIcon(kind) {
+        var play = '<path d="M4 2l11 10L4 22z" fill="currentColor"/><path d="M5.8 2.8L20 10.9c1.2.7 1.2 1.5 0 2.2L5.8 21.2 15.6 12z" fill="currentColor" opacity=".6"/>';
+        if (kind === 'online-ua') return '<path d="M4 2l11 10H4z" fill="#35a8ff"/><path d="M4 12h11L4 22z" fill="#ffdc49"/><path d="M6 3l14 8-5 1z" fill="#35a8ff"/><path d="M15 12l5 1-14 8z" fill="#ffdc49"/>';
+        if (kind === 'torrent') return '<circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M7 6h3v7c0 1.3.6 2 1.6 2 1.4 0 2.4-1.1 2.4-2.7V6h3v10h-3v-1.1c-.7 1-1.6 1.5-2.8 1.5-.6 0-1.2-.2-1.7-.6V20H7z" fill="#0b1d14"/>';
+        if (kind === 'trailer') return '<rect x="1" y="4" width="22" height="16" rx="5" fill="currentColor"/><path d="M10 8v8l7-4z" fill="#251116"/>';
+        return play;
+    }
+    function colorAction(button, enabled) {
+        var owned = button.find('svg[data-mls-original-icon]').first();
+        var kind = actionKind(button);
+        if (enabled && kind && owned.length && owned.attr('data-mls-action') === kind) return;
+        if (!enabled && !owned.length || enabled && !kind) return;
+        var before = buttonHash(button);
+        var prior = Lampa.Storage.get('full_btn_priority', '') + '';
+        if (owned.length) owned.replaceWith($(owned.attr('data-mls-original-icon')));
+        if (enabled && kind) {
+            var icon = button.find('svg').first();
+            if (!icon.length) return;
+            var original = icon.prop('outerHTML');
+            var replacement = $('<svg viewBox="0 0 24 24" aria-hidden="true"></svg>').html(actionIcon(kind));
+            replacement.attr('data-mls-original-icon', original).attr('data-mls-action', kind);
+            icon.replaceWith(replacement);
+        }
+        if (prior && prior === String(before)) Lampa.Storage.set('full_btn_priority', buttonHash(button));
+    }
+    function tone(node, value) {
+        var color = semanticColors[value] || semanticColors.neutral;
+        node.attr('data-mls-tone', value);
+        node[0].style.setProperty('--mls-tone', color);
+        node[0].style.setProperty('--mls-tone-soft', colorTint(color, .18));
+    }
+    function numberFromLabel(text) {
+        var match = String(text || '').match(/\d+(?:[.,]\d+)?/);
+        return match ? metricNumber(match[0]) : null;
+    }
+    function infoTone(text) {
+        return /наступ|следующ|next|дн[іияе]|days/i.test(text) ? 'orange' : /сезон|season|тривал|длитель|хв|min|год|час|quality|якість|качество|\d+:\d+/i.test(text) ? 'info' : /сері[йїя]|серии|episodes/i.test(text) ? 'good' : 'genre';
+    }
+    function styleMetadata() {
+        $('.full-start__rate').each(function () { var node = $(this); tone(node, ratingTone(numberFromLabel(node.children().first().text()))); });
+        $('.card__vote,.release-badges__badge--rating').each(function () { var node = $(this); tone(node, ratingTone(numberFromLabel(node.text()))); });
+        $('.full-start__pg').each(function () { var node = $(this); tone(node, ageTone(node.text())); });
+        $('.full-start__status').each(function () {
+            var node = $(this);
+            var root = node.closest('.full-start-new,.full-start')[0];
+            tone(node, statusTone(root && root._mlsMovie && root._mlsMovie.status || node.text()));
+        });
+        // Some plugins wrap chips in several flex containers. Color only the leaves.
+        $('.full-start-new__details,.full-start__tags,.full-start-new__tags').each(function () {
+            var area = $(this);
+            area.find('[data-mls-info-chip]').filter(function () { return this.children.length > 0; }).removeAttr('data-mls-info-chip data-mls-tone');
+            area.find('span,div,a').filter(function () {
+                return this.children.length === 0 && !$(this).hasClass('full-start-new__split') && $(this).text().trim();
+            }).each(function () {
+                var node = $(this);
+                node.attr('data-mls-info-chip', 'true');
+                tone(node, infoTone(node.text()));
+            });
+        });
+    }
+    function readTorrent(node) {
+        var data = node[0]._mlsTorrentData || {};
+        var seeds = metricNumber(typeof data.Seeders !== 'undefined' ? data.Seeders : data.seeds);
+        if (seeds === null) seeds = numberFromLabel(node.find('.torrent-item__seeds span').text());
+        var bitrate = metricNumber(data.bitrate);
+        if (bitrate === null || bitrate === 0) bitrate = numberFromLabel(node.find('.torrent-item__bitrate span').text());
+        return { seeds: seeds, bitrate: bitrate, speedMbps: node[0]._mlsDownloadSpeedMbps };
+    }
+    function styleTorrent(node) {
+        if (!node.length) return;
+        var levels = torrentTones(readTorrent(node));
+        var color = semanticColors[levels.torrent];
+        node.attr('data-mls-torrent-tone', levels.torrent).attr('data-mls-torrent-measured', levels.measured ? 'true' : 'false');
+        node[0].style.setProperty('--mls-torrent-color', color);
+        node[0].style.setProperty('--mls-torrent-soft', colorTint(color, .18));
+        var bitrate = node.find('.torrent-item__bitrate');
+        if (bitrate.length) tone(bitrate, levels.bitrate);
+        var seeds = node.find('.torrent-item__seeds');
+        if (seeds.length) tone(seeds, torrentTones({ seeds: readTorrent(node).seeds }).torrent);
+    }
+    function refreshVisuals() {
+        if (!ready) return;
+        var colored = setting('enabled', true) && setting('colored_buttons', true);
+        $('.full-start__button').each(function () { colorAction($(this), colored); });
+        styleMetadata();
+        $('.torrent-item').each(function () { styleTorrent($(this)); });
+    }
+    function scheduleVisuals() {
+        clearTimeout(visualTimer);
+        visualTimer = setTimeout(refreshVisuals, 60);
+    }
+    function initVisuals() {
+        var relevant = '.full-start-new,.full-start,.torrent-item,.release-badges__badge--rating,.card__vote';
+        visualObserver = new MutationObserver(function (mutations) {
+            for (var i = 0; i < mutations.length; i++) {
+                var target = mutations[i].target.nodeType === 1 ? mutations[i].target : mutations[i].target.parentElement;
+                if (target && $(target).closest(relevant).length) { scheduleVisuals(); return; }
+                for (var j = 0; j < mutations[i].addedNodes.length; j++) {
+                    var node = mutations[i].addedNodes[j];
+                    if (node.nodeType === 1 && (node.matches(relevant) || node.querySelector(relevant))) { scheduleVisuals(); return; }
+                }
+            }
+        });
+        visualObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+        Lampa.Listener.follow('full', function (event) {
+            var card = event.data && event.data.movie || event.props && event.props.get && event.props.get('movie') || event.object && event.object.card;
+            var root = event.item && event.item.render ? $(event.item.render(true)) : $(event.render || event.body || []);
+            root.find('.full-start-new,.full-start').add(root.filter('.full-start-new,.full-start')).each(function () { if (card) this._mlsMovie = card; });
+            scheduleVisuals();
+        });
+        Lampa.Listener.follow('torrent', function (event) {
+            if (!event.item) return;
+            var node = $(event.item);
+            if (!node.is('.torrent-item')) node = node.closest('.torrent-item');
+            if (!node.length) return;
+            if (event.element) node[0]._mlsTorrentData = event.element;
+            if (event.type === 'onenter') playingTorrent = node;
+            styleTorrent(node);
+        });
+        if (Lampa.PlayerInfo && Lampa.PlayerInfo.listener) Lampa.PlayerInfo.listener.follow('stat', function (event) {
+            var stats = event.data && (event.data.Torrent || event.data);
+            if (playingTorrent && stats && typeof stats.download_speed !== 'undefined') {
+                var speed = metricNumber(stats.download_speed);
+                playingTorrent[0]._mlsDownloadSpeedMbps = speed === null ? undefined : speed * 8 / 1000000;
+                styleTorrent(playingTorrent);
+            }
+        });
+        if (Lampa.Player && Lampa.Player.listener) Lampa.Player.listener.follow('destroy', function () {
+            if (playingTorrent) { delete playingTorrent[0]._mlsDownloadSpeedMbps; styleTorrent(playingTorrent); playingTorrent = null; }
+        });
+        refreshVisuals();
+    }
+
     function addSettings() {
         Lampa.SettingsApi.addComponent({ component: COMPONENT, name: 'MyLampa skin', icon: Lampa.Template.string('icon_settings'), after: 'interface' });
         definitions.forEach(function (definition) {
             var param = { name: PREFIX + definition[0], type: definition[1], default: definition[2] };
             if (definition[4]) param.values = definition[4];
-            Lampa.SettingsApi.addParam({ component: COMPONENT, param: param, field: { name: definition[3] }, onChange: function () { setTimeout(applyAppearance, 0); } });
+            Lampa.SettingsApi.addParam({ component: COMPONENT, param: param, field: { name: definition[3], description: definition[5] || '' }, onChange: function () { setTimeout(applyAppearance, 0); } });
         });
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { type: 'title' }, field: { name: 'Верхня панель' } });
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: PREFIX + 'edit_buttons', type: 'button' }, field: { name: 'Налаштувати верхні кнопки', description: 'Пункти меню та плагінів, власні назви, іконки й порядок.' }, onChange: function () { openEditor(true); } });
@@ -811,6 +994,17 @@
             'body.mls-enabled .mls-top-button.mls-current{background:var(--mls-menu-soft);box-shadow:inset 0 -2px 0 var(--mls-menu-color)}',
             'body.mls-enabled .mls-top-button.focus,body.mls-enabled .mls-top-button.hover,body.mls-enabled .head__action.focus,body.mls-enabled .menu__item.focus,body.mls-enabled .menu__item.hover,body.mls-enabled .settings-param.focus,body.mls-enabled .selectbox-item.focus,body.mls-enabled .mls-hero-button.focus,body.mls-enabled .mls-hero-prev.focus,body.mls-enabled .mls-hero-next.focus{background:var(--mls-menu-bg)!important;color:var(--mls-menu-text)!important;box-shadow:var(--mls-menu-shadow)!important;border-color:var(--mls-menu-color)!important}',
             'body.mls-enabled[data-mls-menu-focus="stripe"] .mls-top-button.focus,body.mls-enabled[data-mls-menu-focus="stripe"] .mls-top-button.hover,body.mls-enabled[data-mls-menu-focus="stripe"] .head__action.focus,body.mls-enabled[data-mls-menu-focus="stripe"] .mls-hero-button.focus{box-shadow:inset 0 -3px 0 var(--mls-menu-color)!important}',
+
+            'body.mls-enabled{--mls-good:#77df97;--mls-bad:#ff818c}',
+            'body.mls-enabled .full-start__button.focus,body.mls-enabled .full-start__button.hover,body.mls-enabled .simple-button.focus,body.mls-enabled .filter__item.focus,body.mls-enabled .torrent-file.focus{background:var(--mls-menu-bg)!important;color:var(--mls-menu-text)!important;box-shadow:var(--mls-menu-shadow)!important;border-color:var(--mls-accent)!important}body.mls-enabled .full-start__button.button--book.active{color:var(--mls-accent)}',
+            'body.mls-enabled svg[data-mls-action="play"],body.mls-enabled svg[data-mls-action="online"]{color:var(--mls-accent)!important}body.mls-enabled svg[data-mls-action="torrent"]{color:var(--mls-good)!important}body.mls-enabled svg[data-mls-action="trailer"]{color:#ff514c!important}',
+            'body.mls-enabled.mls-colored-metadata .full-start__rate[data-mls-tone],body.mls-enabled.mls-colored-metadata .card__vote[data-mls-tone],body.mls-enabled.mls-colored-metadata .release-badges__badge--rating[data-mls-tone]{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border-color:var(--mls-tone)!important}',
+            'body.mls-enabled.mls-colored-metadata .full-start__pg[data-mls-tone],body.mls-enabled.mls-colored-metadata .full-start__status[data-mls-tone],body.mls-enabled.mls-colored-metadata [data-mls-info-chip]{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border:1px solid var(--mls-tone)!important;border-radius:.3em;padding:.25em .55em;line-height:1.25}',
+            'body.mls-enabled.mls-colored-metadata .full-start-new__details{display:flex;flex-wrap:wrap;gap:.4em;align-items:center}body.mls-enabled.mls-colored-metadata .full-start-new__details .full-start-new__split{display:none}',
+            'body.mls-enabled .activity .explorer.layer--width,body.mls-enabled .activity .files.layer--width{width:100%!important}body.mls-enabled .explorer__files{min-width:0}body.mls-enabled .torrent-item__details{flex-wrap:wrap;row-gap:.45em}',
+            'body.mls-enabled .torrent-item{border:1px solid #33435b;border-radius:var(--mls-radius);padding:1em;background:rgba(17,27,43,.7)}body.mls-enabled .torrent-item.focus::after{border-color:var(--mls-accent)!important;border-radius:calc(var(--mls-radius) + .5em)}',
+            'body.mls-enabled.mls-torrent-colors .torrent-item[data-mls-torrent-tone]{border-color:var(--mls-torrent-color)!important;box-shadow:inset 0 0 0 1px var(--mls-torrent-soft)}body.mls-enabled.mls-torrent-colors .torrent-item[data-mls-torrent-tone].focus::after{border-color:var(--mls-torrent-color)!important}',
+            'body.mls-enabled.mls-torrent-colors .torrent-item__bitrate[data-mls-tone]>span,body.mls-enabled.mls-torrent-colors .torrent-item__seeds[data-mls-tone]>span{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border:1px solid var(--mls-tone)!important;border-radius:.3em;padding:.1em .35em}',
             '.mls-home-row{display:none}body.mls-enabled .mls-home-row{display:block}',
             'body.mls-enabled .mls-main-page>.scroll>.scroll__content{padding-top:0}',
             'body.mls-enabled .mls-hero{position:relative;min-height:14.1em;overflow:hidden;margin-bottom:.6em;background:#0c111b}',
@@ -861,6 +1055,7 @@
         addStyle();
         addSettings();
         registerHome();
+        initVisuals();
         applyAppearance();
         menuObserver = new MutationObserver(function (mutations) {
             for (var i = 0; i < mutations.length; i++) {
