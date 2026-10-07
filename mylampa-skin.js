@@ -1,7 +1,7 @@
-/* MyLampa skin 0.4.2 — optional theme and editable native-menu shortcuts. */
+/* MyLampa skin 0.4.3 — optional theme and editable native-menu shortcuts. */
 (function (global) {
     'use strict';
-    var VERSION = '0.4.2';
+    var VERSION = '0.4.3';
     var COMPONENT = 'mylampa_skin';
     var BUTTONS_KEY = 'mylampa_skin_top_buttons_v1';
     var PREFIX = 'mylampa_skin_';
@@ -196,6 +196,8 @@
     }
     var definitions = [
         ['enabled', 'trigger', true, 'Увімкнути MyLampa skin'],
+        ['interface_scale', 'select', '100', 'Розмір інтерфейсу', { '90': 'Компактний — 90%', '100': 'Стандартний — 100%', '110': 'Збільшений — 110%', '125': 'Великий для ТВ — 125%', '150': 'Дуже великий для ТВ — 150%' }, 'Збільшує текст, картки, кнопки й меню. Для великого телевізора спробуйте 125% або 150%.'],
+        ['card_header', 'trigger', true, 'Виїзна верхня панель у картці', null, 'У картці релізу панель прихована. З’являється при переході пультом угору до панелі, прокручуванні вгору або наведенні на верхній край екрана.'],
         ['theme', 'select', 'cinema', 'Стиль теми', themeOptions, 'Фон, прозорість панелей, форма кнопок і підсвітка. Вибір стилю застосовує його оформлення; нижче можна змінити деталі.'],
         ['accent', 'select', 'theme', 'Колір теми', colorOptions],
         ['card_focus', 'select', 'theme', 'Підсвітка карток', { theme: 'За темою', outline: 'Рамка', glow: "М'яке сяйво", outline_glow: 'Рамка та сяйво', double: 'Подвійна рамка' }],
@@ -282,10 +284,90 @@
         if (object.component === 'favorite') return object.type === 'history' ? 'action:history' : 'action:favorite';
         return 'action:' + (object.component || '');
     }
+    var headerPeek = false;
+    var headerPeekTimer;
+    var currentHeaderActivity;
+    var layoutEnabled;
+    function applyInterfaceSize() {
+        if (!ready) return;
+        // Lampa keeps its responsive base font inline. Scale it without replacing the native setting.
+        var nativeSize = parseFloat(document.body.style.fontSize);
+        if (!(nativeSize > 0)) nativeSize = 16;
+        var choice = String(setting('interface_scale', '100'));
+        var scale = ['90', '100', '110', '125', '150'].indexOf(choice) >= 0 ? Number(choice) / 100 : 1;
+        var rootStyle = document.documentElement.style;
+        var enabled = setting('enabled', true);
+        var changed = layoutEnabled !== enabled || rootStyle.getPropertyValue('--mls-native-size') !== nativeSize + 'px' || rootStyle.getPropertyValue('--mls-scale') !== String(scale);
+        layoutEnabled = enabled;
+        rootStyle.setProperty('--mls-native-size', nativeSize + 'px');
+        rootStyle.setProperty('--mls-scale', String(scale));
+        if (changed && Lampa.Layer && Lampa.Layer.update) Lampa.Layer.update();
+        resizeHeader();
+    }
     function resizeHeader() {
         if (!ready || !setting('enabled', true)) return;
         var head = Lampa.Head.render()[0];
-        if (head) document.documentElement.style.setProperty('--mls-head-height', Math.ceil(head.getBoundingClientRect().height) + 'px');
+        var rootStyle = document.documentElement.style;
+        if (head) rootStyle.setProperty('--mls-head-height', Math.ceil(head.getBoundingClientRect().height) + 'px');
+        var navigation = document.querySelector('.navigation-bar');
+        var bottomHeight = navigation && !document.body.classList.contains('orientation--landscape') ? navigation.getBoundingClientRect().height : 0;
+        rootStyle.setProperty('--mls-card-height', Math.max(0, global.innerHeight - bottomHeight) + 'px');
+    }
+    function floatingCardHeader() {
+        var activity = Lampa.Activity.active();
+        var object = activity && (activity.object || activity);
+        return ready && setting('enabled', true) && setting('card_header', true) && object && object.component === 'full';
+    }
+    function syncCardHeader() {
+        if (!ready) return;
+        var floating = floatingCardHeader();
+        var activity = Lampa.Activity.active();
+        if (activity !== currentHeaderActivity || !floating) {
+            clearTimeout(headerPeekTimer);
+            headerPeek = false;
+            currentHeaderActivity = activity;
+        }
+        var name = Lampa.Controller.enabled().name;
+        var inContent = ['content', 'full_start', 'items_line', 'mls_home'].indexOf(name) >= 0;
+        var hidden = floating && inContent && !headerPeek;
+        var body = $('body');
+        var changed = body.hasClass('mls-card-header') !== !!floating || body.hasClass('mls-head-hidden') !== !!hidden;
+        body.toggleClass('mls-card-header', !!floating).toggleClass('mls-head-hidden', !!hidden);
+        var component = activity && activity.activity && activity.activity.component;
+        if (floating && component && component.scroll && component.scroll.render) $(component.scroll.render(true)).attr('data-mls-card-scroll', 'true');
+        if (changed && Lampa.Layer && Lampa.Layer.update) Lampa.Layer.update();
+        resizeHeader();
+    }
+    function peekCardHeader() {
+        if (!floatingCardHeader()) return;
+        headerPeek = true;
+        clearTimeout(headerPeekTimer);
+        headerPeekTimer = setTimeout(function () {
+            var head = Lampa.Head.render()[0];
+            if (head && head.matches(':hover')) { peekCardHeader(); return; }
+            if (headerPeek && floatingCardHeader() && Lampa.Controller.enabled().name === 'head') Lampa.Controller.toggle('content');
+            headerPeek = false;
+            syncCardHeader();
+        }, 2200);
+        syncCardHeader();
+    }
+    function initInterfaceLayout() {
+        new MutationObserver(applyInterfaceSize).observe(document.body, { attributes: true, attributeFilter: ['style'] });
+        Lampa.Controller.listener.follow('toggle', syncCardHeader);
+        Lampa.Listener.follow('resize_end', function () { applyInterfaceSize(); syncCardHeader(); });
+        document.addEventListener('wheel', function (event) {
+            if (!floatingCardHeader() || !$(event.target).closest('.wrap__content').length) return;
+            if (event.deltaY < 0) peekCardHeader();
+            else if (event.deltaY > 0) { clearTimeout(headerPeekTimer); headerPeek = false; syncCardHeader(); }
+        }, { passive: true });
+        document.addEventListener('mousemove', function (event) { if (event.clientY <= 12) peekCardHeader(); }, { passive: true });
+        document.addEventListener('keydown', function () { headerPeek = false; clearTimeout(headerPeekTimer); setTimeout(syncCardHeader, 0); }, true);
+        Lampa.Head.render().on('mouseleave.mylampaSkin', function () {
+            if (headerPeek && floatingCardHeader() && Lampa.Controller.enabled().name === 'head') Lampa.Controller.toggle('content');
+            headerPeek = false;
+            clearTimeout(headerPeekTimer);
+            syncCardHeader();
+        });
     }
     function updateActive() {
         if (!nav) return;
@@ -431,7 +513,8 @@
         };
         Object.keys(variables).forEach(function (name) { rootStyle.setProperty(name, variables[name]); });
         renderNavigation();
-        resizeHeader();
+        applyInterfaceSize();
+        syncCardHeader();
         syncHome(false);
         if (visualObserver) scheduleVisuals();
     }
@@ -1110,6 +1193,8 @@
         style.id = 'mylampa-skin-style';
         style.textContent = [
             'body.mls-enabled{background:#0c111b!important;color:#eef2fa;--mls-rail:4.5em;--mls-expanded:13.5em}',
+            'body.mls-enabled{font-size:calc(var(--mls-native-size,16px) * var(--mls-scale,1))!important}body.mls-enabled .head{transition:transform .2s ease,opacity .2s ease}body.mls-enabled.mls-head-hidden .head{transform:translate3d(0,-100%,0);opacity:0;pointer-events:none}body.mls-enabled.mls-card-header .wrap__content{padding-top:0!important}body.mls-enabled.mls-head-hidden .wrap__left{padding-top:0!important}body.mls-enabled.mls-card-header .activity--active [data-mls-card-scroll]{height:var(--mls-card-height,100vh)!important}',
+            '@media(prefers-reduced-motion:reduce){body.mls-enabled .head{transition:none!important}}',
             'body.mls-enabled .background{opacity:.12!important}',
             'body.mls-enabled .head{background:#0c111b;border-bottom:1px solid #222c3d}',
             'body.mls-enabled .head__body{min-height:3.5em;padding:.45em 1.2em;gap:.6em}',
@@ -1240,6 +1325,7 @@
         addSettings();
         registerHome();
         initVisuals();
+        initInterfaceLayout();
         applyAppearance();
         menuObserver = new MutationObserver(function (mutations) {
             for (var i = 0; i < mutations.length; i++) {
@@ -1262,7 +1348,7 @@
             else if (event.name === 'source') { featuredCache = {}; syncHome(false); }
             else if (event.name === 'online_watched_last') scheduleHomeSync();
         });
-        Lampa.Listener.follow('activity', function () { setTimeout(updateActive, 0); });
+        Lampa.Listener.follow('activity', function () { setTimeout(function () { updateActive(); syncCardHeader(); }, 0); });
         Lampa.Listener.follow('state:changed', function (event) {
             if (event.target === 'timeline' || event.target === 'favorite' && (['history', 'viewed', 'thrown'].indexOf(event.type) >= 0 || event.reason === 'profile' || event.reason === 'read')) scheduleHomeSync();
         });
