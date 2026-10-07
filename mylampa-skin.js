@@ -1,7 +1,7 @@
-/* MyLampa skin 0.4.3 — optional theme and editable native-menu shortcuts. */
+/* MyLampa skin 0.4.4 — optional theme and editable native-menu shortcuts. */
 (function (global) {
     'use strict';
-    var VERSION = '0.4.3';
+    var VERSION = '0.4.4';
     var COMPONENT = 'mylampa_skin';
     var BUTTONS_KEY = 'mylampa_skin_top_buttons_v1';
     var PREFIX = 'mylampa_skin_';
@@ -210,7 +210,6 @@
         ['resume', 'trigger', true, 'Продовжити перегляд'],
         ['clock', 'trigger', true, 'Годинник, дата й день тижня'],
         ['button_icons', 'trigger', true, 'Іконки верхніх кнопок'],
-        ['colored_buttons', 'trigger', true, 'Кольорові кнопки', null, 'Іконки онлайн, торентів і трейлерів.'],
         ['colored_metadata', 'trigger', true, 'Кольорові рейтинги, вік та інформація', null, 'Дані на сторінці релізу — за значенням. Оцінки на постерах залишаються штатними.'],
         ['torrent_colors', 'trigger', true, 'Кольорова рамка блоку торента і бітрета', null, 'Роздача: за сідами, під час перегляду — за виміряною швидкістю. Бітрейт — за обсягом даних за секунду.']
     ];
@@ -449,7 +448,6 @@
         body.toggleClass('mls-hidden-sidebar', enabled && setting('sidebar', 'rail') === 'hidden');
         body.toggleClass('mls-no-clock', enabled && !setting('clock', true));
         body.toggleClass('mls-no-button-icons', enabled && !setting('button_icons', true));
-        body.toggleClass('mls-colored-buttons', enabled && setting('colored_buttons', true));
         body.toggleClass('mls-colored-metadata', enabled && setting('colored_metadata', true));
         body.toggleClass('mls-torrent-colors', enabled && setting('torrent_colors', true));
         var themeKey = setting('theme', 'cinema');
@@ -955,7 +953,7 @@
     var semanticColors = { good: '#77df97', warning: '#f5d16e', bad: '#ff818c', orange: '#ffad68', info: '#78c5f5', genre: '#b39bea', neutral: '#adbacb' };
     var semanticFills = { good: '#249e61', warning: '#e69b0b', bad: '#bb3b51', orange: '#cb771e', info: '#2d81b2', genre: '#594296', neutral: '#4d5c70' };
     function buttonHash(button) { return Lampa.Utils.hash(button.clone().removeClass('focus').prop('outerHTML')); }
-    function actionKind(button) {
+    function legacyActionKind(button) {
         var classes = button.attr('class') || '';
         var text = button.text().trim().toLowerCase();
         if (/view--trailer/.test(classes) || /трейлер|trailer/.test(text)) return 'trailer';
@@ -966,30 +964,34 @@
         if (button.hasClass('button--play')) return 'play';
         return '';
     }
-    function actionIcon(kind) {
+    function legacyActionIcon(kind) {
         var play = '<path d="M4 2l11 10L4 22z" fill="currentColor"/><path d="M5.8 2.8L20 10.9c1.2.7 1.2 1.5 0 2.2L5.8 21.2 15.6 12z" fill="currentColor" opacity=".6"/>';
         if (kind === 'online-ua') return '<path d="M4 2l11 10H4z" fill="#35a8ff"/><path d="M4 12h11L4 22z" fill="#ffdc49"/><path d="M6 3l14 8-5 1z" fill="#35a8ff"/><path d="M15 12l5 1-14 8z" fill="#ffdc49"/>';
         if (kind === 'torrent') return '<circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M7 6h3v7c0 1.3.6 2 1.6 2 1.4 0 2.4-1.1 2.4-2.7V6h3v10h-3v-1.1c-.7 1-1.6 1.5-2.8 1.5-.6 0-1.2-.2-1.7-.6V20H7z" fill="#0b1d14"/>';
         if (kind === 'trailer') return '<rect x="1" y="4" width="22" height="16" rx="5" fill="currentColor"/><path d="M10 8v8l7-4z" fill="#251116"/>';
         return play;
     }
-    function colorAction(button, enabled) {
-        var owned = button.find('svg[data-mls-original-icon]').first();
-        var kind = actionKind(button);
-        if (enabled && kind && owned.length && owned.attr('data-mls-action') === kind) return;
-        if (!enabled && !owned.length || enabled && !kind) return;
-        var before = buttonHash(button);
-        var prior = Lampa.Storage.get('full_btn_priority', '') + '';
-        if (owned.length) owned.replaceWith($(owned.attr('data-mls-original-icon')));
-        if (enabled && kind) {
-            var icon = button.find('svg').first();
-            if (!icon.length) return;
-            var original = icon.prop('outerHTML');
-            var replacement = $('<svg viewBox="0 0 24 24" aria-hidden="true"></svg>').html(actionIcon(kind));
-            replacement.attr('data-mls-original-icon', original).attr('data-mls-action', kind);
-            icon.replaceWith(replacement);
-        }
-        if (prior && prior === String(before)) Lampa.Storage.set('full_btn_priority', buttonHash(button));
+    // Older skin versions included their replacement SVG in Lampa's saved priority hash.
+    // Reconstruct that hash on a detached clone; the live icon is never changed.
+    function migrateButtonPriority() {
+        var prior = String(Lampa.Storage.get('full_btn_priority', '') || '');
+        if (!prior) return;
+        $('.full-start__button').each(function () {
+            var button = $(this);
+            var nativeHash = String(buttonHash(button));
+            if (prior === nativeHash) return false;
+            var clone = button.clone();
+            var icon = clone.find('svg').first();
+            var kind = legacyActionKind(clone);
+            if (!icon.length || !kind) return;
+            var legacy = $('<svg viewBox="0 0 24 24" aria-hidden="true"></svg>').html(legacyActionIcon(kind));
+            legacy.attr('data-mls-original-icon', icon.prop('outerHTML')).attr('data-mls-action', kind);
+            icon.replaceWith(legacy);
+            if (prior === String(buttonHash(clone))) {
+                Lampa.Storage.set('full_btn_priority', nativeHash);
+                return false;
+            }
+        });
     }
     function tone(node, value) {
         var color = semanticColors[value] || semanticColors.neutral;
@@ -1104,8 +1106,7 @@
     }
     function refreshVisuals() {
         if (!ready) return;
-        var colored = setting('enabled', true) && setting('colored_buttons', true);
-        $('.full-start__button').each(function () { colorAction($(this), colored); });
+        migrateButtonPriority();
         styleMetadata();
         $('.torrent-item').each(function () { styleTorrent($(this)); });
     }
@@ -1193,7 +1194,7 @@
         style.id = 'mylampa-skin-style';
         style.textContent = [
             'body.mls-enabled{background:#0c111b!important;color:#eef2fa;--mls-rail:4.5em;--mls-expanded:13.5em}',
-            'body.mls-enabled{font-size:calc(var(--mls-native-size,16px) * var(--mls-scale,1))!important}body.mls-enabled .head{transition:transform .2s ease,opacity .2s ease}body.mls-enabled.mls-head-hidden .head{transform:translate3d(0,-100%,0);opacity:0;pointer-events:none}body.mls-enabled.mls-card-header .wrap__content{padding-top:0!important}body.mls-enabled.mls-head-hidden .wrap__left{padding-top:0!important}body.mls-enabled.mls-card-header .activity--active [data-mls-card-scroll]{height:var(--mls-card-height,100vh)!important}',
+            'body.mls-enabled{font-size:calc(var(--mls-native-size,16px) * var(--mls-scale,1))!important}body.mls-enabled .head{transition:transform .2s ease,opacity .2s ease}body.mls-enabled.mls-head-hidden .head{transform:translate3d(0,-100%,0);opacity:0;pointer-events:none}body.mls-enabled.mls-card-header.mls-head-hidden .wrap__content{padding-top:0!important}body.mls-enabled.mls-card-header .activity--active [data-mls-card-scroll]{height:calc(var(--mls-card-height,100vh) - var(--mls-head-height,4em))!important}body.mls-enabled.mls-card-header.mls-head-hidden .activity--active [data-mls-card-scroll]{height:var(--mls-card-height,100vh)!important}',
             '@media(prefers-reduced-motion:reduce){body.mls-enabled .head{transition:none!important}}',
             'body.mls-enabled .background{opacity:.12!important}',
             'body.mls-enabled .head{background:#0c111b;border-bottom:1px solid #222c3d}',
@@ -1244,14 +1245,15 @@
             'body.mls-enabled[data-mls-menu-focus="stripe"] .mls-top-button.focus,body.mls-enabled[data-mls-menu-focus="stripe"] .mls-top-button.hover,body.mls-enabled[data-mls-menu-focus="stripe"] .head__action.focus,body.mls-enabled[data-mls-menu-focus="stripe"] .mls-hero-button.focus{box-shadow:inset 0 -3px 0 var(--mls-menu-color)!important}',
 
             'body.mls-enabled{--mls-good:#77df97;--mls-bad:#ff818c}',
-            'body.mls-enabled .full-start__button.focus,body.mls-enabled .full-start__button.hover,body.mls-enabled .simple-button.focus,body.mls-enabled .filter__item.focus,body.mls-enabled .torrent-file.focus{background:var(--mls-menu-bg)!important;color:var(--mls-menu-text)!important;box-shadow:var(--mls-menu-shadow)!important;border-color:var(--mls-accent)!important}body.mls-enabled .full-start__button.button--book.active{color:var(--mls-accent)}',
-            'body.mls-enabled svg[data-mls-action="play"],body.mls-enabled svg[data-mls-action="online"]{color:var(--mls-accent)!important}body.mls-enabled svg[data-mls-action="torrent"]{color:var(--mls-good)!important}body.mls-enabled svg[data-mls-action="trailer"]{color:#ff514c!important}',
+            'body.mls-enabled .full-start__button.focus,body.mls-enabled .full-start__button.hover,body.mls-enabled .simple-button.focus,body.mls-enabled .filter__item.focus,body.mls-enabled .torrent-file.focus{background:var(--mls-menu-bg)!important;color:var(--mls-menu-text)!important;box-shadow:var(--mls-menu-shadow)!important;border-color:var(--mls-accent)!important}',
             'body.mls-enabled.mls-colored-metadata .full-start__rate[data-mls-tone]{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border-color:var(--mls-tone)!important}',
             'body.mls-enabled.mls-colored-metadata .full-start__pg[data-mls-tone],body.mls-enabled.mls-colored-metadata .full-start__status[data-mls-tone],body.mls-enabled.mls-colored-metadata [data-mls-info-chip]{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border:1px solid var(--mls-tone)!important;border-radius:.3em;padding:.25em .55em;line-height:1.25}',
             'body.mls-enabled.mls-colored-metadata .full-start-new__details{display:flex;flex-wrap:wrap;gap:.4em;align-items:center}body.mls-enabled.mls-colored-metadata .full-start-new__details .full-start-new__split{display:none}',
             'body.mls-enabled .activity .explorer.layer--width,body.mls-enabled .activity .files.layer--width{width:100%!important}body.mls-enabled .explorer__files{min-width:0}body.mls-enabled .torrent-item__details{flex-wrap:wrap;row-gap:.45em}',
             'body.mls-enabled .torrent-item{border:1px solid #33435b;border-radius:var(--mls-radius);padding:1em;background:rgba(17,27,43,.7)}body.mls-enabled .torrent-item.focus::after{border-color:var(--mls-accent)!important;border-radius:calc(var(--mls-radius) + .5em)}',
             'body.mls-enabled.mls-torrent-colors .torrent-item[data-mls-torrent-tone]{border-color:var(--mls-torrent-color)!important;box-shadow:inset 0 0 0 1px var(--mls-torrent-soft)}body.mls-enabled.mls-torrent-colors .torrent-item[data-mls-torrent-tone].focus::after{border-color:var(--mls-torrent-color)!important}',
+            // Nested file badges need their own ink/background; focus ink can be dark on bright themes.
+            'body.mls-enabled .torrent-file__size,body.mls-enabled .torrent-file__title .exe,body.mls-enabled .torrent-serial__size,body.mls-enabled .torrent-serial__exe{color:#f4f7fc!important;background:var(--mls-panel-solid,#141c2a)!important;border:1px solid rgba(255,255,255,.28);opacity:1!important;text-shadow:none!important}',
             'body.mls-enabled.mls-torrent-colors .torrent-item__bitrate[data-mls-tone]>span,body.mls-enabled.mls-torrent-colors .torrent-item__seeds[data-mls-tone]>span{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border:1px solid var(--mls-tone)!important;border-radius:.3em;padding:.1em .35em}',
             '.mls-home-row{display:none}body.mls-enabled .mls-home-row{display:block}',
             'body.mls-enabled .mls-main-page>.scroll>.scroll__content{padding-top:0}',
