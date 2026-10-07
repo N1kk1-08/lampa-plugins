@@ -1,7 +1,7 @@
-/* MyLampa skin 0.3.0 — optional theme and editable native-menu shortcuts. */
+/* MyLampa skin 0.4.0 — optional theme and editable native-menu shortcuts. */
 (function (global) {
     'use strict';
-    var VERSION = '0.3.0';
+    var VERSION = '0.4.0';
     var COMPONENT = 'mylampa_skin';
     var BUTTONS_KEY = 'mylampa_skin_top_buttons_v1';
     var PREFIX = 'mylampa_skin_';
@@ -110,6 +110,21 @@
     }
 
 
+    function releaseDuration(card) {
+        card = card || {};
+        var series = !!(card.original_name || card.first_air_date || card.media_type === 'tv' || card.number_of_seasons);
+        var minutes = metricNumber(card.runtime);
+        if (series) {
+            var durations = Array.isArray(card.episode_run_time) ? card.episode_run_time : [];
+            durations = durations.map(metricNumber).filter(function (value) { return value > 0; });
+            if (!durations.length && Array.isArray(card.seasons)) card.seasons.forEach(function (season) {
+                (Array.isArray(season.episodes) ? season.episodes : []).forEach(function (episode) { var value = metricNumber(episode.runtime); if (value > 0) durations.push(value); });
+            });
+            minutes = durations.length ? Math.round(durations.reduce(function (total, value) { return total + value; }, 0) / durations.length) :
+                metricNumber(card.last_episode_to_air && card.last_episode_to_air.runtime);
+        }
+        return { minutes: minutes > 0 ? Math.round(minutes) : 0, series: series };
+    }
     function metricNumber(value) {
         if (typeof value === 'number') return isFinite(value) && value >= 0 ? value : null;
         if (typeof value !== 'string' || !/^\s*\d+(?:[.,]\d+)?\s*$/.test(value)) return null;
@@ -139,7 +154,7 @@
         return { torrent: level, bitrate: bitrate === null || bitrate === 0 ? 'neutral' : bitrate >= 15 ? 'good' : bitrate >= 5 ? 'warning' : 'bad', measured: speed !== null };
     }
 
-    var core = { metricNumber: metricNumber, ratingTone: ratingTone, ageTone: ageTone, statusTone: statusTone, torrentTones: torrentTones, featuredQuery: featuredQuery, resumeState: resumeState, minuteLabel: minuteLabel, normalizeButtons: normalizeButtons, editButtons: editButtons, safeLink: safeLink, defaults: copy(DEFAULT_BUTTONS) };
+    var core = { releaseDuration: releaseDuration, metricNumber: metricNumber, ratingTone: ratingTone, ageTone: ageTone, statusTone: statusTone, torrentTones: torrentTones, featuredQuery: featuredQuery, resumeState: resumeState, minuteLabel: minuteLabel, normalizeButtons: normalizeButtons, editButtons: editButtons, safeLink: safeLink, defaults: copy(DEFAULT_BUTTONS) };
     if (typeof module !== 'undefined' && module.exports) module.exports = core;
     if (!global || !global.document) return;
     if (global.MyLampaSkin) return;
@@ -155,27 +170,65 @@
     var navSignature = '';
     var editorController = 'settings_component';
     var palettes = { blue: '#78a0ff', sky: '#70c5ff', cyan: '#56d5dc', mint: '#91cdbb', emerald: '#67d6a0', lime: '#badb74', amber: '#deb789', gold: '#f1ce73', orange: '#ffb06b', coral: '#ff908c', red: '#ff7c84', pink: '#eda0d4', violet: '#b6a2f5', white: '#dce9f7' };
-    var colorOptions = { blue: 'Синій', sky: 'Блакитний', cyan: 'Бірюзовий', mint: "М'ятний", emerald: 'Смарагдовий', lime: 'Лаймовий', amber: 'Теплий', gold: 'Золотий', orange: 'Помаранчевий', coral: 'Кораловий', red: 'Червоний', pink: 'Рожевий', violet: 'Фіолетовий', white: 'Крижаний білий' };
+    var colorOptions = { theme: 'За темою', blue: 'Синій', sky: 'Блакитний', cyan: 'Бірюзовий', mint: "М'ятний", emerald: 'Смарагдовий', lime: 'Лаймовий', amber: 'Теплий', gold: 'Золотий', orange: 'Помаранчевий', coral: 'Кораловий', red: 'Червоний', pink: 'Рожевий', violet: 'Фіолетовий', white: 'Крижаний білий' };
     function colorTint(color, alpha) {
         return 'rgba(' + parseInt(color.slice(1, 3), 16) + ',' + parseInt(color.slice(3, 5), 16) + ',' + parseInt(color.slice(5, 7), 16) + ',' + alpha + ')';
     }
+    var themes = {
+        cinema: { label: 'MyLampa', accent: '#78a0ff', base: '#0c111b', backdrop: '#0c111b', panel: '#141c2a', alpha: 1, blur: 0, image: .12, radius: 14, button: '.65em', panelRadius: '.7em', card: 'outline_glow', menu: 'fill', fill: 'solid', ink: '#0c1630', glow: .4, lift: 1, shade: .95 },
+        netflix: { label: 'Netflix', accent: '#e50914', base: '#141414', backdrop: '#141414', panel: '#191919', alpha: .98, blur: 0, image: .06, radius: 6, button: '.25em', panelRadius: '.35em', card: 'outline_glow', menu: 'fill', fill: 'solid', ink: '#ffffff', glow: .55, lift: 1.025, shade: .98 },
+        oled: { label: 'AMOLED', accent: '#dce9f7', base: '#000000', backdrop: '#000000', panel: '#080808', alpha: 1, blur: 0, image: 0, radius: 0, button: '.15em', panelRadius: '.2em', card: 'outline', menu: 'outline', fill: 'soft', ink: '#ffffff', glow: 0, lift: 1, shade: 1 },
+        glass: { label: 'Glass', accent: '#91cdbb', base: '#101b31', backdrop: 'radial-gradient(ellipse at 80% 10%,#36546a 0%,transparent 55%),linear-gradient(145deg,#172236,#102b31)', panel: '#1c2d42', alpha: .52, blur: 20, image: .3, radius: 20, button: '1.3em', panelRadius: '1.3em', card: 'outline_glow', menu: 'fill', fill: 'glass', ink: '#ffffff', glow: .22, lift: 1.01, shade: .76 },
+        neon: { label: 'Neon', accent: '#56d5dc', base: '#0a0815', backdrop: 'radial-gradient(ellipse at 75% 0%,#30153e 0%,transparent 65%),linear-gradient(160deg,#130a24,#050b15)', panel: '#100d22', alpha: .78, blur: 8, image: .16, radius: 8, button: '.3em', panelRadius: '.45em', card: 'outline_glow', menu: 'glow', fill: 'soft', ink: '#ffffff', glow: .85, lift: 1.015, shade: .9 },
+        aurora: { label: 'Aurora', accent: '#67d6a0', base: '#102b30', backdrop: 'radial-gradient(ellipse at 15% 0%,#23624f 0%,transparent 60%),linear-gradient(135deg,#102b30,#17283d)', panel: '#142e35', alpha: .82, blur: 12, image: .25, radius: 18, button: '.9em', panelRadius: '1em', card: 'glow', menu: 'fill', fill: 'gradient', ink: '#ffffff', glow: .45, lift: 1.015, shade: .82 },
+        nord: { label: 'Nord', accent: '#70c5ff', base: '#232d3e', backdrop: 'linear-gradient(135deg,#293648,#1c2636)', panel: '#2b3749', alpha: .96, blur: 0, image: .08, radius: 8, button: '.4em', panelRadius: '.5em', card: 'outline', menu: 'stripe', fill: 'soft', ink: '#ffffff', glow: 0, lift: 1, shade: .92 },
+        velvet: { label: 'Velvet', accent: '#f1ce73', base: '#1d171c', backdrop: 'radial-gradient(ellipse at 70% 0%,#49302c 0%,transparent 60%),linear-gradient(135deg,#231b25,#17151b)', panel: '#2b2029', alpha: .94, blur: 6, image: .14, radius: 20, button: '1.6em', panelRadius: '1.2em', card: 'glow', menu: 'fill', fill: 'gradient', ink: '#ffffff', glow: .3, lift: 1, shade: .9 }
+    };
+    var themeOptions = {};
+    Object.keys(themes).forEach(function (key) { themeOptions[key] = themes[key].label; });
+    var changingPreset = false;
+    function applyPresetDefaults() {
+        changingPreset = true;
+        ['accent', 'card_focus', 'menu_focus', 'radius', 'menu_surface', 'glow'].forEach(function (name) { Lampa.Storage.set(PREFIX + name, 'theme'); });
+        changingPreset = false;
+        if (Lampa.Params && Lampa.Params.update) $('.settings-param[data-name^="' + PREFIX + '"][data-type="select"]').each(function () { Lampa.Params.update($(this)); });
+        applyAppearance();
+    }
     var definitions = [
         ['enabled', 'trigger', true, 'Увімкнути MyLampa skin'],
-        ['accent', 'select', 'blue', 'Колір теми', colorOptions],
-        ['card_focus', 'select', 'outline_glow', 'Підсвітка карток', { outline: 'Рамка', glow: "М'яке сяйво", outline_glow: 'Рамка та сяйво', double: 'Подвійна рамка' }],
-        ['menu_focus', 'select', 'fill', 'Підсвітка меню та кнопок', { fill: 'Заливка', outline: 'Рамка', glow: 'Сяйво', stripe: 'Акцентна смуга' }],
-        ['radius', 'select', '14', 'Заокруглення карток', { '0': 'Без заокруглення', '8': 'Невелике', '14': 'Помірне', '20': 'Велике' }],
+        ['theme', 'select', 'cinema', 'Стиль теми', themeOptions, 'Фон, прозорість панелей, форма кнопок і підсвітка. Вибір стилю застосовує його оформлення; нижче можна змінити деталі.'],
+        ['accent', 'select', 'theme', 'Колір теми', colorOptions],
+        ['card_focus', 'select', 'theme', 'Підсвітка карток', { theme: 'За темою', outline: 'Рамка', glow: "М'яке сяйво", outline_glow: 'Рамка та сяйво', double: 'Подвійна рамка' }],
+        ['menu_focus', 'select', 'theme', 'Підсвітка меню та кнопок', { theme: 'За темою', fill: 'Заливка', outline: 'Рамка', glow: 'Сяйво', stripe: 'Акцентна смуга' }],
+        ['glow', 'select', 'theme', 'Свічення', { theme: 'За темою', off: 'Без свічення', soft: "М'яке", strong: 'Виразне' }],
+        ['menu_surface', 'select', 'theme', 'Прозорість меню та панелей', { theme: 'За темою', solid: 'Непрозорі', frosted: 'Матові', transparent: 'Прозоре скло' }],
+        ['radius', 'select', 'theme', 'Заокруглення карток', { theme: 'За темою', '0': 'Без заокруглення', '8': 'Невелике', '14': 'Помірне', '20': 'Велике' }],
         ['sidebar', 'select', 'rail', 'Бічне меню', { rail: 'Іконки, підписи при відкритті', expanded: 'Іконки та підписи' }],
-        ['hero', 'trigger', true, 'В центрі уваги'],
-        ['hero_type', 'select', 'all', 'Добірка в банері', { all: 'Фільми та серіали', movie: 'Фільми', tv: 'Серіали' }],
-        ['hero_interval', 'select', '15', 'Зміна банера', { '0': 'Лише вручну', '15': 'Кожні 15 секунд', '30': 'Кожні 30 секунд' }],
+        ['hero_settings', 'button', null, 'В центрі уваги', null, 'Великий банер на головній сторінці, у вкладках «Фільми» та «Серіали». Налаштувати показ для кожної вкладки.'],
         ['resume', 'trigger', true, 'Продовжити перегляд'],
         ['clock', 'trigger', true, 'Годинник, дата й день тижня'],
         ['button_icons', 'trigger', true, 'Іконки верхніх кнопок'],
         ['colored_buttons', 'trigger', true, 'Кольорові кнопки', null, 'Іконки онлайн, торентів і трейлерів.'],
-        ['colored_metadata', 'trigger', true, 'Кольорові рейтинги, вік та інформація', null, 'Рейтинг, вікове обмеження, статус, серії, тривалість та жанри — за значенням.'],
+        ['colored_metadata', 'trigger', true, 'Кольорові рейтинги, вік та інформація', null, 'Дані на сторінці релізу — за значенням. Оцінки на постерах залишаються штатними.'],
         ['torrent_colors', 'trigger', true, 'Кольорова рамка блоку торента і бітрета', null, 'Роздача: за сідами, під час перегляду — за виміряною швидкістю. Бітрейт — за обсягом даних за секунду.']
     ];
+    var bannerDefinitions = [
+        ['hero_home', 'trigger', true, 'Головна', null, 'Великий банер на головній сторінці.'],
+        ['hero_movies', 'trigger', true, 'Фільми', null, 'Банер із трендовими фільмами у вкладці «Фільми».'],
+        ['hero_series', 'trigger', true, 'Серіали', null, 'Банер із трендовими серіалами у вкладці «Серіали».'],
+        ['hero_type', 'select', 'all', 'Добірка на головній', { all: 'Фільми та серіали', movie: 'Фільми', tv: 'Серіали' }],
+        ['hero_interval', 'select', '15', 'Зміна банера', { '0': 'Лише вручну', '15': 'Кожні 15 секунд', '30': 'Кожні 30 секунд' }]
+    ];
+    function bannerSlot(name, object) {
+        if (name === 'main') return 'home';
+        if (name !== 'category' || object.genres || object.genre) return '';
+        return object.url === 'movie' ? 'movies' : object.url === 'tv' ? 'series' : '';
+    }
+    function openBannerSettings() {
+        Lampa.Settings.create(COMPONENT + '_banner', {
+            onBack: function () { Lampa.Settings.create(COMPONENT, { last_index: definitions.map(function (item) { return item[0]; }).indexOf('hero_settings') }); }
+        });
+    }
     function setting(name, fallback) {
         if (typeof fallback === 'boolean') {
             // Storage.get can replace a cached boolean false with its fallback.
@@ -316,36 +369,66 @@
         body.toggleClass('mls-colored-buttons', enabled && setting('colored_buttons', true));
         body.toggleClass('mls-colored-metadata', enabled && setting('colored_metadata', true));
         body.toggleClass('mls-torrent-colors', enabled && setting('torrent_colors', true));
-        var accent = palettes[setting('accent', 'blue')] || palettes.blue;
-        var radius = ['0', '8', '14', '20'].indexOf(String(setting('radius', '14'))) >= 0 ? setting('radius', '14') : '14';
+        var themeKey = setting('theme', 'cinema');
+        var theme = themes[themeKey] || themes.cinema;
+        body.attr('data-mls-theme', themes[themeKey] ? themeKey : 'cinema');
+        var accent = palettes[setting('accent', 'theme')] || theme.accent;
+        var chosenRadius = String(setting('radius', 'theme'));
+        var radius = ['0', '8', '14', '20'].indexOf(chosenRadius) >= 0 ? chosenRadius : String(theme.radius);
         var cardColor = accent;
         var menuColor = accent;
-        var cardFocus = setting('card_focus', 'outline_glow');
-        var menuFocus = setting('menu_focus', 'fill');
+        var cardFocus = setting('card_focus', 'theme');
+        var menuFocus = setting('menu_focus', 'theme');
+        if (cardFocus === 'theme') cardFocus = theme.card;
+        if (menuFocus === 'theme') menuFocus = theme.menu;
+        var glowChoice = setting('glow', 'theme');
+        var glow = glowChoice === 'off' ? 0 : glowChoice === 'soft' ? .25 : glowChoice === 'strong' ? .8 : theme.glow;
+        var glowSize = themeKey === 'neon' || glowChoice === 'strong' ? '2em' : '1.3em';
+        var halo = glow ? ',0 0 ' + glowSize + ' ' + colorTint(accent, glow) : '';
         var cardShadows = {
-            outline: '0 0 0 .16em ' + cardColor,
-            glow: '0 0 0 .08em ' + cardColor + ',0 0 1.3em ' + colorTint(cardColor, .7),
-            outline_glow: '0 0 0 .16em ' + cardColor + ',0 0 1.3em ' + colorTint(cardColor, .4),
-            double: '0 0 0 .12em #0c111b,0 0 0 .28em ' + cardColor + ',0 0 0 .4em ' + colorTint(cardColor, .28)
+            outline: '0 0 0 .16em ' + cardColor + (glowChoice !== 'theme' ? halo : ''),
+            glow: '0 0 0 .08em ' + cardColor + halo,
+            outline_glow: '0 0 0 .16em ' + cardColor + halo,
+            double: '0 0 0 .12em ' + theme.base + ',0 0 0 .28em ' + cardColor + ',0 0 0 .4em ' + colorTint(cardColor, .28) + halo
         };
         var menuShadows = {
-            fill: 'none',
-            outline: 'inset 0 0 0 2px ' + menuColor,
-            glow: 'inset 0 0 0 1px ' + menuColor + ',0 0 .9em ' + colorTint(menuColor, .5),
-            stripe: 'inset 3px 0 0 ' + menuColor
+            fill: glow ? '0 .18em .9em ' + colorTint(menuColor, glow * .55) : 'none',
+            outline: 'inset 0 0 0 2px ' + menuColor + (glowChoice !== 'theme' ? halo : ''),
+            glow: 'inset 0 0 0 1px ' + menuColor + (glow ? ',0 0 1.2em ' + colorTint(menuColor, glow) : ''),
+            stripe: 'inset 3px 0 0 ' + menuColor + (glowChoice !== 'theme' ? halo : '')
         };
-        body.attr('data-mls-card-focus', cardShadows[cardFocus] ? cardFocus : 'outline_glow');
-        body.attr('data-mls-menu-focus', menuShadows[menuFocus] ? menuFocus : 'fill');
+        var surface = setting('menu_surface', 'theme');
+        var alpha = surface === 'solid' ? 1 : surface === 'frosted' ? .78 : surface === 'transparent' ? .42 : theme.alpha;
+        var blur = surface === 'solid' ? 0 : surface === 'frosted' ? 12 : surface === 'transparent' ? 20 : theme.blur;
+        var brightness = parseInt(accent.slice(1, 3), 16) * .299 + parseInt(accent.slice(3, 5), 16) * .587 + parseInt(accent.slice(5, 7), 16) * .114;
+        var accentText = brightness > 145 ? '#0c1630' : '#ffffff';
+        var focusBackground = colorTint(accent, .14);
+        var focusText = '#f3f6fd';
+        if (menuFocus === 'fill') {
+            focusText = theme.fill === 'solid' ? accentText : theme.ink;
+            focusBackground = theme.fill === 'glass' ? 'linear-gradient(135deg,' + colorTint(accent, .32) + ',' + colorTint(accent, .12) + ')' :
+                theme.fill === 'gradient' ? 'linear-gradient(110deg,' + colorTint(accent, .65) + ',' + colorTint(accent, .2) + ')' : accent;
+            if (theme.fill === 'glass') menuShadows.fill = 'inset 0 0 0 1px ' + colorTint(accent, .6) + ',0 .5em 1.8em rgba(0,0,0,.3)';
+        }
+        body.attr('data-mls-card-focus', cardShadows[cardFocus] ? cardFocus : theme.card);
+        body.attr('data-mls-menu-focus', menuShadows[menuFocus] ? menuFocus : theme.menu);
         var rootStyle = document.documentElement.style;
-        rootStyle.setProperty('--mls-accent', accent);
-        rootStyle.setProperty('--mls-card-color', cardColor);
-        rootStyle.setProperty('--mls-card-shadow', cardShadows[cardFocus] || cardShadows.outline_glow);
-        rootStyle.setProperty('--mls-menu-color', menuColor);
-        rootStyle.setProperty('--mls-menu-soft', colorTint(menuColor, .14));
-        rootStyle.setProperty('--mls-menu-bg', menuFocus === 'fill' ? menuColor : colorTint(menuColor, .14));
-        rootStyle.setProperty('--mls-menu-text', menuFocus === 'fill' ? '#0c1630' : '#f3f6fd');
-        rootStyle.setProperty('--mls-menu-shadow', menuShadows[menuFocus] || menuShadows.fill);
-        document.documentElement.style.setProperty('--mls-radius', radius + 'px');
+        var variables = {
+            '--mls-accent': accent, '--mls-accent-text': accentText, '--mls-card-color': cardColor,
+            '--mls-card-shadow': cardShadows[cardFocus] || cardShadows[theme.card],
+            '--mls-menu-color': menuColor, '--mls-menu-soft': colorTint(menuColor, .14),
+            '--mls-menu-bg': focusBackground, '--mls-menu-text': focusText,
+            '--mls-menu-shadow': menuShadows[menuFocus] || menuShadows[theme.menu],
+            '--mls-radius': radius + 'px', '--mls-button-radius': theme.button, '--mls-panel-radius': theme.panelRadius,
+            '--mls-base': theme.base, '--mls-backdrop': theme.backdrop,
+            '--mls-panel': colorTint(theme.panel, alpha), '--mls-panel-solid': theme.panel,
+            '--mls-blur': blur + 'px', '--mls-line': colorTint(accent, themeKey === 'oled' ? .22 : .18),
+            '--mls-image-opacity': String(theme.image), '--mls-focus-scale': String(theme.lift),
+            '--mls-shade-start': colorTint(theme.base, theme.shade), '--mls-shade-middle': colorTint(theme.base, .62),
+            '--mls-overlay': themeKey === 'glass' ? '.25' : '.55',
+            '--mls-play-shadow': glow ? '0 .3em 1.2em ' + colorTint(accent, glow) : 'none'
+        };
+        Object.keys(variables).forEach(function (name) { rootStyle.setProperty(name, variables[name]); });
         renderNavigation();
         resizeHeader();
         syncHome(false);
@@ -550,7 +633,8 @@
         row.destroy = function () { row.dead = true; clearInterval(row.timer); root.remove(); row.emit('destroy'); };
         return row;
     }
-    function heroRow() {
+    function heroRow(fixedType) {
+        function selectedType() { return fixedType || setting('hero_type', 'all'); }
         var html = $('<section class="mls-home-row mls-hero" aria-label="В центрі уваги"><img class="mls-hero-image" alt=""/><div class="mls-hero-shade"></div><div class="mls-hero-content"><div class="mls-hero-eyebrow">В центрі уваги</div><h1 class="mls-hero-title">Завантажуємо добірку…</h1><div class="mls-hero-meta"></div><div class="mls-hero-description"></div><div class="mls-hero-actions"><div class="selector mls-hero-play mls-hero-button"></div><div class="selector mls-hero-book mls-hero-button"></div></div></div><div class="mls-hero-pagination"><div class="selector mls-hero-prev" aria-label="Попередній реліз">‹</div><span class="mls-hero-counter"></span><div class="selector mls-hero-next" aria-label="Наступний реліз">›</div></div></section>');
         html.find('.mls-hero-play').append(playSvg, $('<span></span>').text('Дивитися'));
         html.find('.mls-hero-book').append(bookmarkSvg, $('<span></span>').text('До обраного'));
@@ -584,14 +668,14 @@
         };
         function fetch() {
             var source = primarySource();
-            var type = setting('hero_type', 'all');
+            var type = selectedType();
             var key = source + ':' + type;
             var token = ++row.token;
             row.source = source;
             row.type = type;
             row.card = null;
             row.cards = [];
-            html.addClass('mls-hero-loading').removeClass('mls-hero-error').attr('data-mls-source', source);
+            html.addClass('mls-hero-loading').removeClass('mls-hero-error').attr('data-mls-source', source).attr('data-mls-media', type);
             html.find('.mls-hero-image').removeAttr('src');
             html.find('.mls-hero-title').text('Завантажуємо добірку…');
             html.find('.mls-hero-description,.mls-hero-meta,.mls-hero-counter').text('');
@@ -624,7 +708,7 @@
         html.find('.mls-hero-prev').on('hover:enter', function () { row.show(row.index - 1); });
         html.find('.mls-hero-next').on('hover:enter', function () { row.show(row.index + 1); });
         row.refresh = function (force) {
-            if (force || row.source !== primarySource() || row.type !== setting('hero_type', 'all')) fetch();
+            if (force || row.source !== primarySource() || row.type !== selectedType()) fetch();
             clearInterval(row.timer);
             var seconds = Number(setting('hero_interval', '15'));
             if (seconds > 0) row.timer = setInterval(function () {
@@ -680,12 +764,13 @@
         $(component.html).addClass('mls-main-page');
         var state = { front: [], detached: [], hero: null };
         component.mlsHome = state;
-        if (setting('hero', true)) {
-            state.hero = heroRow();
+        if (setting('hero_' + component.mlsSlot, component.mlsSlot === 'home' ? setting('hero', true) : true)) {
+            state.hero = heroRow(component.mlsSlot === 'movies' ? 'movie' : component.mlsSlot === 'series' ? 'tv' : '');
+            $(state.hero.render(true)).attr('data-mls-tab', component.mlsSlot);
             component.emit('append', state.hero);
             state.front.push(state.hero);
         }
-        if (setting('resume', true)) {
+        if (component.mlsSlot === 'home' && setting('resume', true)) {
             var nativeItems = component.items.slice();
             nativeItems.forEach(function (item, index) {
                 if (isContinueRow(item.data)) {
@@ -706,15 +791,17 @@
         }
         attachFront(component, state.front, focus); if (Lampa.Layer) Lampa.Layer.visible(component.scroll.render(true));
     }
-    function decorateComponent(component, main) {
+    function decorateComponent(component, slot) {
         if (!component || !component.use || component.mlsDecorated) return component;
         component.mlsDecorated = true;
+        component.mlsSlot = slot;
+        var featured = !!slot;
         component.use({
             onInstance: function (item, data) { styleContinue(item, data); },
-            onBuild: function () { if (main) { component.mlsBuilt = true; installHome(component, true); } },
-            onStart: function () { if (main && component.mlsBuilt) installHome(component, false); },
+            onBuild: function () { if (featured) { component.mlsBuilt = true; installHome(component, true); } },
+            onStart: function () { if (featured && component.mlsBuilt) installHome(component, false); },
             onController: function (controller) {
-                if (!main) return;
+                if (!featured) return;
                 var toggle = controller.toggle;
                 controller.toggle = function () {
                     toggle.call(this);
@@ -727,27 +814,27 @@
                 homeInstances = homeInstances.filter(function (entry) { return entry !== component; });
             }
         });
-        if (main) homeInstances.push(component);
+        if (featured) homeInstances.push(component);
         return component;
     }
     function registerHome() {
         ['main', 'category'].forEach(function (name) {
             var Original = Lampa.Component.get(name);
             if (!Original) return;
-            Lampa.Component.add(name, function (object) { return decorateComponent(new Original(object), name === 'main'); });
+            Lampa.Component.add(name, function (object) { return decorateComponent(new Original(object), bannerSlot(name, object)); });
         });
         Lampa.Activity.all().forEach(function (entry) {
             var component = entry.activity && entry.activity.component;
             var name = entry.component || entry.object && entry.object.component;
             if (component && (name === 'main' || name === 'category')) {
-                decorateComponent(component, name === 'main');
+                decorateComponent(component, bannerSlot(name, entry.object || entry));
                 if (component.items) component.items.forEach(function (item) {
                     if (isContinueRow(item.data)) {
                         $(item.render(true)).addClass('mls-resume-row');
                         (item.items || []).forEach(function (card) { if (card.data) drawResumeCard(card, card.data); });
                     }
                 });
-                if (name === 'main' && component.items && component.items.length) { component.mlsBuilt = true; installHome(component, false); }
+                if (component.mlsSlot && component.items && component.items.length) { component.mlsBuilt = true; installHome(component, false); }
             }
         });
     }
@@ -832,9 +919,35 @@
     function infoTone(text) {
         return /наступ|следующ|next|дн[іияе]|days/i.test(text) ? 'orange' : /сезон|season|тривал|длитель|хв|min|год|час|quality|якість|качество|\d+:\d+/i.test(text) ? 'info' : /сері[йїя]|серии|episodes/i.test(text) ? 'good' : 'genre';
     }
+    function compactDuration(area, card) {
+        var enabled = setting('enabled', true);
+        var owned = area.find('.mls-duration');
+        var existing = area.find('span,div,a').filter(function () {
+            return !this.children.length && !$(this).hasClass('mls-duration') && /тривалість|длительность|duration|^\d+:\d{2}(?::\d{2})?$/.test($(this).text().toLowerCase().trim());
+        }).first();
+        if (!enabled) {
+            owned.remove();
+            area.find('[data-mls-duration-original]').each(function () {
+                var node = $(this);
+                if (node.text() !== node.attr('data-mls-duration-original')) node.text(node.attr('data-mls-duration-original'));
+                node.removeAttr('data-mls-duration-original');
+            });
+            return;
+        }
+        if (existing.length) owned.remove();
+        var duration = releaseDuration(card);
+        if (!duration.minutes) return;
+        var node = existing.length ? existing : owned;
+        if (!node.length) {
+            node = $('<span class="mls-duration"></span>');
+            area.append(node);
+        }
+        if (existing.length && !node.attr('data-mls-duration-original')) node.attr('data-mls-duration-original', node.text());
+        var label = (duration.series ? 'Тривалість серії: ≈ ' : 'Тривалість фільму: ') + minuteLabel(duration.minutes * 60);
+        if (node.text() !== label) node.text(label);
+    }
     function styleMetadata() {
         $('.full-start__rate').each(function () { var node = $(this); tone(node, ratingTone(numberFromLabel(node.children().first().text()))); });
-        $('.card__vote,.release-badges__badge--rating').each(function () { var node = $(this); tone(node, ratingTone(numberFromLabel(node.text()))); });
         $('.full-start__pg').each(function () { var node = $(this); tone(node, ageTone(node.text())); });
         $('.full-start__status').each(function () {
             var node = $(this);
@@ -844,6 +957,9 @@
         // Some plugins wrap chips in several flex containers. Color only the leaves.
         $('.full-start-new__details,.full-start__tags,.full-start-new__tags').each(function () {
             var area = $(this);
+            var root = area.closest('.full-start-new,.full-start')[0];
+            compactDuration(area, root && root._mlsMovie);
+            area.find('div').filter(function () { return this.children.length > 0; }).attr('data-mls-info-wrap', 'true');
             area.find('[data-mls-info-chip]').filter(function () { return this.children.length > 0; }).removeAttr('data-mls-info-chip data-mls-tone');
             area.find('span,div,a').filter(function () {
                 return this.children.length === 0 && !$(this).hasClass('full-start-new__split') && $(this).text().trim();
@@ -886,7 +1002,16 @@
         visualTimer = setTimeout(refreshVisuals, 60);
     }
     function initVisuals() {
-        var relevant = '.full-start-new,.full-start,.torrent-item,.release-badges__badge--rating,.card__vote';
+        Lampa.Activity.all().forEach(function (entry) {
+            var component = entry.activity && entry.activity.component;
+            var card = component && component.props && component.props.get && component.props.get('movie');
+            if (card && component.render) {
+                var root = $(component.render(true));
+                root.find('.full-start-new,.full-start').add(root.filter('.full-start-new,.full-start')).each(function () { this._mlsMovie = card; });
+            }
+        });
+
+        var relevant = '.full-start-new,.full-start,.torrent-item';
         visualObserver = new MutationObserver(function (mutations) {
             for (var i = 0; i < mutations.length; i++) {
                 var target = mutations[i].target.nodeType === 1 ? mutations[i].target : mutations[i].target.parentElement;
@@ -929,15 +1054,23 @@
 
     function addSettings() {
         Lampa.SettingsApi.addComponent({ component: COMPONENT, name: 'MyLampa skin', icon: Lampa.Template.string('icon_settings'), after: 'interface' });
-        definitions.forEach(function (definition) {
+        // A template and params create a nested page without a folder in the root settings menu.
+        Lampa.Template.add('settings_' + COMPONENT + '_banner', '<div></div>');
+        Lampa.SettingsApi.addParam({ component: COMPONENT + '_banner', param: { type: 'title' }, field: { name: 'В центрі уваги — банер' } });
+        function register(definition, component) {
             var param = { name: PREFIX + definition[0], type: definition[1], default: definition[2] };
             if (definition[4]) param.values = definition[4];
-            Lampa.SettingsApi.addParam({ component: COMPONENT, param: param, field: { name: definition[3], description: definition[5] || '' }, onChange: function () { setTimeout(applyAppearance, 0); } });
-        });
+            Lampa.SettingsApi.addParam({
+                component: component, param: param, field: { name: definition[3], description: definition[5] || '' },
+                onChange: function () { if (definition[0] === 'hero_settings') openBannerSettings();else setTimeout(applyAppearance, 0); }
+            });
+        }
+        definitions.forEach(function (definition) { register(definition, COMPONENT); });
+        bannerDefinitions.forEach(function (definition) { register(definition, COMPONENT + '_banner'); });
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { type: 'title' }, field: { name: 'Верхня панель' } });
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: PREFIX + 'edit_buttons', type: 'button' }, field: { name: 'Налаштувати верхні кнопки', description: 'Пункти меню та плагінів, власні назви, іконки й порядок.' }, onChange: function () { openEditor(true); } });
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: PREFIX + 'reset_appearance', type: 'button' }, field: { name: 'Відновити оформлення' }, onChange: function () {
-            definitions.forEach(function (definition) { Lampa.Storage.set(PREFIX + definition[0], definition[2]); });
+            definitions.concat(bannerDefinitions).forEach(function (definition) { if (definition[1] !== 'button') Lampa.Storage.set(PREFIX + definition[0], definition[2]); });
             applyAppearance();
             notify('Стандартне оформлення MyLampa skin відновлено.');
         } });
@@ -998,7 +1131,7 @@
             'body.mls-enabled{--mls-good:#77df97;--mls-bad:#ff818c}',
             'body.mls-enabled .full-start__button.focus,body.mls-enabled .full-start__button.hover,body.mls-enabled .simple-button.focus,body.mls-enabled .filter__item.focus,body.mls-enabled .torrent-file.focus{background:var(--mls-menu-bg)!important;color:var(--mls-menu-text)!important;box-shadow:var(--mls-menu-shadow)!important;border-color:var(--mls-accent)!important}body.mls-enabled .full-start__button.button--book.active{color:var(--mls-accent)}',
             'body.mls-enabled svg[data-mls-action="play"],body.mls-enabled svg[data-mls-action="online"]{color:var(--mls-accent)!important}body.mls-enabled svg[data-mls-action="torrent"]{color:var(--mls-good)!important}body.mls-enabled svg[data-mls-action="trailer"]{color:#ff514c!important}',
-            'body.mls-enabled.mls-colored-metadata .full-start__rate[data-mls-tone],body.mls-enabled.mls-colored-metadata .card__vote[data-mls-tone],body.mls-enabled.mls-colored-metadata .release-badges__badge--rating[data-mls-tone]{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border-color:var(--mls-tone)!important}',
+            'body.mls-enabled.mls-colored-metadata .full-start__rate[data-mls-tone]{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border-color:var(--mls-tone)!important}',
             'body.mls-enabled.mls-colored-metadata .full-start__pg[data-mls-tone],body.mls-enabled.mls-colored-metadata .full-start__status[data-mls-tone],body.mls-enabled.mls-colored-metadata [data-mls-info-chip]{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border:1px solid var(--mls-tone)!important;border-radius:.3em;padding:.25em .55em;line-height:1.25}',
             'body.mls-enabled.mls-colored-metadata .full-start-new__details{display:flex;flex-wrap:wrap;gap:.4em;align-items:center}body.mls-enabled.mls-colored-metadata .full-start-new__details .full-start-new__split{display:none}',
             'body.mls-enabled .activity .explorer.layer--width,body.mls-enabled .activity .files.layer--width{width:100%!important}body.mls-enabled .explorer__files{min-width:0}body.mls-enabled .torrent-item__details{flex-wrap:wrap;row-gap:.45em}',
@@ -1038,7 +1171,21 @@
             '@media(max-width:900px){body.mls-enabled .mls-hero{min-height:17em}.mls-hero-content{max-width:25em}.mls-hero-title{font-size:2em}body.mls-enabled .mls-resume-row .card{width:calc((100vw - var(--mls-rail) - 5em)/2)!important}.mls-resume-time{font-size:.5em}}',
             '@media(max-width:620px){body.mls-enabled .mls-hero{min-height:21em}.mls-hero-image{object-position:65% center}.mls-hero-shade{background:linear-gradient(0deg,#0c111b 0%,rgba(12,17,27,.75) 50%,rgba(12,17,27,.08) 100%)}.mls-hero-content{padding:7em 1em 2em}.mls-hero-title{font-size:1.8em}.mls-hero-actions{gap:.4em}.mls-hero-button{font-size:.68em;padding:.65em .85em}.mls-hero-pagination{bottom:.65em;right:1em}body.mls-enabled .mls-resume-row .card{width:calc(100vw - var(--mls-rail) - 3em)!important}.mls-resume-empty-body{flex-wrap:wrap}.mls-resume-catalog{margin-left:0}.mls-resume-empty-body p{max-width:24em}body.mls-enabled .head__time{margin-left:0}.head__time-date{white-space:nowrap}}',
             '@media(max-width:900px){body.mls-enabled .mls-top-button{padding:.45em .6em;max-width:11em}}',
-            '@media(max-width:620px){body.mls-enabled{--mls-rail:3.7em}body.mls-enabled .head__body{padding:.5em .7em;align-items:flex-start;flex-wrap:wrap}body.mls-enabled .head__actions{flex-basis:calc(100% - 4em);flex-wrap:wrap}body.mls-enabled .mls-top-nav{flex-basis:100%;order:3}body.mls-enabled .mls-top-button{font-size:.85em;max-width:11em;min-height:2.7em}body.mls-enabled .head__action.open--settings,body.mls-enabled .head__action.open--search{height:2.5em;width:2.5em;margin:0}body.mls-enabled .menu__item{padding:.8em .7em}body.mls-enabled .head__backward{display:none}body.mls-enabled .wrap__left,body.mls-enabled .wrap__content{padding-top:var(--mls-head-height,7em)}body.mls-enabled.mls-wide-sidebar{--mls-rail:10em}}'
+            '@media(max-width:620px){body.mls-enabled{--mls-rail:3.7em}body.mls-enabled .head__body{padding:.5em .7em;align-items:flex-start;flex-wrap:wrap}body.mls-enabled .head__actions{flex-basis:calc(100% - 4em);flex-wrap:wrap}body.mls-enabled .mls-top-nav{flex-basis:100%;order:3}body.mls-enabled .mls-top-button{font-size:.85em;max-width:11em;min-height:2.7em}body.mls-enabled .head__action.open--settings,body.mls-enabled .head__action.open--search{height:2.5em;width:2.5em;margin:0}body.mls-enabled .menu__item{padding:.8em .7em}body.mls-enabled .head__backward{display:none}body.mls-enabled .wrap__left,body.mls-enabled .wrap__content{padding-top:var(--mls-head-height,7em)}body.mls-enabled.mls-wide-sidebar{--mls-rail:10em}}',
+            'body.mls-enabled{background:var(--mls-backdrop)!important}body.mls-enabled .background{opacity:var(--mls-image-opacity)!important}body.mls-enabled .head{background:var(--mls-panel)!important;border-color:var(--mls-line);backdrop-filter:blur(var(--mls-blur));-webkit-backdrop-filter:blur(var(--mls-blur))}',
+            'body.mls-enabled .wrap__left{background:transparent!important;border-color:var(--mls-line)}body.mls-enabled .wrap__left>.scroll{background:var(--mls-panel)!important;backdrop-filter:blur(var(--mls-blur));-webkit-backdrop-filter:blur(var(--mls-blur))}',
+            'body.mls-enabled .settings,body.mls-enabled .selectbox,body.mls-enabled .modal{background:rgba(0,0,0,var(--mls-overlay))!important}body.mls-enabled .settings__content,body.mls-enabled .settings-input__content,body.mls-enabled .selectbox__content,body.mls-enabled .modal__content{background:var(--mls-panel)!important;border:1px solid var(--mls-line);border-radius:var(--mls-panel-radius)!important;backdrop-filter:blur(var(--mls-blur));-webkit-backdrop-filter:blur(var(--mls-blur));box-shadow:0 .6em 2em rgba(0,0,0,.35)}',
+            'body.mls-enabled .menu__item,body.mls-enabled .settings-folder,body.mls-enabled .settings-param,body.mls-enabled .selectbox-item,body.mls-enabled .full-start__button,body.mls-enabled .simple-button,body.mls-enabled .mls-top-button,body.mls-enabled .head__action,body.mls-enabled .mls-hero-button{border-radius:var(--mls-button-radius)!important;transition:background-color .16s ease,box-shadow .16s ease,color .16s ease}body.mls-enabled .settings-folder.focus{background:var(--mls-menu-bg)!important;color:var(--mls-menu-text)!important;box-shadow:var(--mls-menu-shadow)!important}',
+            'body.mls-enabled .card__view{transition:transform .16s ease,box-shadow .16s ease}body.mls-enabled .card.focus .card__view,body.mls-enabled .card.hover .card__view{transform:scale(var(--mls-focus-scale))}',
+            'body.mls-enabled .mls-hero{background:var(--mls-base)}body.mls-enabled .mls-hero-shade{background:linear-gradient(90deg,var(--mls-base) 0%,var(--mls-shade-start) 22%,var(--mls-shade-middle) 45%,transparent 78%),linear-gradient(0deg,var(--mls-base),transparent 48%)}body.mls-enabled .mls-hero-play{color:var(--mls-accent-text);box-shadow:var(--mls-play-shadow)}',
+            'body.mls-enabled .mls-resume-card .card__view,body.mls-enabled .torrent-item{background:var(--mls-panel);border-color:var(--mls-line)}body.mls-enabled .mls-resume-empty-body{background:var(--mls-panel);border-color:var(--mls-line)}body.mls-enabled .menu__split{background:var(--mls-line)}',
+            '@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){body.mls-enabled .head,body.mls-enabled .wrap__left>.scroll,body.mls-enabled .settings__content,body.mls-enabled .selectbox__content,body.mls-enabled .modal__content{background:var(--mls-panel-solid)!important}}',
+            '@media(prefers-reduced-motion:reduce){body.mls-enabled .card__view,body.mls-enabled .menu__item,body.mls-enabled .mls-top-button{transition:none!important}body.mls-enabled .card.focus .card__view,body.mls-enabled .card.hover .card__view{transform:none!important}}',
+            '@media(max-width:620px){body.mls-enabled .mls-hero-shade{background:linear-gradient(0deg,var(--mls-base),var(--mls-shade-start) 50%,transparent)}body.mls-enabled .head,body.mls-enabled .wrap__left>.scroll{backdrop-filter:none;-webkit-backdrop-filter:none}}',
+            'body.mls-enabled .full-start-new__rate-line{font-size:.85em;flex-wrap:wrap;gap:.35em;margin-bottom:.55em!important}body.mls-enabled .full-start-new__rate-line>*{margin:0!important}body.mls-enabled .full-start-new__rate-line .full-start__pg,body.mls-enabled .full-start-new__rate-line .full-start__status{font-size:1em;line-height:1.2;padding:.18em .45em}',
+            'body.mls-enabled .full-start-new__details{font-size:.88em!important;margin:0 0 .75em!important;min-height:0;gap:.32em;align-items:center}body.mls-enabled .full-start-new__details [data-mls-info-wrap]{display:contents!important}body.mls-enabled .full-start-new__details .full-start-new__split{display:none!important}',
+            'body.mls-enabled [data-mls-info-chip]{font-size:1em!important;padding:.18em .45em!important;line-height:1.2!important;margin:0!important;border-radius:.25em!important;max-width:100%;white-space:normal!important;display:inline-block!important}body.mls-enabled .mls-duration{background:rgba(120,197,245,.14);border:1px solid rgba(120,197,245,.45);color:#d9edf8}',
+            '@supports not (display:contents){body.mls-enabled .full-start-new__details [data-mls-info-wrap]{display:flex!important;flex-direction:row!important;flex-wrap:wrap!important;gap:.32em!important;margin:0!important}}'
         ].join('\n');
         document.head.appendChild(style);
     }
@@ -1051,6 +1198,7 @@
         Lampa = global.Lampa;
         $ = global.$;
         ready = true;
+        if (Lampa.Storage.value(PREFIX + 'hero_home') === '' && Lampa.Storage.value(PREFIX + 'hero') !== '') Lampa.Storage.set(PREFIX + 'hero_home', setting('hero', true) ? 'true' : 'false');
         loadButtons();
         addStyle();
         addSettings();
@@ -1071,8 +1219,10 @@
         global.addEventListener('resize', resizeHeader);
         if (global.ResizeObserver) new ResizeObserver(resizeHeader).observe(Lampa.Head.render()[0]);
         Lampa.Storage.listener.follow('change', function (event) {
+            if (changingPreset) return;
+            if (event.name === PREFIX + 'theme') { applyPresetDefaults(); return; }
             if (event.name === BUTTONS_KEY) { loadButtons(); renderNavigation(); }
-            else if (event.name && event.name.indexOf(PREFIX) === 0) { applyAppearance(); if (['mylampa_skin_hero', 'mylampa_skin_resume'].indexOf(event.name) >= 0) syncHome(true); }
+            else if (event.name && event.name.indexOf(PREFIX) === 0) { applyAppearance(); if (['mylampa_skin_hero_home', 'mylampa_skin_hero_movies', 'mylampa_skin_hero_series', 'mylampa_skin_resume'].indexOf(event.name) >= 0) syncHome(true); }
             else if (event.name === 'source') { featuredCache = {}; syncHome(false); }
             else if (event.name === 'online_watched_last') scheduleHomeSync();
         });
