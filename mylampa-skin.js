@@ -1,7 +1,7 @@
-/* MyLampa skin 0.4.0 — optional theme and editable native-menu shortcuts. */
+/* MyLampa skin 0.4.2 — optional theme and editable native-menu shortcuts. */
 (function (global) {
     'use strict';
-    var VERSION = '0.4.0';
+    var VERSION = '0.4.2';
     var COMPONENT = 'mylampa_skin';
     var BUTTONS_KEY = 'mylampa_skin_top_buttons_v1';
     var PREFIX = 'mylampa_skin_';
@@ -203,7 +203,7 @@
         ['glow', 'select', 'theme', 'Свічення', { theme: 'За темою', off: 'Без свічення', soft: "М'яке", strong: 'Виразне' }],
         ['menu_surface', 'select', 'theme', 'Прозорість меню та панелей', { theme: 'За темою', solid: 'Непрозорі', frosted: 'Матові', transparent: 'Прозоре скло' }],
         ['radius', 'select', 'theme', 'Заокруглення карток', { theme: 'За темою', '0': 'Без заокруглення', '8': 'Невелике', '14': 'Помірне', '20': 'Велике' }],
-        ['sidebar', 'select', 'rail', 'Бічне меню', { rail: 'Іконки, підписи при відкритті', expanded: 'Іконки та підписи' }],
+        ['sidebar', 'select', 'rail', 'Бічне меню', { rail: 'Іконки, підписи при відкритті', expanded: 'Іконки та підписи', hidden: 'Приховане' }, 'Приховане меню відкривається стрілкою вліво з краю контенту або натисканням на логотип Lampa.'],
         ['hero_settings', 'button', null, 'В центрі уваги', null, 'Великий банер на головній сторінці, у вкладках «Фільми» та «Серіали». Налаштувати показ для кожної вкладки.'],
         ['resume', 'trigger', true, 'Продовжити перегляд'],
         ['clock', 'trigger', true, 'Годинник, дата й день тижня'],
@@ -364,6 +364,7 @@
         body.toggleClass('mls-enabled', enabled);
         body.removeClass('mls-compact');
         body.toggleClass('mls-wide-sidebar', enabled && setting('sidebar', 'rail') === 'expanded');
+        body.toggleClass('mls-hidden-sidebar', enabled && setting('sidebar', 'rail') === 'hidden');
         body.toggleClass('mls-no-clock', enabled && !setting('clock', true));
         body.toggleClass('mls-no-button-icons', enabled && !setting('button_icons', true));
         body.toggleClass('mls-colored-buttons', enabled && setting('colored_buttons', true));
@@ -869,6 +870,7 @@
     var visualTimer;
     var playingTorrent;
     var semanticColors = { good: '#77df97', warning: '#f5d16e', bad: '#ff818c', orange: '#ffad68', info: '#78c5f5', genre: '#b39bea', neutral: '#adbacb' };
+    var semanticFills = { good: '#249e61', warning: '#e69b0b', bad: '#bb3b51', orange: '#cb771e', info: '#2d81b2', genre: '#594296', neutral: '#4d5c70' };
     function buttonHash(button) { return Lampa.Utils.hash(button.clone().removeClass('focus').prop('outerHTML')); }
     function actionKind(button) {
         var classes = button.attr('class') || '';
@@ -911,6 +913,8 @@
         node.attr('data-mls-tone', value);
         node[0].style.setProperty('--mls-tone', color);
         node[0].style.setProperty('--mls-tone-soft', colorTint(color, .18));
+        node[0].style.setProperty('--mls-tone-fill', semanticFills[value] || semanticFills.neutral);
+        node[0].style.setProperty('--mls-tone-ink', value === 'warning' ? '#17130b' : '#ffffff');
     }
     function numberFromLabel(text) {
         var match = String(text || '').match(/\d+(?:[.,]\d+)?/);
@@ -946,6 +950,30 @@
         var label = (duration.series ? 'Тривалість серії: ≈ ' : 'Тривалість фільму: ') + minuteLabel(duration.minutes * 60);
         if (node.text() !== label) node.text(label);
     }
+    function infoGroup(text) {
+        if (/наступ|следующ|next|дн[іияе]|days/i.test(text)) return 'next';
+        if (/тривал|длитель|duration|\d+:\d+|\d+\s*(?:хв|min|год|час)/i.test(text)) return 'duration';
+        if (/сезон|season/i.test(text)) return 'summary';
+        return /сері[йїя]|серии|episodes/i.test(text) ? 'episodes' : 'summary';
+    }
+    function layoutMetadata(area) {
+        // Keep every provider node and handler in place. Owned flex breaks arrange short rows.
+        var present = {};
+        area.find('[data-mls-info-chip]').each(function () {
+            var node = $(this);
+            var group = infoGroup(node.text());
+            node.attr('data-mls-info-group', group);
+            if (!node.closest('.hide,.hidden').length) present[group] = true;
+        });
+        var hasPrevious = false;
+        ['episodes', 'next', 'duration', 'summary'].forEach(function (group) {
+            var separator = area.children('.mls-info-break[data-mls-before="' + group + '"]');
+            if (setting('enabled', true) && present[group] && hasPrevious) {
+                if (!separator.length) area.append($('<span class="mls-info-break" aria-hidden="true"></span>').attr('data-mls-before', group));
+            } else separator.remove();
+            if (present[group]) hasPrevious = true;
+        });
+    }
     function styleMetadata() {
         $('.full-start__rate').each(function () { var node = $(this); tone(node, ratingTone(numberFromLabel(node.children().first().text()))); });
         $('.full-start__pg').each(function () { var node = $(this); tone(node, ageTone(node.text())); });
@@ -968,6 +996,7 @@
                 node.attr('data-mls-info-chip', 'true');
                 tone(node, infoTone(node.text()));
             });
+            layoutMetadata(area);
         });
     }
     function readTorrent(node) {
@@ -1053,7 +1082,8 @@
     }
 
     function addSettings() {
-        Lampa.SettingsApi.addComponent({ component: COMPONENT, name: 'MyLampa skin', icon: Lampa.Template.string('icon_settings'), after: 'interface' });
+        var paletteIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" data-mls-icon="palette"><path d="M12 3a9 9 0 1 0 0 18h1.2a2 2 0 0 0 1.5-3.3l-.5-.6a1.4 1.4 0 0 1 1.1-2.3H17a4 4 0 0 0 4-4C21 6.5 17 3 12 3Z"/><circle cx="7.5" cy="10" r=".8" fill="currentColor" stroke="none"/><circle cx="10" cy="6.8" r=".8" fill="currentColor" stroke="none"/><circle cx="14" cy="6.8" r=".8" fill="currentColor" stroke="none"/><circle cx="17" cy="9.5" r=".8" fill="currentColor" stroke="none"/></svg>';
+        Lampa.SettingsApi.addComponent({ component: COMPONENT, name: 'MyLampa skin', icon: paletteIcon, after: 'interface' });
         // A template and params create a nested page without a folder in the root settings menu.
         Lampa.Template.add('settings_' + COMPONENT + '_banner', '<div></div>');
         Lampa.SettingsApi.addParam({ component: COMPONENT + '_banner', param: { type: 'title' }, field: { name: 'В центрі уваги — банер' } });
@@ -1172,6 +1202,9 @@
             '@media(max-width:620px){body.mls-enabled .mls-hero{min-height:21em}.mls-hero-image{object-position:65% center}.mls-hero-shade{background:linear-gradient(0deg,#0c111b 0%,rgba(12,17,27,.75) 50%,rgba(12,17,27,.08) 100%)}.mls-hero-content{padding:7em 1em 2em}.mls-hero-title{font-size:1.8em}.mls-hero-actions{gap:.4em}.mls-hero-button{font-size:.68em;padding:.65em .85em}.mls-hero-pagination{bottom:.65em;right:1em}body.mls-enabled .mls-resume-row .card{width:calc(100vw - var(--mls-rail) - 3em)!important}.mls-resume-empty-body{flex-wrap:wrap}.mls-resume-catalog{margin-left:0}.mls-resume-empty-body p{max-width:24em}body.mls-enabled .head__time{margin-left:0}.head__time-date{white-space:nowrap}}',
             '@media(max-width:900px){body.mls-enabled .mls-top-button{padding:.45em .6em;max-width:11em}}',
             '@media(max-width:620px){body.mls-enabled{--mls-rail:3.7em}body.mls-enabled .head__body{padding:.5em .7em;align-items:flex-start;flex-wrap:wrap}body.mls-enabled .head__actions{flex-basis:calc(100% - 4em);flex-wrap:wrap}body.mls-enabled .mls-top-nav{flex-basis:100%;order:3}body.mls-enabled .mls-top-button{font-size:.85em;max-width:11em;min-height:2.7em}body.mls-enabled .head__action.open--settings,body.mls-enabled .head__action.open--search{height:2.5em;width:2.5em;margin:0}body.mls-enabled .menu__item{padding:.8em .7em}body.mls-enabled .head__backward{display:none}body.mls-enabled .wrap__left,body.mls-enabled .wrap__content{padding-top:var(--mls-head-height,7em)}body.mls-enabled.mls-wide-sidebar{--mls-rail:10em}}',
+            // Keep Lampa's native menu controller and logo handler; only hide the idle rail.
+            'body.mls-enabled.mls-hidden-sidebar{--mls-rail:0em}body.mls-enabled.mls-hidden-sidebar .wrap__left{width:0!important;border-right:0;pointer-events:none;visibility:hidden!important;transform:translate3d(calc(0px - var(--mls-expanded)),0,0)!important}body.mls-enabled.mls-hidden-sidebar .wrap__left>.scroll{width:var(--mls-expanded)!important}body.mls-enabled.mls-hidden-sidebar .head__logo-icon{cursor:pointer}',
+            'body.mls-enabled.mls-hidden-sidebar.menu--open .wrap__left{pointer-events:auto;visibility:visible!important;transform:none!important}body.mls-enabled.mls-hidden-sidebar.menu--open .wrap__left>.scroll{border-right:1px solid var(--mls-line)}',
             'body.mls-enabled{background:var(--mls-backdrop)!important}body.mls-enabled .background{opacity:var(--mls-image-opacity)!important}body.mls-enabled .head{background:var(--mls-panel)!important;border-color:var(--mls-line);backdrop-filter:blur(var(--mls-blur));-webkit-backdrop-filter:blur(var(--mls-blur))}',
             'body.mls-enabled .wrap__left{background:transparent!important;border-color:var(--mls-line)}body.mls-enabled .wrap__left>.scroll{background:var(--mls-panel)!important;backdrop-filter:blur(var(--mls-blur));-webkit-backdrop-filter:blur(var(--mls-blur))}',
             'body.mls-enabled .settings,body.mls-enabled .selectbox,body.mls-enabled .modal{background:rgba(0,0,0,var(--mls-overlay))!important}body.mls-enabled .settings__content,body.mls-enabled .settings-input__content,body.mls-enabled .selectbox__content,body.mls-enabled .modal__content{background:var(--mls-panel)!important;border:1px solid var(--mls-line);border-radius:var(--mls-panel-radius)!important;backdrop-filter:blur(var(--mls-blur));-webkit-backdrop-filter:blur(var(--mls-blur));box-shadow:0 .6em 2em rgba(0,0,0,.35)}',
@@ -1185,6 +1218,9 @@
             'body.mls-enabled .full-start-new__rate-line{font-size:.85em;flex-wrap:wrap;gap:.35em;margin-bottom:.55em!important}body.mls-enabled .full-start-new__rate-line>*{margin:0!important}body.mls-enabled .full-start-new__rate-line .full-start__pg,body.mls-enabled .full-start-new__rate-line .full-start__status{font-size:1em;line-height:1.2;padding:.18em .45em}',
             'body.mls-enabled .full-start-new__details{font-size:.88em!important;margin:0 0 .75em!important;min-height:0;gap:.32em;align-items:center}body.mls-enabled .full-start-new__details [data-mls-info-wrap]{display:contents!important}body.mls-enabled .full-start-new__details .full-start-new__split{display:none!important}',
             'body.mls-enabled [data-mls-info-chip]{font-size:1em!important;padding:.18em .45em!important;line-height:1.2!important;margin:0!important;border-radius:.25em!important;max-width:100%;white-space:normal!important;display:inline-block!important}body.mls-enabled .mls-duration{background:rgba(120,197,245,.14);border:1px solid rgba(120,197,245,.45);color:#d9edf8}',
+            'body.mls-enabled .full-start-new__details,body.mls-enabled .full-start__tags,body.mls-enabled .full-start-new__tags{display:flex!important;flex-direction:row!important;flex-wrap:wrap!important;column-gap:.32em;row-gap:.18em;align-items:center}body.mls-enabled [data-mls-info-chip]{order:40}body.mls-enabled [data-mls-info-group="episodes"]{order:10}body.mls-enabled [data-mls-info-group="next"]{order:20}body.mls-enabled [data-mls-info-group="duration"]{order:30}',
+            '.mls-info-break{display:none}body.mls-enabled .mls-info-break{display:block!important;flex-basis:100%;width:0;height:0;min-height:0;padding:0!important;margin:0!important;border:0!important}body.mls-enabled .mls-info-break[data-mls-before="next"]{order:19}body.mls-enabled .mls-info-break[data-mls-before="duration"]{order:29}body.mls-enabled .mls-info-break[data-mls-before="summary"]{order:39}',
+            'body.mls-enabled.mls-colored-metadata .full-start__pg[data-mls-tone],body.mls-enabled.mls-colored-metadata .full-start__status[data-mls-tone],body.mls-enabled.mls-colored-metadata [data-mls-info-chip]{color:var(--mls-tone-ink)!important;background:var(--mls-tone-fill)!important;border-color:transparent!important}',
             '@supports not (display:contents){body.mls-enabled .full-start-new__details [data-mls-info-wrap]{display:flex!important;flex-direction:row!important;flex-wrap:wrap!important;gap:.32em!important;margin:0!important}}'
         ].join('\n');
         document.head.appendChild(style);
