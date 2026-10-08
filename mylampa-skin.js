@@ -1,7 +1,7 @@
-/* MyLampa skin 0.4.4 — optional theme and editable native-menu shortcuts. */
+/* MyLampa skin 0.4.5 — optional theme and editable native-menu shortcuts. */
 (function (global) {
     'use strict';
-    var VERSION = '0.4.4';
+    var VERSION = '0.4.5';
     var COMPONENT = 'mylampa_skin';
     var BUTTONS_KEY = 'mylampa_skin_top_buttons_v1';
     var PREFIX = 'mylampa_skin_';
@@ -196,8 +196,8 @@
     }
     var definitions = [
         ['enabled', 'trigger', true, 'Увімкнути MyLampa skin'],
-        ['interface_scale', 'select', '100', 'Розмір інтерфейсу', { '90': 'Компактний — 90%', '100': 'Стандартний — 100%', '110': 'Збільшений — 110%', '125': 'Великий для ТВ — 125%', '150': 'Дуже великий для ТВ — 150%' }, 'Збільшує текст, картки, кнопки й меню. Для великого телевізора спробуйте 125% або 150%.'],
-        ['card_header', 'trigger', true, 'Виїзна верхня панель у картці', null, 'У картці релізу панель прихована. З’являється при переході пультом угору до панелі, прокручуванні вгору або наведенні на верхній край екрана.'],
+        ['card_scale', 'select', '100', 'Розмір карток', { '90': 'Компактний — 90%', '100': 'Стандартний — 100%', '110': 'Збільшений — 110%', '125': 'Великий для ТВ — 125%', '150': 'Дуже великий для ТВ — 150%' }, '100% — як у стандартній Lampa. Змінює лише картки в каталогах та продовженні перегляду.'],
+        ['card_header', 'trigger', true, 'Виїзна верхня панель у картці', null, 'У картці релізу панель прихована. З’являється при переході пультом угору до панелі, прокручуванні вгору або наведенні на верхній край екрана. На телефоні: свайп униз показує панель, угору — ховає.'],
         ['theme', 'select', 'cinema', 'Стиль теми', themeOptions, 'Фон, прозорість панелей, форма кнопок і підсвітка. Вибір стилю застосовує його оформлення; нижче можна змінити деталі.'],
         ['accent', 'select', 'theme', 'Колір теми', colorOptions],
         ['card_focus', 'select', 'theme', 'Підсвітка карток', { theme: 'За темою', outline: 'Рамка', glow: "М'яке сяйво", outline_glow: 'Рамка та сяйво', double: 'Подвійна рамка' }],
@@ -210,6 +210,7 @@
         ['resume', 'trigger', true, 'Продовжити перегляд'],
         ['clock', 'trigger', true, 'Годинник, дата й день тижня'],
         ['button_icons', 'trigger', true, 'Іконки верхніх кнопок'],
+        ['colored_buttons', 'trigger', true, 'Кольорові кнопки', null, 'Лише торенти, трейлер та обране у картці релізу. Іконки онлайн залишаються штатними.'],
         ['colored_metadata', 'trigger', true, 'Кольорові рейтинги, вік та інформація', null, 'Дані на сторінці релізу — за значенням. Оцінки на постерах залишаються штатними.'],
         ['torrent_colors', 'trigger', true, 'Кольорова рамка блоку торента і бітрета', null, 'Роздача: за сідами, під час перегляду — за виміряною швидкістю. Бітрейт — за обсягом даних за секунду.']
     ];
@@ -283,23 +284,26 @@
         if (object.component === 'favorite') return object.type === 'history' ? 'action:history' : 'action:favorite';
         return 'action:' + (object.component || '');
     }
+    var headerTouchMode = false;
+    var lastHeaderTouch = 0;
     var headerPeek = false;
     var headerPeekTimer;
     var currentHeaderActivity;
     var layoutEnabled;
-    function applyInterfaceSize() {
+    function applyCardSize() {
         if (!ready) return;
-        // Lampa keeps its responsive base font inline. Scale it without replacing the native setting.
+        // Keep the responsive native interface size; the multiplier belongs only to catalog cards.
         var nativeSize = parseFloat(document.body.style.fontSize);
         if (!(nativeSize > 0)) nativeSize = 16;
-        var choice = String(setting('interface_scale', '100'));
+        var choice = String(setting('card_scale', '100'));
         var scale = ['90', '100', '110', '125', '150'].indexOf(choice) >= 0 ? Number(choice) / 100 : 1;
         var rootStyle = document.documentElement.style;
         var enabled = setting('enabled', true);
-        var changed = layoutEnabled !== enabled || rootStyle.getPropertyValue('--mls-native-size') !== nativeSize + 'px' || rootStyle.getPropertyValue('--mls-scale') !== String(scale);
+        var changed = layoutEnabled !== enabled || rootStyle.getPropertyValue('--mls-native-size') !== nativeSize + 'px' || rootStyle.getPropertyValue('--mls-card-scale') !== String(scale);
         layoutEnabled = enabled;
         rootStyle.setProperty('--mls-native-size', nativeSize + 'px');
-        rootStyle.setProperty('--mls-scale', String(scale));
+        rootStyle.setProperty('--mls-card-scale', String(scale));
+        rootStyle.removeProperty('--mls-scale');
         if (changed && Lampa.Layer && Lampa.Layer.update) Lampa.Layer.update();
         resizeHeader();
     }
@@ -328,7 +332,7 @@
         }
         var name = Lampa.Controller.enabled().name;
         var inContent = ['content', 'full_start', 'items_line', 'mls_home'].indexOf(name) >= 0;
-        var hidden = floating && inContent && !headerPeek;
+        var hidden = floating && (inContent || headerTouchMode && name === 'head') && !headerPeek;
         var body = $('body');
         var changed = body.hasClass('mls-card-header') !== !!floating || body.hasClass('mls-head-hidden') !== !!hidden;
         body.toggleClass('mls-card-header', !!floating).toggleClass('mls-head-hidden', !!hidden);
@@ -343,7 +347,7 @@
         clearTimeout(headerPeekTimer);
         headerPeekTimer = setTimeout(function () {
             var head = Lampa.Head.render()[0];
-            if (head && head.matches(':hover')) { peekCardHeader(); return; }
+            if (!headerTouchMode && head && head.matches(':hover')) { peekCardHeader(); return; }
             if (headerPeek && floatingCardHeader() && Lampa.Controller.enabled().name === 'head') Lampa.Controller.toggle('content');
             headerPeek = false;
             syncCardHeader();
@@ -351,17 +355,58 @@
         syncCardHeader();
     }
     function initInterfaceLayout() {
-        new MutationObserver(applyInterfaceSize).observe(document.body, { attributes: true, attributeFilter: ['style'] });
+        new MutationObserver(applyCardSize).observe(document.body, { attributes: true, attributeFilter: ['style'] });
         Lampa.Controller.listener.follow('toggle', syncCardHeader);
-        Lampa.Listener.follow('resize_end', function () { applyInterfaceSize(); syncCardHeader(); });
+        Lampa.Listener.follow('resize_end', function () { applyCardSize(); syncCardHeader(); });
         document.addEventListener('wheel', function (event) {
             if (!floatingCardHeader() || !$(event.target).closest('.wrap__content').length) return;
             if (event.deltaY < 0) peekCardHeader();
             else if (event.deltaY > 0) { clearTimeout(headerPeekTimer); headerPeek = false; syncCardHeader(); }
         }, { passive: true });
-        document.addEventListener('mousemove', function (event) { if (event.clientY <= 12) peekCardHeader(); }, { passive: true });
-        document.addEventListener('keydown', function () { headerPeek = false; clearTimeout(headerPeekTimer); setTimeout(syncCardHeader, 0); }, true);
+        headerTouchMode = document.body.classList.contains('touch-device') || !!(global.matchMedia && global.matchMedia('(pointer:coarse)').matches);
+        var touch;
+        function hideTouchHeader() {
+            clearTimeout(headerPeekTimer);
+            headerPeek = false;
+            if (floatingCardHeader() && Lampa.Controller.enabled().name === 'head') Lampa.Controller.toggle('content');
+            syncCardHeader();
+        }
+        document.addEventListener('touchstart', function (event) {
+            headerTouchMode = true;
+            lastHeaderTouch = Date.now();
+            touch = null;
+            if (!floatingCardHeader() || event.touches.length !== 1) return;
+            var point = event.touches[0];
+            var inHead = !!$(event.target).closest('.head').length;
+            if (!inHead && !$(event.target).closest('.wrap__content').length) return;
+            touch = { x: point.clientX, y: point.clientY, head: inHead, moved: false, shown: false };
+            if (inHead) peekCardHeader();
+        }, { passive: true });
+        document.addEventListener('touchmove', function (event) {
+            if (!touch || !floatingCardHeader() || event.touches.length !== 1 || touch.head) return;
+            var point = event.touches[0], dx = point.clientX - touch.x, dy = point.clientY - touch.y;
+            if (Math.max(Math.abs(dx), Math.abs(dy)) > 12) touch.moved = true;
+            if (!touch.shown && Math.abs(dy) > 40 && Math.abs(dy) > Math.abs(dx) * 1.3) {
+                touch.shown = true;
+                if (dy > 0) peekCardHeader();else hideTouchHeader();
+            }
+        }, { passive: true });
+        document.addEventListener('touchend', function () {
+            var ended = touch;
+            touch = null;
+            if (!ended || !floatingCardHeader()) return;
+            if (ended.head) peekCardHeader();
+            else if (!ended.moved) setTimeout(hideTouchHeader, 0);
+        }, { passive: true });
+        document.addEventListener('touchcancel', function () { touch = null; }, { passive: true });
+        document.addEventListener('mousemove', function (event) {
+            if (Date.now() - lastHeaderTouch < 800 || event.sourceCapabilities && event.sourceCapabilities.firesTouchEvents) return;
+            headerTouchMode = false;
+            if (event.clientY <= 12) peekCardHeader();
+        }, { passive: true });
+        document.addEventListener('keydown', function () { headerTouchMode = false; touch = null; headerPeek = false; clearTimeout(headerPeekTimer); setTimeout(syncCardHeader, 0); }, true);
         Lampa.Head.render().on('mouseleave.mylampaSkin', function () {
+            if (headerTouchMode) return;
             if (headerPeek && floatingCardHeader() && Lampa.Controller.enabled().name === 'head') Lampa.Controller.toggle('content');
             headerPeek = false;
             clearTimeout(headerPeekTimer);
@@ -448,6 +493,7 @@
         body.toggleClass('mls-hidden-sidebar', enabled && setting('sidebar', 'rail') === 'hidden');
         body.toggleClass('mls-no-clock', enabled && !setting('clock', true));
         body.toggleClass('mls-no-button-icons', enabled && !setting('button_icons', true));
+        body.toggleClass('mls-colored-buttons', enabled && setting('colored_buttons', true));
         body.toggleClass('mls-colored-metadata', enabled && setting('colored_metadata', true));
         body.toggleClass('mls-torrent-colors', enabled && setting('torrent_colors', true));
         var themeKey = setting('theme', 'cinema');
@@ -511,7 +557,7 @@
         };
         Object.keys(variables).forEach(function (name) { rootStyle.setProperty(name, variables[name]); });
         renderNavigation();
-        applyInterfaceSize();
+        applyCardSize();
         syncCardHeader();
         syncHome(false);
         if (visualObserver) scheduleVisuals();
@@ -721,6 +767,47 @@
         html.find('.mls-hero-play').append(playSvg, $('<span></span>').text('Дивитися'));
         html.find('.mls-hero-book').append(bookmarkSvg, $('<span></span>').text('До обраного'));
         var row = customRow(html);
+        row.touchGesture = null;
+        row.touchActivationBlocked = 0;
+        html[0].addEventListener('touchstart', function (event) {
+            row.touchGesture = null;
+            row.touchActivationBlocked = 0;
+            if (event.touches.length !== 1) return;
+            var point = event.touches[0];
+            row.touchGesture = { id: point.identifier, x: point.clientX, y: point.clientY, horizontal: false };
+        }, { passive: true });
+        html[0].addEventListener('touchmove', function (event) {
+            var gesture = row.touchGesture;
+            if (!gesture || event.touches.length !== 1) { row.touchGesture = null; return; }
+            var point = event.touches[0], dx = point.clientX - gesture.x, dy = point.clientY - gesture.y;
+            if (!gesture.horizontal && Math.abs(dy) > 12 && Math.abs(dy) >= Math.abs(dx)) { row.touchGesture = null; return; }
+            if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.35) gesture.horizontal = true;
+            if (gesture.horizontal) {
+                row.touchActivationBlocked = Date.now() + 500;
+                if (event.cancelable) event.preventDefault();
+                event.stopPropagation();
+            }
+        }, { passive: false });
+        html[0].addEventListener('touchend', function (event) {
+            var gesture = row.touchGesture;
+            row.touchGesture = null;
+            if (!gesture || !gesture.horizontal) return;
+            row.touchActivationBlocked = Date.now() + 500;
+            for (var i = 0; i < event.changedTouches.length; i++) {
+                var point = event.changedTouches[i];
+                if (point.identifier !== gesture.id) continue;
+                var dx = point.clientX - gesture.x, dy = point.clientY - gesture.y;
+                if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.35) {
+                    row.show(row.index + (dx < 0 ? 1 : -1));
+                    row.refresh(false);
+                }
+                break;
+            }
+        }, { passive: true });
+        html[0].addEventListener('touchcancel', function () { row.touchGesture = null; }, { passive: true });
+        html[0].addEventListener('click', function (event) {
+            if (Date.now() < row.touchActivationBlocked) { event.preventDefault(); event.stopImmediatePropagation(); }
+        }, true);
         row.cards = [];
         row.index = 0;
         row.token = 0;
@@ -785,17 +872,17 @@
                 }, fail);
             } catch (e) { fail(); }
         }
-        html.find('.mls-hero-play').on('hover:enter', function () { if (row.card) openMovie(row.card);else fetch(); });
-        html.find('.mls-hero-book').on('hover:enter', function () { if (row.card) { Lampa.Favorite.toggle('book', row.card); bookmark(); } });
-        html.find('.mls-hero-prev').on('hover:enter', function () { row.show(row.index - 1); });
-        html.find('.mls-hero-next').on('hover:enter', function () { row.show(row.index + 1); });
+        html.find('.mls-hero-play').on('hover:enter', function () { if (Date.now() < row.touchActivationBlocked) return; if (row.card) openMovie(row.card);else fetch(); });
+        html.find('.mls-hero-book').on('hover:enter', function () { if (Date.now() < row.touchActivationBlocked) return; if (row.card) { Lampa.Favorite.toggle('book', row.card); bookmark(); } });
+        html.find('.mls-hero-prev').on('hover:enter', function () { if (Date.now() >= row.touchActivationBlocked) row.show(row.index - 1); });
+        html.find('.mls-hero-next').on('hover:enter', function () { if (Date.now() >= row.touchActivationBlocked) row.show(row.index + 1); });
         row.refresh = function (force) {
             if (force || row.source !== primarySource() || row.type !== selectedType()) fetch();
             clearInterval(row.timer);
             var seconds = Number(setting('hero_interval', '15'));
             if (seconds > 0) row.timer = setInterval(function () {
                 var bounds = html[0].getBoundingClientRect();
-                if (!row.dead && row.cards.length > 1 && !html.find('.focus').length && !document.querySelector('body.settings--open,body.selectbox--open,body.menu--open') && bounds.bottom > 0 && bounds.top < innerHeight) row.show(row.index + 1);
+                if (!row.dead && !row.touchGesture && row.cards.length > 1 && !html.find('.focus').length && !document.querySelector('body.settings--open,body.selectbox--open,body.menu--open') && bounds.bottom > 0 && bounds.top < innerHeight) row.show(row.index + 1);
             }, seconds * 1000);
         };
         row.refresh(true);
@@ -876,11 +963,12 @@
     function decorateComponent(component, slot) {
         if (!component || !component.use || component.mlsDecorated) return component;
         component.mlsDecorated = true;
+        $(component.html).addClass('mls-catalog-page');
         component.mlsSlot = slot;
         var featured = !!slot;
         component.use({
             onInstance: function (item, data) { styleContinue(item, data); },
-            onBuild: function () { if (featured) { component.mlsBuilt = true; installHome(component, true); } },
+            onBuild: function () { $(component.html).addClass('mls-catalog-page'); if (featured) { component.mlsBuilt = true; installHome(component, true); } },
             onStart: function () { if (featured && component.mlsBuilt) installHome(component, false); },
             onController: function (controller) {
                 if (!featured) return;
@@ -1194,7 +1282,7 @@
         style.id = 'mylampa-skin-style';
         style.textContent = [
             'body.mls-enabled{background:#0c111b!important;color:#eef2fa;--mls-rail:4.5em;--mls-expanded:13.5em}',
-            'body.mls-enabled{font-size:calc(var(--mls-native-size,16px) * var(--mls-scale,1))!important}body.mls-enabled .head{transition:transform .2s ease,opacity .2s ease}body.mls-enabled.mls-head-hidden .head{transform:translate3d(0,-100%,0);opacity:0;pointer-events:none}body.mls-enabled.mls-card-header.mls-head-hidden .wrap__content{padding-top:0!important}body.mls-enabled.mls-card-header .activity--active [data-mls-card-scroll]{height:calc(var(--mls-card-height,100vh) - var(--mls-head-height,4em))!important}body.mls-enabled.mls-card-header.mls-head-hidden .activity--active [data-mls-card-scroll]{height:var(--mls-card-height,100vh)!important}',
+            'body.mls-enabled .head{transition:transform .2s ease,opacity .2s ease}body.mls-enabled.mls-head-hidden .head{transform:translate3d(0,-100%,0)!important;opacity:0;pointer-events:none}body.mls-enabled.mls-card-header.mls-head-hidden .wrap__content{padding-top:0!important}body.mls-enabled.mls-card-header .activity--active [data-mls-card-scroll]{height:calc(var(--mls-card-height,100vh) - var(--mls-head-height,4em))!important}body.mls-enabled.mls-card-header.mls-head-hidden .activity--active [data-mls-card-scroll]{height:var(--mls-card-height,100vh)!important}',
             '@media(prefers-reduced-motion:reduce){body.mls-enabled .head{transition:none!important}}',
             'body.mls-enabled .background{opacity:.12!important}',
             'body.mls-enabled .head{background:#0c111b;border-bottom:1px solid #222c3d}',
@@ -1246,6 +1334,8 @@
 
             'body.mls-enabled{--mls-good:#77df97;--mls-bad:#ff818c}',
             'body.mls-enabled .full-start__button.focus,body.mls-enabled .full-start__button.hover,body.mls-enabled .simple-button.focus,body.mls-enabled .filter__item.focus,body.mls-enabled .torrent-file.focus{background:var(--mls-menu-bg)!important;color:var(--mls-menu-text)!important;box-shadow:var(--mls-menu-shadow)!important;border-color:var(--mls-accent)!important}',
+            'body.mls-enabled.mls-colored-buttons .full-start__button.view--torrent>svg{color:#71e59b!important}body.mls-enabled.mls-colored-buttons .full-start__button.view--trailer>svg{color:#ff514c!important}body.mls-enabled.mls-colored-buttons .full-start__button.button--book>svg{color:#f5d16e!important}',
+            'body.mls-enabled.mls-colored-buttons .full-start__button.focus.view--torrent>svg,body.mls-enabled.mls-colored-buttons .full-start__button.focus.view--trailer>svg,body.mls-enabled.mls-colored-buttons .full-start__button.focus.button--book>svg,body.mls-enabled.mls-colored-buttons .full-start__button.hover.view--torrent>svg,body.mls-enabled.mls-colored-buttons .full-start__button.hover.view--trailer>svg,body.mls-enabled.mls-colored-buttons .full-start__button.hover.button--book>svg{background:#101725;border-radius:.2em;box-shadow:0 0 0 .18em #101725}',
             'body.mls-enabled.mls-colored-metadata .full-start__rate[data-mls-tone]{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border-color:var(--mls-tone)!important}',
             'body.mls-enabled.mls-colored-metadata .full-start__pg[data-mls-tone],body.mls-enabled.mls-colored-metadata .full-start__status[data-mls-tone],body.mls-enabled.mls-colored-metadata [data-mls-info-chip]{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border:1px solid var(--mls-tone)!important;border-radius:.3em;padding:.25em .55em;line-height:1.25}',
             'body.mls-enabled.mls-colored-metadata .full-start-new__details{display:flex;flex-wrap:wrap;gap:.4em;align-items:center}body.mls-enabled.mls-colored-metadata .full-start-new__details .full-start-new__split{display:none}',
@@ -1257,7 +1347,7 @@
             'body.mls-enabled.mls-torrent-colors .torrent-item__bitrate[data-mls-tone]>span,body.mls-enabled.mls-torrent-colors .torrent-item__seeds[data-mls-tone]>span{color:var(--mls-tone)!important;background:var(--mls-tone-soft)!important;border:1px solid var(--mls-tone)!important;border-radius:.3em;padding:.1em .35em}',
             '.mls-home-row{display:none}body.mls-enabled .mls-home-row{display:block}',
             'body.mls-enabled .mls-main-page>.scroll>.scroll__content{padding-top:0}',
-            'body.mls-enabled .mls-hero{position:relative;min-height:14.1em;overflow:hidden;margin-bottom:.6em;background:#0c111b}',
+            'body.mls-enabled .mls-hero{touch-action:pan-y pinch-zoom;position:relative;min-height:14.1em;overflow:hidden;margin-bottom:.6em;background:#0c111b}',
             '.mls-hero-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 32%}',
             '.mls-hero-shade{position:absolute;inset:0;background:linear-gradient(90deg,#0c111b 0%,rgba(12,17,27,.95) 22%,rgba(12,17,27,.64) 45%,rgba(12,17,27,.08) 78%),linear-gradient(0deg,#0c111b 0%,transparent 48%)}',
             '.mls-hero-content{position:relative;z-index:1;padding:1.1em 1.5em 1.1em;max-width:34em}',
@@ -1274,21 +1364,22 @@
             '.mls-hero-prev,.mls-hero-next{display:flex;align-items:center;justify-content:center;width:2em;height:2em;border-radius:50%;background:#111b2bc4;border:1px solid #3b4658;font-size:1.3em;cursor:pointer}',
             '.mls-hero-loading .mls-hero-book,.mls-hero-error .mls-hero-book{display:none}.mls-hero-loading .mls-hero-title{font-size:1.8em}.mls-image-missing{opacity:.15!important}',
             'body.mls-enabled .mls-main-page .items-line{padding-bottom:1.6em}body.mls-enabled .mls-main-page .items-line__head{margin-bottom:.7em}body.mls-enabled .mls-main-page .items-line__title{font-size:1.15em;font-weight:600}',
-            'body.mls-enabled .mls-main-page .card:not(.mls-resume-card){width:10em!important}body.mls-enabled .mls-main-page .card:not(.mls-resume-card)>.card__title{font-size:.9em;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}body.mls-enabled .mls-main-page .card:not(.mls-resume-card)>.card__age{font-size:.7em}',
+            'body.mls-enabled .mls-catalog-page .card{font-size:calc(1em * var(--mls-card-scale,1))}@media(min-width:767px){body.mls-enabled.size--bigger .mls-catalog-page .card{font-size:calc(1.14em * var(--mls-card-scale,1))}}',
             'body.mls-enabled .mls-resume-row{padding-bottom:1.1em!important}body.mls-enabled .mls-resume-row .items-line__head{margin-bottom:.55em}body.mls-enabled .mls-resume-row .items-line__title{font-size:1.15em;font-weight:600}body.mls-enabled .mls-resume-row .items-line__more{font-size:.75em;color:#bac6d9}',
-            'body.mls-enabled .mls-resume-row .card{width:calc((100vw - var(--mls-rail) - 6em)/3)!important;margin-right:.7em}body.mls-enabled .mls-resume-card .card__view{height:5.8em;padding:0!important;margin-bottom:0;position:relative;background:#162234;border:1px solid #28384b}',
+            'body.mls-enabled .mls-resume-row .card{width:30em!important;max-width:calc(100vw - var(--mls-rail) - 3em);margin-right:.7em}body.mls-enabled .mls-resume-card .card__view{height:7em;padding:0!important;margin-bottom:0;position:relative;background:#162234;border:1px solid #28384b}',
             'body.mls-enabled .mls-resume-card>:not(.card__view),body.mls-enabled .mls-resume-card .card__img,body.mls-enabled .mls-resume-card>.card__title,body.mls-enabled .mls-resume-card>.card__age,body.mls-enabled .mls-resume-card .card-watched,body.mls-enabled .mls-resume-card .card__icons{display:none!important}',
             '.mls-resume-cover,.mls-resume-overlay,.mls-resume-progress{display:none}body.mls-enabled .mls-resume-cover{display:block;position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:var(--mls-radius)}',
             'body.mls-enabled .mls-resume-overlay{display:flex;position:absolute;inset:0;align-items:flex-end;padding:1.3em .75em 1em;gap:.6em;background:linear-gradient(0deg,rgba(6,13,23,.96),rgba(6,13,23,.12) 100%);border-radius:var(--mls-radius);z-index:1}',
             'body.mls-enabled .mls-resume-card .card__type{left:auto;right:.45em;top:.35em;font-size:.5em;padding:.35em .45em;height:auto;width:auto;border-radius:.2em}body.mls-enabled .mls-resume-card .card__vote{display:none!important}', '.mls-resume-play{border-radius:50%;width:1.55em;height:1.55em;background:#f4f7fb;color:#111b2b;display:flex;align-items:center;justify-content:center;flex-shrink:0}.mls-resume-play svg{width:1.1em;height:1.1em}',
-            '.mls-resume-text{min-width:0;flex:1}.mls-resume-title{font-size:.78em;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mls-resume-episode{font-size:.56em;color:#d2dbe9;margin-top:.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mls-resume-time{font-size:.55em;color:#e0e7f2;white-space:nowrap;padding-bottom:.1em}',
+            '.mls-resume-text{min-width:0;flex:1}.mls-resume-title{font-size:.9em;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mls-resume-episode{font-size:.65em;color:#d2dbe9;margin-top:.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mls-resume-time{font-size:.62em;color:#e0e7f2;white-space:nowrap;padding-bottom:.1em}',
             'body.mls-enabled .mls-resume-progress{display:block!important;position:absolute;bottom:.45em;left:.6em;right:.6em;height:.18em;background:#334157;border-radius:1em;z-index:3;margin:0!important}body.mls-enabled .mls-resume-progress>div{height:100%;background:var(--mls-accent);border-radius:1em}',
             'body.mls-enabled .mls-resume-row .card__view>.release-badges{top:.35em!important;left:.45em;right:.4em;flex-direction:row;flex-wrap:wrap;gap:.15em}body.mls-enabled .mls-resume-row .release-badges__badge{font-size:.5em;padding:.3em .4em}',
             'body.mls-enabled .mls-resume-empty{padding:.6em 1.5em 1.4em}.mls-resume-empty h2{font-size:1.15em;margin:0 0 .6em;font-weight:600}.mls-resume-empty-body{display:flex;align-items:center;gap:1em;padding:1em 1.1em;background:linear-gradient(110deg,#18263c,#101927);border:1px solid #29394e;border-radius:var(--mls-radius)}.mls-resume-empty-body strong{font-size:.85em}.mls-resume-empty-body p{font-size:.65em;color:#aab9cc;margin:.3em 0 0}.mls-resume-empty-icon{color:var(--mls-accent);width:2.2em;height:2.2em}.mls-resume-empty-icon svg{width:100%;height:100%}.mls-resume-catalog{margin-left:auto;white-space:nowrap}',
-            '@media(max-width:900px){body.mls-enabled .mls-hero{min-height:17em}.mls-hero-content{max-width:25em}.mls-hero-title{font-size:2em}body.mls-enabled .mls-resume-row .card{width:calc((100vw - var(--mls-rail) - 5em)/2)!important}.mls-resume-time{font-size:.5em}}',
+            '@media(max-width:900px){body.mls-enabled .mls-hero{min-height:17em}.mls-hero-content{max-width:25em}.mls-hero-title{font-size:2em}body.mls-enabled .mls-resume-row .card{width:30em!important}}',
             '@media(max-width:620px){body.mls-enabled .mls-hero{min-height:21em}.mls-hero-image{object-position:65% center}.mls-hero-shade{background:linear-gradient(0deg,#0c111b 0%,rgba(12,17,27,.75) 50%,rgba(12,17,27,.08) 100%)}.mls-hero-content{padding:7em 1em 2em}.mls-hero-title{font-size:1.8em}.mls-hero-actions{gap:.4em}.mls-hero-button{font-size:.68em;padding:.65em .85em}.mls-hero-pagination{bottom:.65em;right:1em}body.mls-enabled .mls-resume-row .card{width:calc(100vw - var(--mls-rail) - 3em)!important}.mls-resume-empty-body{flex-wrap:wrap}.mls-resume-catalog{margin-left:0}.mls-resume-empty-body p{max-width:24em}body.mls-enabled .head__time{margin-left:0}.head__time-date{white-space:nowrap}}',
             '@media(max-width:900px){body.mls-enabled .mls-top-button{padding:.45em .6em;max-width:11em}}',
-            '@media(max-width:620px){body.mls-enabled{--mls-rail:3.7em}body.mls-enabled .head__body{padding:.5em .7em;align-items:flex-start;flex-wrap:wrap}body.mls-enabled .head__actions{flex-basis:calc(100% - 4em);flex-wrap:wrap}body.mls-enabled .mls-top-nav{flex-basis:100%;order:3}body.mls-enabled .mls-top-button{font-size:.85em;max-width:11em;min-height:2.7em}body.mls-enabled .head__action.open--settings,body.mls-enabled .head__action.open--search{height:2.5em;width:2.5em;margin:0}body.mls-enabled .menu__item{padding:.8em .7em}body.mls-enabled .head__backward{display:none}body.mls-enabled .wrap__left,body.mls-enabled .wrap__content{padding-top:var(--mls-head-height,7em)}body.mls-enabled.mls-wide-sidebar{--mls-rail:10em}}',
+            '@media(max-width:620px){body.mls-enabled{--mls-rail:3.7em}body.mls-enabled .menu__item{padding:.8em .7em}body.mls-enabled.mls-wide-sidebar{--mls-rail:10em}}',
+            '@media(max-width:900px){body.mls-enabled .head{font-size:clamp(14px,var(--mls-native-size,16px),18px)}body.mls-enabled .head__body{position:relative;display:flex!important;flex-wrap:nowrap!important;align-items:center;gap:.4em;min-height:6.8em;padding:.45em .65em 3.5em!important}body.mls-enabled .head__backward,body.mls-enabled .head__menu-icon{display:none!important}body.mls-enabled .head__logo-icon{display:block!important;width:2.4em;margin:0;order:0}body.mls-enabled .head__time{order:1;gap:.35em;margin:0 .15em!important;min-width:0}body.mls-enabled .head__time-now{font-size:1.3em}body.mls-enabled .head__time-date,body.mls-enabled .head__time-week{font-size:.64em;white-space:nowrap}body.mls-enabled .head__actions{order:2;flex:1;min-width:0;justify-content:flex-end;flex-wrap:nowrap;gap:.2em}body.mls-enabled .head__actions>.head__action{flex:0 0 auto;width:2.7em;height:2.7em;min-width:40px;min-height:40px;margin:0!important}body.mls-enabled .mls-top-nav{position:absolute;left:.65em;right:.65em;bottom:.4em;width:auto;flex-wrap:nowrap;gap:.3em;overflow-x:auto;overflow-y:hidden;touch-action:pan-x;overscroll-behavior-x:contain;scrollbar-width:none;padding:.15em 0}body.mls-enabled .mls-top-nav::-webkit-scrollbar{display:none}body.mls-enabled .mls-top-button{flex:0 0 auto;max-width:none;font-size:.92em;height:2.85em;min-height:40px;padding:.35em .5em;gap:.35em}body.mls-enabled .mls-top-icon{height:1em!important;width:1em!important}}',
             // Keep Lampa's native menu controller and logo handler; only hide the idle rail.
             'body.mls-enabled.mls-hidden-sidebar{--mls-rail:0em}body.mls-enabled.mls-hidden-sidebar .wrap__left{width:0!important;border-right:0;pointer-events:none;visibility:hidden!important;transform:translate3d(calc(0px - var(--mls-expanded)),0,0)!important}body.mls-enabled.mls-hidden-sidebar .wrap__left>.scroll{width:var(--mls-expanded)!important}body.mls-enabled.mls-hidden-sidebar .head__logo-icon{cursor:pointer}',
             'body.mls-enabled.mls-hidden-sidebar.menu--open .wrap__left{pointer-events:auto;visibility:visible!important;transform:none!important}body.mls-enabled.mls-hidden-sidebar.menu--open .wrap__left>.scroll{border-right:1px solid var(--mls-line)}',
