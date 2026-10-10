@@ -1,7 +1,7 @@
-/* MyLampa skin 0.4.5 — optional theme and editable native-menu shortcuts. */
+/* MyLampa skin 0.4.6 — optional theme and editable native-menu shortcuts. */
 (function (global) {
     'use strict';
-    var VERSION = '0.4.5';
+    var VERSION = '0.4.6';
     var COMPONENT = 'mylampa_skin';
     var BUTTONS_KEY = 'mylampa_skin_top_buttons_v1';
     var PREFIX = 'mylampa_skin_';
@@ -537,6 +537,7 @@
                 theme.fill === 'gradient' ? 'linear-gradient(110deg,' + colorTint(accent, .65) + ',' + colorTint(accent, .2) + ')' : accent;
             if (theme.fill === 'glass') menuShadows.fill = 'inset 0 0 0 1px ' + colorTint(accent, .6) + ',0 .5em 1.8em rgba(0,0,0,.3)';
         }
+        var iconBrightness = parseInt(focusText.slice(1, 3), 16) * .299 + parseInt(focusText.slice(3, 5), 16) * .587 + parseInt(focusText.slice(5, 7), 16) * .114;
         body.attr('data-mls-card-focus', cardShadows[cardFocus] ? cardFocus : theme.card);
         body.attr('data-mls-menu-focus', menuShadows[menuFocus] ? menuFocus : theme.menu);
         var rootStyle = document.documentElement.style;
@@ -544,7 +545,7 @@
             '--mls-accent': accent, '--mls-accent-text': accentText, '--mls-card-color': cardColor,
             '--mls-card-shadow': cardShadows[cardFocus] || cardShadows[theme.card],
             '--mls-menu-color': menuColor, '--mls-menu-soft': colorTint(menuColor, .14),
-            '--mls-menu-bg': focusBackground, '--mls-menu-text': focusText,
+            '--mls-menu-bg': focusBackground, '--mls-menu-text': focusText, '--mls-menu-icon-filter': iconBrightness > 145 ? 'none' : 'invert(1)',
             '--mls-menu-shadow': menuShadows[menuFocus] || menuShadows[theme.menu],
             '--mls-radius': radius + 'px', '--mls-button-radius': theme.button, '--mls-panel-radius': theme.panelRadius,
             '--mls-base': theme.base, '--mls-backdrop': theme.backdrop,
@@ -1319,8 +1320,15 @@
             'body.mls-enabled.mls-wide-sidebar{--mls-rail:13.5em}',
             'body.mls-enabled.mls-wide-sidebar .wrap__left .menu__text{display:block!important}',
             'body.mls-enabled.mls-wide-sidebar .menu__ico{margin-right:1em}',
-            'body.mls-enabled .menu__item.focus,body.mls-enabled .menu__item.hover{background:#1c2c47!important;color:#f3f6fd!important;box-shadow:inset 3px 0 0 var(--mls-accent)}',
-            'body.mls-enabled .menu__item.focus svg [stroke],body.mls-enabled .menu__item.hover svg [stroke]{stroke:currentColor!important}',
+            'body.mls-enabled .menu__item.focus,body.mls-enabled .menu__item.hover,body.mls-enabled .menu__item.traverse{background:#1c2c47!important;color:#f3f6fd!important;box-shadow:inset 3px 0 0 var(--mls-accent)}',
+            'body.mls-enabled .menu__item.focus .menu__ico>img,body.mls-enabled .menu__item.hover .menu__ico>img,body.mls-enabled .menu__item.traverse .menu__ico>img{-webkit-filter:var(--mls-menu-icon-filter,none)!important;filter:var(--mls-menu-icon-filter,none)!important}',
+            // Native focus paint assumes a white menu background; inherit the theme's contrasting text instead.
+            'body.mls-enabled .menu__item.focus .menu__ico svg,body.mls-enabled .menu__item.hover .menu__ico svg,body.mls-enabled .menu__item.traverse .menu__ico svg,body.mls-enabled .menu__item.focus .menu__ico [fill],body.mls-enabled .menu__item.hover .menu__ico [fill],body.mls-enabled .menu__item.traverse .menu__ico [fill]{fill:currentColor!important}',
+            'body.mls-enabled .menu__item.focus .menu__ico [stroke],body.mls-enabled .menu__item.hover .menu__ico [stroke],body.mls-enabled .menu__item.traverse .menu__ico [stroke]{stroke:currentColor!important}',
+            'body.mls-enabled .menu__item.focus .menu__ico [fill="none"],body.mls-enabled .menu__item.hover .menu__ico [fill="none"],body.mls-enabled .menu__item.traverse .menu__ico [fill="none"]{fill:none!important}',
+            'body.mls-enabled .menu__item.focus .menu__ico [fill="transparent"],body.mls-enabled .menu__item.hover .menu__ico [fill="transparent"],body.mls-enabled .menu__item.traverse .menu__ico [fill="transparent"]{fill:transparent!important}',
+            'body.mls-enabled .menu__item.focus .menu__ico [stroke="none"],body.mls-enabled .menu__item.hover .menu__ico [stroke="none"],body.mls-enabled .menu__item.traverse .menu__ico [stroke="none"]{stroke:none!important}',
+            'body.mls-enabled .menu__item.focus .menu__ico [stroke="transparent"],body.mls-enabled .menu__item.hover .menu__ico [stroke="transparent"],body.mls-enabled .menu__item.traverse .menu__ico [stroke="transparent"]{stroke:transparent!important}',
             'body.mls-enabled .card__view,body.mls-enabled .card__img{border-radius:var(--mls-radius)!important}',
             'body.mls-enabled .card.focus .card__view{box-shadow:0 0 0 .13em var(--mls-accent)!important}',
             'body.mls-enabled .card.focus .card__view::after,body.mls-enabled .card.hover .card__view::after{border-color:var(--mls-accent)!important;border-radius:calc(var(--mls-radius) + .5em)!important}',
@@ -1329,7 +1337,7 @@
 
             'body.mls-enabled .card.focus .card__view,body.mls-enabled .card.hover .card__view{box-shadow:var(--mls-card-shadow)!important}body.mls-enabled .card.focus .card__view::after,body.mls-enabled .card.hover .card__view::after{border:0!important;box-shadow:none!important}',
             'body.mls-enabled .mls-top-button.mls-current{background:var(--mls-menu-soft);box-shadow:inset 0 -2px 0 var(--mls-menu-color)}',
-            'body.mls-enabled .mls-top-button.focus,body.mls-enabled .mls-top-button.hover,body.mls-enabled .head__action.focus,body.mls-enabled .menu__item.focus,body.mls-enabled .menu__item.hover,body.mls-enabled .settings-param.focus,body.mls-enabled .selectbox-item.focus,body.mls-enabled .mls-hero-button.focus,body.mls-enabled .mls-hero-prev.focus,body.mls-enabled .mls-hero-next.focus{background:var(--mls-menu-bg)!important;color:var(--mls-menu-text)!important;box-shadow:var(--mls-menu-shadow)!important;border-color:var(--mls-menu-color)!important}',
+            'body.mls-enabled .mls-top-button.focus,body.mls-enabled .mls-top-button.hover,body.mls-enabled .head__action.focus,body.mls-enabled .menu__item.focus,body.mls-enabled .menu__item.hover,body.mls-enabled .menu__item.traverse,body.mls-enabled .settings-param.focus,body.mls-enabled .selectbox-item.focus,body.mls-enabled .mls-hero-button.focus,body.mls-enabled .mls-hero-prev.focus,body.mls-enabled .mls-hero-next.focus{background:var(--mls-menu-bg)!important;color:var(--mls-menu-text)!important;box-shadow:var(--mls-menu-shadow)!important;border-color:var(--mls-menu-color)!important}',
             'body.mls-enabled[data-mls-menu-focus="stripe"] .mls-top-button.focus,body.mls-enabled[data-mls-menu-focus="stripe"] .mls-top-button.hover,body.mls-enabled[data-mls-menu-focus="stripe"] .head__action.focus,body.mls-enabled[data-mls-menu-focus="stripe"] .mls-hero-button.focus{box-shadow:inset 0 -3px 0 var(--mls-menu-color)!important}',
 
             'body.mls-enabled{--mls-good:#77df97;--mls-bad:#ff818c}',
