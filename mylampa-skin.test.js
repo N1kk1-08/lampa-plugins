@@ -3,6 +3,41 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const skin = require('./mylampa-skin.js');
 
+test('home layout preserves hidden and temporarily unavailable plugin rows and discovers new rows once', () => {
+    const value = [{key:'late',title:'Плагін',hidden:true},{key:'hero',title:'Банер'},{key:'late',title:'Дубль'}];
+    const layout = skin.normalizeLayout(value,[{key:'hero',title:'Інша назва'},{key:'new',title:'Новий блок'}]);
+    assert.deepEqual(layout.map(x=>x.key),['late','hero','new']);
+    assert.equal(layout[0].hidden,true);
+    assert.equal(skin.normalizeLayout(null,[{key:'resume',title:'Продовження'}])[0].key,'resume');
+    assert.deepEqual(skin.normalizeLayout([null,{},'bad']),[]);
+});
+test('home layout edits are immutable, bounded and preserve hidden rows', () => {
+    const initial=[{key:'hero',title:'Банер',hidden:false},{key:'resume',title:'Продовження',hidden:false}];
+    const hidden=skin.editLayout(initial,'hero','toggle');
+    assert.equal(hidden[0].hidden,true);assert.equal(initial[0].hidden,false);
+    const moved=skin.editLayout(hidden,'hero','down');
+    assert.deepEqual(moved.map(x=>x.key),['resume','hero']);assert.equal(moved[1].hidden,true);
+    assert.deepEqual(skin.editLayout(moved,'hero','down'),moved);
+    assert.deepEqual(skin.editLayout(moved,'missing','toggle'),moved);
+});
+test('hidden resume identities separate providers and movie/series with the same numeric id', () => {
+    assert.notEqual(skin.cardIdentity({id:7,source:'tmdb',title:'Film'}),skin.cardIdentity({id:7,source:'tmdb',name:'Series',media_type:'tv'}));
+    assert.notEqual(skin.cardIdentity({id:7,source:'cub'}),skin.cardIdentity({id:7,source:'tmdb'}));
+    assert.equal(skin.cardIdentity({}), '');
+});
+test('remaining time uses actual duration and never invents one from a percentage', () => {
+    assert.equal(skin.remainingTime({time:1200,duration:3000}),1800);
+    assert.equal(skin.remainingTime({time:3100,duration:3000}),0);
+    assert.equal(skin.remainingTime({time:1200,duration:0,percent:40}),null);
+    assert.equal(skin.remainingTime({time:0,duration:3000}),null);
+});
+test('contrast selection handles dark red, bright cyan and white without a brightness shortcut', () => {
+    assert.ok(skin.contrastRatio('#ffffff','#000000')>=21);
+    for(const bg of ['#e50914','#56d5dc','#f1ce73','#b6a2f5','#dce9f7','#141c2a','#2d81b2'])assert.ok(skin.contrastInk([bg]).ratio>=4.5,bg);
+    assert.equal(skin.blendColor('#ffffff','#000000',.5),'#808080');
+    assert.equal(skin.contrastInk(['#ffffff']).color,'#07111f');
+});
+
 test('an intentionally empty top bar stays empty after saving and reloading', () => {
     let buttons = skin.normalizeButtons(null);
     for (const button of buttons.slice()) buttons = skin.editButtons(buttons, 'remove', button.id);
