@@ -1601,7 +1601,8 @@
                 }
             });
         }
-        definitions.forEach(function (definition) { register(definition, COMPONENT); });
+        // Resume visibility is managed in the home editor; retain its legacy default/reset value.
+        definitions.forEach(function (definition) { if (definition[0] !== 'resume') register(definition, COMPONENT); });
         bannerDefinitions.forEach(function (definition) { register(definition, COMPONENT + '_banner'); });
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { type: 'title' }, field: { name: 'Верхня панель' } });
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: PREFIX + 'edit_buttons', type: 'button' }, field: { name: 'Налаштувати верхні кнопки', description: 'Пункти меню та плагінів, власні назви, іконки й порядок.' }, onChange: function () { openEditor(true); } });
