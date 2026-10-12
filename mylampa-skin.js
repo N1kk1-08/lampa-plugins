@@ -1,7 +1,7 @@
-/* MyLampa skin 0.5.0 — optional theme and editable native-menu shortcuts. */
+/* MyLampa skin 0.5.1 — optional theme and editable native-menu shortcuts. */
 (function (global) {
     'use strict';
-    var VERSION = '0.5.0';
+    var VERSION = '0.5.1';
     var COMPONENT = 'mylampa_skin';
     var BUTTONS_KEY = 'mylampa_skin_top_buttons_v1';
     var PREFIX = 'mylampa_skin_';
@@ -247,7 +247,7 @@
     }
     var definitions = [
         ['enabled', 'trigger', true, 'Увімкнути MyLampa skin'],
-        ['home_editor', 'button', null, 'Редактор головної', null, 'Порядок і видимість банера, продовження перегляду та добірок, зокрема інших плагінів.'],
+        ['home_editor', 'button', null, 'Редактор головної', null, 'Порядок і видимість продовження перегляду та добірок, зокрема інших плагінів. Банер налаштовується окремо в «В центрі уваги».'],
         ['lightweight', 'trigger', false, 'Полегшений режим', null, 'Для слабких ТВ: без розмиття, сяйва та анімацій теми. Кольори, форма й налаштування зберігаються.'],
         ['card_scale', 'select', '100', 'Розмір карток', { '90': 'Компактний — 90%', '100': 'Стандартний — 100%', '110': 'Збільшений — 110%', '125': 'Великий для ТВ — 125%', '150': 'Дуже великий для ТВ — 150%' }, '100% — як у стандартній Lampa. Змінює лише картки в каталогах та продовженні перегляду.'],
         ['card_header', 'trigger', true, 'Виїзна верхня панель у картці', null, 'У картці релізу панель прихована. З’являється при переході пультом угору до панелі, прокручуванні вгору або наведенні на верхній край екрана. На телефоні: свайп униз показує панель, угору — ховає.'],
@@ -640,8 +640,11 @@
     }
     var HOME_LAYOUT_KEY = PREFIX + 'home_layout_v1';
     var RESUME_HIDDEN_KEY = PREFIX + 'resume_hidden_v1';
-    var discoveredHomeRows = [{ key: 'hero', title: 'В центрі уваги' }, { key: 'resume', title: 'Продовжити перегляд' }];
-    function homeLayout() { return normalizeLayout(Lampa.Storage.get(HOME_LAYOUT_KEY, []), discoveredHomeRows); }
+    var discoveredHomeRows = [{ key: 'resume', title: 'Продовжити перегляд' }];
+    function homeLayout() {
+        // Older releases stored banner visibility/order here. Only its dedicated settings now apply.
+        return normalizeLayout(Lampa.Storage.get(HOME_LAYOUT_KEY, []), discoveredHomeRows).filter(function (row) { return row.key !== 'hero'; });
+    }
     function rowKey(component, item) {
         if (item.mlsLayoutKey) return item.mlsLayoutKey;
         var data = item.data || {};
@@ -656,22 +659,21 @@
         if (capture) editorController = Lampa.Controller.enabled().name;
         var rows = homeLayout();
         var items = rows.map(function (row, index) {
-            var off = row.hidden || row.key === 'hero' && !setting('hero_home', true) || row.key === 'resume' && !setting('resume', true);
+            var off = row.hidden || row.key === 'resume' && !setting('resume', true);
             return { title: (index + 1) + '. ' + row.title, subtitle: off ? 'Приховано' : 'Показано', key: row.key };
         });
         items.push({ title: 'Відновити порядок і видимість блоків', key: 'reset' });
-        if (rows.length === 2) items.push({ title: 'Відкрийте головну, щоб завантажити її добірки', separator: true });
+        if (rows.length === 1) items.push({ title: 'Відкрийте головну, щоб завантажити її добірки', separator: true });
         showPicker('Редактор головної', items, function (item) {
             if (item.key === 'reset') {
                 Lampa.Storage.set(HOME_LAYOUT_KEY, []);
-                Lampa.Storage.set(PREFIX + 'hero_home', true);
                 Lampa.Storage.set(PREFIX + 'resume', true);
                 openHomeEditor(false);
                 return;
             }
             var selected = rows.filter(function (row) { return row.key === item.key; })[0];
             if (!selected) return;
-            var hidden = selected.hidden || selected.key === 'hero' && !setting('hero_home', true) || selected.key === 'resume' && !setting('resume', true);
+            var hidden = selected.hidden || selected.key === 'resume' && !setting('resume', true);
             var actions = [{ title: hidden ? 'Показати блок' : 'Приховати блок', action: 'toggle' }];
             if (rows.indexOf(selected) > 0) actions.push({ title: 'Перемістити вище', action: 'up' });
             if (rows.indexOf(selected) < rows.length - 1) actions.push({ title: 'Перемістити нижче', action: 'down' });
@@ -679,7 +681,6 @@
                 var layout = homeLayout();
                 layout.forEach(function (row) { if (row.key === selected.key) row.hidden = hidden; });
                 Lampa.Storage.set(HOME_LAYOUT_KEY, editLayout(layout, selected.key, action.action));
-                if (action.action === 'toggle' && hidden && selected.key === 'hero') Lampa.Storage.set(PREFIX + 'hero_home', true);
                 if (action.action === 'toggle' && hidden && selected.key === 'resume') Lampa.Storage.set(PREFIX + 'resume', true);
                 openHomeEditor(false);
             }, function () { openHomeEditor(false); });
@@ -1096,9 +1097,10 @@
         var state = component.mlsHome;
         if (!state || component.mlsSlot !== 'home') return;
         var prior = component.items[component.active], oldIndex = component.active;
-        var rows = state.front.filter(function (item) { return item !== state.fallback; }).concat(state.original.filter(function (item) { return !setting('resume', true) || !isContinueRow(item.data); }));
+        var rows = state.front.filter(function (item) { return item !== state.fallback && item !== state.hero; }).concat(state.original.filter(function (item) { return !setting('resume', true) || !isContinueRow(item.data); }));
         rows.forEach(function (item) { rowKey(component, item); });
-        var config = homeLayout(), visible = [];
+        var config = homeLayout(), visible = state.hero ? [state.hero] : [];
+        if (state.hero) state.hero.layoutHidden = false;
         config.forEach(function (entry) {
             rows.forEach(function (item) { if (item.mlsLayoutKey === entry.key && !entry.hidden) visible.push(item); });
         });
@@ -1748,8 +1750,8 @@
             'body.mls-enabled .torrent-item__tracker .mls-uk-tracker{color:#80cfff!important;font-weight:600}',
             'body.mls-enabled .torrent-item__size,body.mls-enabled .torrent-item__ffprobe>div{color:var(--mls-ink)!important;background:var(--mls-panel-solid)!important;opacity:1!important;border:1px solid rgba(255,255,255,.28)}body.mls-enabled .torrent-item__seeds,body.mls-enabled .torrent-item__grabs,body.mls-enabled .torrent-item__bitrate{color:var(--mls-muted);opacity:1}',
             'body.mls-enabled.mls-torrent-colors .torrent-item__seeds[data-mls-tone]>span,body.mls-enabled.mls-torrent-colors .torrent-item__bitrate[data-mls-tone]>span,body.mls-enabled.mls-colored-metadata .full-start__rate[data-mls-tone]{background:#101725!important}',
-            'body.mls-enabled .full-start-new__right,body.mls-enabled .full-start__body{background:linear-gradient(90deg,rgba(6,11,19,.9),rgba(6,11,19,.75));border-radius:var(--mls-panel-radius);color:var(--mls-ink)}body.mls-enabled .full-start-new__head,body.mls-enabled .full-start-new__description,body.mls-enabled .full-start-new__tagline,body.mls-enabled .full-start__description{color:var(--mls-ink);opacity:1;text-shadow:0 1px 3px #000}',
-            'body.mls-enabled .full-descr__left,body.mls-enabled .full-review{background:var(--mls-window-panel);border-radius:var(--mls-panel-radius);padding:.7em;color:var(--mls-ink)}body.mls-enabled .full-descr__text,body.mls-enabled .full-descr__info-body,body.mls-enabled .full-review__text{color:var(--mls-ink);opacity:1}body.mls-enabled .full-descr__info-name,body.mls-enabled .full-review__footer{color:var(--mls-muted);opacity:1}',
+            'body.mls-enabled .full-start-new__head,body.mls-enabled .full-start-new__description,body.mls-enabled .full-start-new__tagline,body.mls-enabled .full-start__description{color:var(--mls-ink);opacity:1;text-shadow:0 1px 3px #000}',
+            'body.mls-enabled .full-descr__text,body.mls-enabled .full-descr__info-body,body.mls-enabled .full-review__text{color:var(--mls-ink);opacity:1;text-shadow:0 1px 3px #000}body.mls-enabled .full-descr__info-name,body.mls-enabled .full-review__footer{color:var(--mls-muted);opacity:1;text-shadow:0 1px 3px #000}',
             'body.mls-enabled .full-start__button:not(.focus):not(.hover),body.mls-enabled .simple-button:not(.focus){background:var(--mls-window-panel)!important;color:var(--mls-ink)}body.mls-enabled .mls-hero-content{background:linear-gradient(90deg,rgba(6,11,19,.83),rgba(6,11,19,.72) 80%,transparent);border-radius:var(--mls-panel-radius)}body.mls-enabled .mls-hero-pagination{background:rgba(6,11,19,.9);border-radius:1.5em;padding:.25em .5em}body.mls-enabled .mls-hero-description,body.mls-enabled .mls-hero-meta,body.mls-enabled .mls-hero-eyebrow{color:#e1e8f4}',
             'body.mls-enabled .mls-resume-overlay{background:linear-gradient(0deg,rgba(6,13,23,.98),rgba(6,13,23,.72));color:#f3f6fd}.mls-resume-time{max-width:9em;white-space:normal;text-align:right;line-height:1.3}',
             '.mls-theme-previews{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1em;padding:.6em}.mls-theme-preview{min-width:0;padding:.6em;border:2px solid transparent;border-radius:.7em;background:var(--mls-panel-solid);color:#f3f6fd;cursor:pointer}.mls-theme-preview.focus{border-color:var(--mls-accent);box-shadow:0 0 0 2px #fff}.mls-theme-preview strong{display:block;margin:.65em 0 .3em}.mls-preview-apply{font-size:.75em;line-height:1.3;color:#c5cfdf}.mls-preview-scene{background:var(--preview-base);padding:.7em;border-radius:var(--preview-radius);border:1px solid #ffffff35;min-height:7.5em}.mls-preview-menu{display:flex;gap:.5em;flex-wrap:wrap;background:var(--preview-panel);padding:.3em;border-radius:var(--preview-radius);font-size:.55em;color:#fff}.mls-preview-menu span:first-child{background:var(--preview-focus);color:var(--preview-ink);padding:.2em .4em;border-radius:var(--preview-radius)}.mls-preview-posters{display:flex;gap:.6em;margin:.9em .2em .2em}.mls-preview-posters i{display:block;flex:1;aspect-ratio:2/3;background:linear-gradient(140deg,#44566e,#15202f);border-radius:var(--preview-radius)}.mls-preview-posters i:first-child{border:2px solid var(--preview-accent);box-shadow:var(--preview-glow)}.mls-preview-posters i:nth-child(2){background:linear-gradient(140deg,#704856,#231724)}.mls-preview-posters i:nth-child(3){background:linear-gradient(140deg,#497062,#142923)}@media(max-width:900px){.mls-theme-previews{grid-template-columns:repeat(2,minmax(0,1fr));gap:.7em}}',
