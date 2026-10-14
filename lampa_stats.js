@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.1' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.2' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1082,12 +1082,19 @@
             Object.keys(this.data.years).forEach(function (y) {
                 var year = parseInt(y, 10);
                 if (!year) return;
-                var key = Math.floor(year / 10) * 10 + '-ті';
-                buckets[key] = (buckets[key] || 0) + (StatsDB.data.years[y].seconds || 0);
+                var decade = Math.floor(year / 10) * 10;
+                if (!buckets[decade]) buckets[decade] = 0;
+                buckets[decade] += (StatsDB.data.years[y].seconds || 0);
             });
             return Object.keys(buckets)
-                .map(function (k) { return { label: k, seconds: buckets[k] }; })
-                .sort(function (a, b) { return a.label.localeCompare(b.label); });
+                .map(function (k) {
+                    var decade = parseInt(k, 10);
+                    // Короткі підписи, щоб не накладались на ТВ: 50-ті, 00-ні, 10-ті, 20-ті
+                    var short = String(decade).slice(-2);
+                    var suffix = (decade === 2000) ? '-ні' : '-ті';
+                    return { label: short + suffix, seconds: buckets[k], decade: decade };
+                })
+                .sort(function (a, b) { return a.decade - b.decade; });
         },
         monthList: function () {
             var list = [];
@@ -2886,10 +2893,10 @@
         'transform:translateY(-4px);box-shadow:0 8px 22px rgba(0,0,0,.4);border-color:rgba(96,165,250,.9)!important;background:rgba(255,255,255,.12)!important;}' +
         '.stv-bottom{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:24px;}' +
         '.stv-panel{flex:1;min-width:200px;padding:16px;border-radius:14px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
-        '.stv-bars{display:flex;align-items:flex-end;gap:8px;height:140px;padding-top:8px;}' +
-        '.stv-bar-col{flex:1;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end;min-width:0;position:relative;}' +
-        '.stv-bar{width:70%;max-width:20px;background:linear-gradient(180deg,#60a5fa,#2563eb);border-radius:5px 5px 2px 2px;min-height:10px;}' +
-        '.stv-bar-label{font-size:10px;opacity:0.55;margin-top:6px;text-align:center;white-space:nowrap;}' +
+        '.stv-bars{display:flex;align-items:flex-end;gap:6px;height:150px;padding:8px 2px 4px;box-sizing:border-box;}' +
+        '.stv-bar-col{flex:1 1 0;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end;min-width:0;max-width:48px;position:relative;}' +
+        '.stv-bar{width:60%;max-width:18px;background:linear-gradient(180deg,#60a5fa,#2563eb);border-radius:5px 5px 2px 2px;min-height:10px;flex-shrink:0;}' +
+        '.stv-bar-label{font-size:9px;opacity:0.65;margin-top:8px;text-align:center;white-space:nowrap;line-height:1.15;max-width:100%;overflow:hidden;text-overflow:ellipsis;letter-spacing:0;}' +
         '.stv-bar-time{writing-mode:vertical-rl;transform:rotate(180deg);font-size:10px;font-weight:600;opacity:0.75;margin-bottom:6px;letter-spacing:0.3px;white-space:nowrap;line-height:1;}' +
         '.stv-pie-wrap{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}' +
         '.stv-pie{width:90px;height:90px;border-radius:50%;flex-shrink:0;}' +
@@ -2902,14 +2909,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v0991-style');
+        var old = document.getElementById('lampa-stats-v0992-style');
         if (old) old.remove();
-        ['lampa-stats-v099-style','lampa-stats-v098-style','lampa-stats-v097-style','lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style','lampa-stats-v090-style'].forEach(function (id) {
+        ['lampa-stats-v0991-style','lampa-stats-v099-style','lampa-stats-v098-style','lampa-stats-v097-style','lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v0991-style';
+        s.id = 'lampa-stats-v0992-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2929,7 +2936,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.99.1 ready (completed list, preview 12)');
+            console.log('Lampa stats v0.99.2 ready (year labels no overlap)');
         } catch (e) {
             console.error('stats init', e);
         }
