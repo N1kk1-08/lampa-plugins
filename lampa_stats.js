@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.2' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.3' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -2564,7 +2564,7 @@
 
         function monthBars() {
             var data = StatsDB.monthList();
-            var box = $('<div class="stv-bars"></div>');
+            var box = $('<div class="stv-bars stv-bars--months"></div>');
             if (!data.length) {
                 box.append('<div class="stv-muted">—</div>');
                 return box;
@@ -2573,13 +2573,16 @@
             data.forEach(function (d) { if (d.seconds > max) max = d.seconds; });
 
             data.forEach(function (d) {
-                var h = Math.max(10, Math.round((d.seconds / max) * 100));
+                var h = Math.max(12, Math.round((d.seconds / max) * 100));
                 var timeText = StatsDB.formatHoursOrMin(d.seconds);
 
                 var col = $('<div class="stv-bar-col"></div>');
-                col.append('<div class="stv-bar-time">' + timeText + '</div>');
-                col.append('<div class="stv-bar" style="height:' + h + '%"></div>');
-                col.append('<div class="stv-bar-label">' + d.label + '</div>');
+                // час зверху горизонтально — не вилазить за панель
+                col.append($('<div class="stv-bar-time"></div>').text(timeText));
+                var wrap = $('<div class="stv-bar-wrap"></div>');
+                wrap.append($('<div class="stv-bar"></div>').css('height', h + '%'));
+                col.append(wrap);
+                col.append($('<div class="stv-bar-label"></div>').text(d.label || ''));
                 box.append(col);
             });
             return box;
@@ -2587,15 +2590,17 @@
 
         function yearBars() {
             var data = StatsDB.yearBuckets();
-            var box = $('<div class="stv-bars"></div>');
+            var box = $('<div class="stv-bars stv-bars--years"></div>');
             if (!data.length) { box.append('<div class="stv-muted">—</div>'); return box; }
             var max = 1;
             data.forEach(function (d) { if (d.seconds > max) max = d.seconds; });
             data.forEach(function (d) {
-                var h = Math.max(8, Math.round((d.seconds / max) * 100));
+                var h = Math.max(10, Math.round((d.seconds / max) * 100));
                 var col = $('<div class="stv-bar-col"></div>');
-                col.append('<div class="stv-bar" style="height:' + h + '%"></div>');
-                col.append('<div class="stv-bar-label">' + d.label + '</div>');
+                var wrap = $('<div class="stv-bar-wrap"></div>');
+                wrap.append($('<div class="stv-bar"></div>').css('height', h + '%'));
+                col.append(wrap);
+                col.append($('<div class="stv-bar-label"></div>').text(d.label || ''));
                 box.append(col);
             });
             return box;
@@ -2893,11 +2898,14 @@
         'transform:translateY(-4px);box-shadow:0 8px 22px rgba(0,0,0,.4);border-color:rgba(96,165,250,.9)!important;background:rgba(255,255,255,.12)!important;}' +
         '.stv-bottom{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:24px;}' +
         '.stv-panel{flex:1;min-width:200px;padding:16px;border-radius:14px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
-        '.stv-bars{display:flex;align-items:flex-end;gap:6px;height:150px;padding:8px 2px 4px;box-sizing:border-box;}' +
-        '.stv-bar-col{flex:1 1 0;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end;min-width:0;max-width:48px;position:relative;}' +
-        '.stv-bar{width:60%;max-width:18px;background:linear-gradient(180deg,#60a5fa,#2563eb);border-radius:5px 5px 2px 2px;min-height:10px;flex-shrink:0;}' +
-        '.stv-bar-label{font-size:9px;opacity:0.65;margin-top:8px;text-align:center;white-space:nowrap;line-height:1.15;max-width:100%;overflow:hidden;text-overflow:ellipsis;letter-spacing:0;}' +
-        '.stv-bar-time{writing-mode:vertical-rl;transform:rotate(180deg);font-size:10px;font-weight:600;opacity:0.75;margin-bottom:6px;letter-spacing:0.3px;white-space:nowrap;line-height:1;}' +
+        '.stv-bars{display:flex;align-items:stretch;justify-content:space-between;gap:4px;height:168px;padding:4px 4px 2px;box-sizing:border-box;overflow:visible;}' +
+        '.stv-bar-col{flex:1 1 0;display:flex;flex-direction:column;align-items:center;min-width:0;position:relative;}' +
+        '.stv-bar-wrap{flex:1 1 auto;width:100%;min-height:0;display:flex;align-items:flex-end;justify-content:center;}' +
+        '.stv-bar{width:55%;max-width:20px;background:linear-gradient(180deg,#60a5fa,#2563eb);border-radius:5px 5px 2px 2px;min-height:8px;}' +
+        '.stv-bar-label{flex:0 0 auto;font-size:9px;opacity:0.7;margin-top:6px;padding:0 1px;text-align:center;white-space:nowrap;line-height:1.2;max-width:100%;overflow:visible;}' +
+        '.stv-bar-time{flex:0 0 auto;font-size:10px;font-weight:600;opacity:0.8;margin-bottom:4px;text-align:center;white-space:nowrap;line-height:1.2;writing-mode:horizontal-tb;transform:none;}' +
+        '.stv-bars--years .stv-bar-label{font-size:8px;letter-spacing:-0.2px;}' +
+        '.stv-panel{overflow:visible;}' +
         '.stv-pie-wrap{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}' +
         '.stv-pie{width:90px;height:90px;border-radius:50%;flex-shrink:0;}' +
         '.stv-legend{font-size:12px;opacity:0.85;}' +
@@ -2909,14 +2917,14 @@
         '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
 
     function installCSS() {
-        var old = document.getElementById('lampa-stats-v0992-style');
+        var old = document.getElementById('lampa-stats-v0993-style');
         if (old) old.remove();
-        ['lampa-stats-v0991-style','lampa-stats-v099-style','lampa-stats-v098-style','lampa-stats-v097-style','lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style','lampa-stats-v091-style'].forEach(function (id) {
+        ['lampa-stats-v0992-style','lampa-stats-v0991-style','lampa-stats-v099-style','lampa-stats-v098-style','lampa-stats-v097-style','lampa-stats-v096-style','lampa-stats-v095-style','lampa-stats-v094-style','lampa-stats-v093-style','lampa-stats-v092-style'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.remove();
         });
         var s = document.createElement('style');
-        s.id = 'lampa-stats-v0992-style';
+        s.id = 'lampa-stats-v0993-style';
         s.innerHTML = CSS;
         document.head.appendChild(s);
     }
@@ -2936,7 +2944,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.99.2 ready (year labels no overlap)');
+            console.log('Lampa stats v0.99.3 ready (chart labels fit inside panels)');
         } catch (e) {
             console.error('stats init', e);
         }
