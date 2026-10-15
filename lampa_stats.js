@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.3' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.4' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -2410,7 +2410,7 @@
 
         function renderAll(root) {
             root.empty();
-            root.append('<div class="stv-title">' + LANG.page_title + '</div>');
+            root.append('<div class="stv-heading"><div class="stv-title">Моя статистика переглядів</div><div class="stv-period">За весь час</div></div>');
 
             if (!Settings.collecting()) root.append('<div class="stv-disabled">' + LANG.disabled_text + '</div>');
 
@@ -2430,9 +2430,7 @@
             var row = $('<div class="stv-cards"></div>');
             row.append(totalTimeWithLevelCard());
             row.append(watchedCard());
-            var g = StatsDB.topGenre();
-            row.append(card(LANG.fav_genre,
-                '<div class="stv-genre-name">' + g.name + '</div><div class="stv-genre-pct">' + g.percent + '%</div>', '◎'));
+            row.append(genreCard());
             return row;
         }
 
@@ -2442,7 +2440,11 @@
             c.append('<div class="stv-card-label">' + LANG.total_time + '</div>');
             var body = $('<div class="stv-card-body stv-total-body"></div>');
             body.append('<div class="stv-card-val">' + StatsDB.formatTime(StatsDB.data.seconds_watched) + '</div>');
-            body.append($('<div class="stv-level-inline"></div>').append($('<span class="stv-level-num-sm"></span>').text(String(info.level))).append(' ').append($('<span class="stv-level-name-sm"></span>').text(info.name || '')));
+            var level = $('<div class="stv-level-inline"></div>');
+            level.append($('<span class="stv-level-num-sm"></span>').text(String(info.level) + ' ·'));
+            level.append($('<span class="stv-level-name-sm"></span>').text(info.name || ''));
+            level.append($('<span class="stv-level-percent"></span>').text(Math.round(info.progress * 100) + '%'));
+            body.append(level);
             body.append('<div class="stv-level-bar stv-level-bar-sm"><div class="stv-level-fill" style="width:' + Math.round(info.progress * 100) + '%"></div></div>');
             var sub = info.max ? LANG.level_max : (LANG.level_to + ' «' + info.nextName + '» — ' + StatsDB.formatTime(info.toNext));
             body.append('<div class="stv-level-sub">' + sub + '</div>');
@@ -2454,7 +2456,7 @@
             var c = $('<div class="stv-card selector stv-card-watched"></div>');
             c.append('<div class="stv-card-label">' + LANG.watched + '</div>');
             var body = $('<div class="stv-card-body stv-watched-body"></div>');
-            body.append('<div class="stv-watched-counts"><span class="stv-big">' + (StatsDB.data.movies_watched || 0) + '</span><span class="stv-sub"> ' + LANG.movies + ' / ' + (StatsDB.data.episodes_watched || 0) + ' ' + LANG.episodes + '</span></div>');
+            body.append('<div class="stv-watched-counts"><div class="stv-count"><span class="stv-big">' + (StatsDB.data.movies_watched || 0) + '</span><span class="stv-sub">' + LANG.movies + '</span></div><div class="stv-count"><span class="stv-big">' + (StatsDB.data.episodes_watched || 0) + '</span><span class="stv-sub">' + LANG.episodes + '</span></div></div>');
             var posters = $('<div class="stv-posters"></div>');
             StatsDB.recentCompleted(CONFIG.max_posters_show).forEach(function (item) {
                 var p = $('<div class="stv-poster"></div>').attr('title', item.title || '');
@@ -2468,6 +2470,7 @@
                 posters.append(p);
             });
             body.append(posters);
+            body.append($('<div class="stv-open-watched"></div>').text(LANG.open_watched + ' →'));
             c.append(body);
             c.on('hover:enter click', function () {
                 try {
@@ -2482,16 +2485,21 @@
             return c;
         }
 
-        function card(label, valueHtml, icon) {
-            var c = $('<div class="stv-card selector"></div>');
-            c.append('<div class="stv-card-label">' + label + '</div>');
-            c.append('<div class="stv-card-body"><span class="stv-card-icon">' + icon + '</span><div class="stv-card-val">' + valueHtml + '</div></div>');
+        function genreCard() {
+            var g = StatsDB.topGenre();
+            var c = $('<div class="stv-card selector stv-card-genre"></div>');
+            c.append($('<div class="stv-card-label"></div>').text(LANG.fav_genre));
+            var body = $('<div class="stv-card-body stv-genre-body"></div>');
+            body.append($('<div class="stv-genre-name"></div>').text(g.name));
+            body.append($('<div class="stv-genre-pct"></div>').text(g.percent + '%'));
+            body.append('<div class="stv-genre-context">Частка серед жанрів</div>');
+            c.append(body);
             return c;
         }
 
         function actorsBlock() {
             var wrap = $('<div class="stv-section"></div>');
-            wrap.append('<div class="stv-section-title">' + LANG.fav_actors + '</div>');
+            wrap.append('<div class="stv-section-title">Актори, яких дивитеся найчастіше</div>');
 
             var scrollWrap = $('<div class="stv-actors-scroll"></div>');
             var row = $('<div class="stv-actors"></div>');
@@ -2501,7 +2509,7 @@
                 row.append('<div class="stv-muted">' + LANG.no_actors + '</div>');
             } else {
                 list.forEach(function (a) {
-                    var item = $('<div class="stv-actor selector"></div>');
+                    var item = $('<div class="stv-actor selector"></div>').attr('title', a.name || '');
                     var img = a.profile_path
                         ? (String(a.profile_path).indexOf('http') === 0 ? a.profile_path : CONFIG.tmdb_img + a.profile_path)
                         : '';
@@ -2545,19 +2553,19 @@
         function bottomRow() {
             var row = $('<div class="stv-bottom"></div>');
 
-            var months = $('<div class="stv-panel selector"></div>');
-            months.append('<div class="stv-section-title">' + LANG.records + '</div>');
+            var months = $('<div class="stv-panel stv-panel-months selector"></div>');
+            months.append('<div class="stv-section-title">За місяцями</div>');
             months.append(monthBars());
             row.append(months);
 
-            var years = $('<div class="stv-panel selector"></div>');
-            years.append('<div class="stv-section-title">' + LANG.by_years + '</div>');
+            var years = $('<div class="stv-panel stv-panel-years selector"></div>');
+            years.append('<div class="stv-section-title">Роки випуску</div>');
             years.append(yearBars());
             row.append(years);
 
             var genres = $('<div class="stv-panel selector"></div>');
-            genres.append('<div class="stv-section-title">' + LANG.genres_dist + '</div>');
-            genres.append(genrePie());
+            genres.append('<div class="stv-section-title">Розподіл жанрів</div>');
+            genres.append(genreBars());
             row.append(genres);
             return row;
         }
@@ -2573,13 +2581,12 @@
             data.forEach(function (d) { if (d.seconds > max) max = d.seconds; });
 
             data.forEach(function (d) {
-                var h = Math.max(12, Math.round((d.seconds / max) * 100));
+                var h = Math.max(1, Math.round((d.seconds / max) * 100));
                 var timeText = StatsDB.formatHoursOrMin(d.seconds);
 
-                var col = $('<div class="stv-bar-col"></div>');
-                // час зверху горизонтально — не вилазить за панель
-                col.append($('<div class="stv-bar-time"></div>').text(timeText));
+                var col = $('<div class="stv-bar-col"></div>').css('--stv-bar-size', h + '%');
                 var wrap = $('<div class="stv-bar-wrap"></div>');
+                wrap.append($('<div class="stv-bar-time"></div>').text(timeText));
                 wrap.append($('<div class="stv-bar"></div>').css('height', h + '%'));
                 col.append(wrap);
                 col.append($('<div class="stv-bar-label"></div>').text(d.label || ''));
@@ -2595,9 +2602,10 @@
             var max = 1;
             data.forEach(function (d) { if (d.seconds > max) max = d.seconds; });
             data.forEach(function (d) {
-                var h = Math.max(10, Math.round((d.seconds / max) * 100));
-                var col = $('<div class="stv-bar-col"></div>');
+                var h = Math.max(1, Math.round((d.seconds / max) * 100));
+                var col = $('<div class="stv-bar-col"></div>').css('--stv-bar-size', h + '%');
                 var wrap = $('<div class="stv-bar-wrap"></div>');
+                wrap.append($('<div class="stv-bar-time"></div>').text(StatsDB.formatHoursOrMin(d.seconds)));
                 wrap.append($('<div class="stv-bar"></div>').css('height', h + '%'));
                 col.append(wrap);
                 col.append($('<div class="stv-bar-label"></div>').text(d.label || ''));
@@ -2606,26 +2614,25 @@
             return box;
         }
 
-        function genrePie() {
+        function genreBars() {
             var list = StatsDB.genreList().slice(0, 6);
-            var box = $('<div class="stv-pie-wrap"></div>');
+            var box = $('<div class="stv-genres"></div>');
             if (!list.length) { box.append('<div class="stv-muted">—</div>'); return box; }
             var total = 0;
             list.forEach(function (g) { total += g.seconds; });
             if (total <= 0) total = 1;
-            var colors = ['#3b82f6', '#ef4444', '#f59e0b', '#22c55e', '#a855f7', '#06b6d4'];
-            var stops = [], acc = 0;
             list.forEach(function (g, i) {
-                var p = (g.seconds / total) * 100, from = acc;
-                acc += p;
-                stops.push(colors[i % colors.length] + ' ' + from.toFixed(2) + '% ' + acc.toFixed(2) + '%');
+                var p = (g.seconds / total) * 100;
+                var row = $('<div class="stv-genre-row"></div>');
+                var label = $('<div class="stv-genre-row-label"></div>');
+                label.append($('<span></span>').text(g.name || ''));
+                label.append($('<span class="stv-genre-row-value"></span>').text(Math.round(p) + '%'));
+                row.append(label);
+                row.append($('<div class="stv-genre-track"></div>').append(
+                    $('<div class="stv-genre-fill stv-genre-fill-' + i + '"></div>').css('width', p + '%')
+                ));
+                box.append(row);
             });
-            box.append($('<div class="stv-pie" style="background:conic-gradient(' + stops.join(',') + ')"></div>'));
-            var legend = $('<div class="stv-legend"></div>');
-            list.forEach(function (g, i) {
-                legend.append($('<div class="stv-leg-item"></div>').append($('<span class="stv-dot"></span>').css('background', colors[i % colors.length])).append(document.createTextNode(' ' + (g.name || '') + ' ' + Math.round((g.seconds / total) * 100) + '%')));
-            });
-            box.append(legend);
             return box;
         }
 
@@ -2844,77 +2851,88 @@
         }
     };
 
-    var CSS =
-        '.stv-root{padding:22px 28px 50px;color:#fff;box-sizing:border-box;}' +
-        '.stv-title{font-size:28px;font-weight:700;margin-bottom:18px;}' +
-        '.stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-watched-row,.stv-empty{transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;}' +
-        '.stv-card:focus,.stv-actor:focus,.stv-panel:focus,.stv-reset:focus,.stv-work:focus,.stv-empty:focus,' +
-        '.stv-card.focus,.stv-actor.focus,.stv-panel.focus,.stv-reset.focus,.stv-work.focus,' +
-        '.stv-card.hover,.stv-actor.hover,.stv-panel.hover,.stv-reset.hover{' +
-        'transform:translateY(-6px);box-shadow:0 10px 28px rgba(0,0,0,.45);border-color:rgba(96,165,250,.9)!important;background:rgba(255,255,255,.12)!important;outline:none;z-index:2;}' +
-        '.stv-cards{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:28px;}' +
-        '.stv-card{min-width:220px;flex:1;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,0.06);border:2px solid transparent;}' +
-        '.stv-card-label{font-size:11px;opacity:0.5;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px;}' +
-        '.stv-card-body{display:flex;align-items:center;gap:12px;}' +
-        '.stv-card-icon{font-size:22px;opacity:0.85;}' +
-        '.stv-card-val{font-size:22px;font-weight:700;}' +
-        '.stv-big{font-size:26px;}' +
-        '.stv-sub{font-size:13px;font-weight:500;opacity:0.7;}' +
-        '.stv-genre-name{font-size:18px;font-weight:700;text-transform:uppercase;}' +
-        '.stv-genre-pct{font-size:13px;opacity:0.6;margin-top:2px;}' +
-        '.stv-total-body{flex-direction:column;align-items:flex-start;gap:8px;}' +
-        '.stv-level-inline{display:flex;align-items:baseline;gap:8px;margin-top:2px;}' +
-        '.stv-level-num-sm{font-size:20px;font-weight:800;}' +
-        '.stv-level-name-sm{font-size:15px;font-weight:700;text-transform:uppercase;opacity:0.9;}' +
-        '.stv-level-bar-sm{height:6px;border-radius:4px;background:rgba(255,255,255,0.12);overflow:hidden;width:100%;max-width:220px;}' +
-        '.stv-level-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,#60a5fa,#a855f7);}' +
-        '.stv-level-sub{font-size:12px;opacity:0.55;line-height:1.3;}' +
-        '.stv-watched-body{flex-direction:column;align-items:flex-start;gap:10px;}' +
-        '.stv-watched-counts{display:flex;align-items:baseline;gap:4px;}' +
-        '.stv-posters{display:flex;flex-wrap:wrap;gap:6px;}' +
-        '.stv-poster{width:36px;height:54px;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.1);position:relative;flex-shrink:0;}' +
-        '.stv-poster-empty{display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;opacity:0.6;}' +
-        '.stv-poster-badge{position:absolute;bottom:2px;right:2px;font-size:8px;background:rgba(0,0,0,0.7);padding:1px 3px;border-radius:3px;}' +
-        '.stv-section{margin-bottom:26px;}' +
-        '.stv-section-title{font-size:13px;opacity:0.55;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;}' +
-        '.stv-actors-scroll{width:100%;overflow:hidden;}' +
-        '.stv-actors{display:flex;flex-wrap:nowrap;gap:14px;overflow-x:auto;overflow-y:hidden;padding:8px 4px 20px;-webkit-overflow-scrolling:touch;scroll-behavior:smooth;}' +
-        '.stv-actor{width:110px;min-width:110px;flex-shrink:0;text-align:center;padding:8px;border-radius:12px;border:2px solid transparent;background:transparent;}' +
-        '.stv-actor-photo{width:68px;height:68px;border-radius:50%;margin:0 auto 8px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.08);}' +
-        '.stv-actor-ph{display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;}' +
-        '.stv-actor-name{font-size:12px;font-weight:600;line-height:1.2;margin-bottom:4px;}' +
-        '.stv-actor-meta{font-size:11px;opacity:0.55;}' +
-        '.stv-works{display:flex;flex-direction:column;gap:10px;}' +
-        '.stv-work{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
-        '.stv-work-poster{width:48px;height:72px;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.1);flex-shrink:0;}' +
-        '.stv-work-title{font-size:16px;font-weight:600;margin-bottom:4px;}' +
-        '.stv-work-meta{font-size:12px;opacity:0.55;}' +
-        '.stv-watched-list{display:flex;flex-direction:column;gap:10px;}' +
-        '.stv-watched-row{display:flex;align-items:center;gap:14px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
-        '.stv-watched-poster{width:48px;height:72px;border-radius:6px;background-size:cover;background-position:center;background-color:rgba(255,255,255,0.1);flex-shrink:0;position:relative;}' +
-        '.stv-watched-title{font-size:16px;font-weight:600;margin-bottom:4px;}' +
-        '.stv-watched-meta{font-size:12px;opacity:0.55;}' +
-        '.stv-watched-row:focus,.stv-watched-row.focus,.stv-watched-row.hover{' +
-        'transform:translateY(-4px);box-shadow:0 8px 22px rgba(0,0,0,.4);border-color:rgba(96,165,250,.9)!important;background:rgba(255,255,255,.12)!important;}' +
-        '.stv-bottom{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:24px;}' +
-        '.stv-panel{flex:1;min-width:200px;padding:16px;border-radius:14px;background:rgba(255,255,255,0.05);border:2px solid transparent;}' +
-        '.stv-bars{display:flex;align-items:stretch;justify-content:space-between;gap:4px;height:168px;padding:4px 4px 2px;box-sizing:border-box;overflow:visible;}' +
-        '.stv-bar-col{flex:1 1 0;display:flex;flex-direction:column;align-items:center;min-width:0;position:relative;}' +
-        '.stv-bar-wrap{flex:1 1 auto;width:100%;min-height:0;display:flex;align-items:flex-end;justify-content:center;}' +
-        '.stv-bar{width:55%;max-width:20px;background:linear-gradient(180deg,#60a5fa,#2563eb);border-radius:5px 5px 2px 2px;min-height:8px;}' +
-        '.stv-bar-label{flex:0 0 auto;font-size:9px;opacity:0.7;margin-top:6px;padding:0 1px;text-align:center;white-space:nowrap;line-height:1.2;max-width:100%;overflow:visible;}' +
-        '.stv-bar-time{flex:0 0 auto;font-size:10px;font-weight:600;opacity:0.8;margin-bottom:4px;text-align:center;white-space:nowrap;line-height:1.2;writing-mode:horizontal-tb;transform:none;}' +
-        '.stv-bars--years .stv-bar-label{font-size:8px;letter-spacing:-0.2px;}' +
-        '.stv-panel{overflow:visible;}' +
-        '.stv-pie-wrap{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}' +
-        '.stv-pie{width:90px;height:90px;border-radius:50%;flex-shrink:0;}' +
-        '.stv-legend{font-size:12px;opacity:0.85;}' +
-        '.stv-leg-item{margin-bottom:4px;display:flex;align-items:center;gap:6px;}' +
-        '.stv-dot{width:8px;height:8px;border-radius:50%;display:inline-block;}' +
-        '.stv-muted{opacity:0.45;font-size:13px;}' +
-        '.stv-empty{padding:36px;border-radius:12px;background:rgba(255,255,255,0.04);text-align:center;opacity:0.7;margin-bottom:16px;border:2px solid transparent;}' +
-        '.stv-disabled{padding:12px 16px;border-radius:8px;background:rgba(255,80,80,0.12);color:#fca5a5;margin-bottom:16px;}' +
-        '.stv-reset{display:inline-block;margin-top:8px;margin-bottom:40px;padding:12px 18px;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid transparent;opacity:0.85;}';
+    var CSS = [
+        "/* Embedded in lampa_stats.js; no stylesheet request is made by the plugin. */",
+        ".stv-root{--stv-surface:rgba(255,255,255,.055);--stv-surface-focus:#2b3037;--stv-line:rgba(255,255,255,.12);--stv-muted:#b7c0cb;--stv-accent:#78a0ff;--stv-radius:14px;--stv-track:rgba(173,190,211,.16);--stv-blue:#68b7ff;--stv-cyan:#51d6cf;--stv-violet:#b59aff;--stv-purple:#8f72ed;--stv-amber:#f4c76c;--stv-coral:#fa9984;--stv-pink:#eaa1d3;padding:24px 28px 50px;box-sizing:border-box;color:inherit;font-size:16px;}",
+        ".stv-root *{box-sizing:border-box;}",
+        "body.mls-enabled .stv-root{--stv-surface:var(--mls-panel,rgba(255,255,255,.055));--stv-surface-focus:var(--mls-panel-solid,#2b3037);--stv-line:var(--mls-line,rgba(255,255,255,.12));--stv-accent:var(--mls-accent,#78a0ff);--stv-radius:var(--mls-radius,14px);}",
+        ".stv-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:24px;}",
+        ".stv-title{font-size:28px;font-weight:700;line-height:1.25;margin-bottom:22px;overflow-wrap:break-word;}",
+        ".stv-heading .stv-title{margin-bottom:0;}",
+        ".stv-period{font-size:13px;color:var(--stv-muted);flex-shrink:0;}",
+        ".stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-watched-row,.stv-empty{border:2px solid transparent;transition:border-color .15s ease,background .15s ease,box-shadow .15s ease;}",
+        ".stv-card:focus,.stv-actor:focus,.stv-panel:focus,.stv-reset:focus,.stv-work:focus,.stv-watched-row:focus,.stv-empty:focus,.stv-card.focus,.stv-actor.focus,.stv-panel.focus,.stv-reset.focus,.stv-work.focus,.stv-watched-row.focus,.stv-empty.focus,.stv-card.hover,.stv-actor.hover,.stv-panel.hover,.stv-reset.hover,.stv-work.hover,.stv-watched-row.hover{border-color:var(--stv-accent);background:var(--stv-surface-focus);box-shadow:0 0 0 1px var(--stv-accent);outline:none;}",
+        ".stv-cards{display:grid;grid-template-columns:1.1fr 1.25fr .85fr;gap:16px;margin-bottom:28px;}",
+        ".stv-card{min-width:0;padding:20px 22px;border-radius:var(--stv-radius);background:var(--stv-surface);}",
+        ".stv-card-label{font-size:12px;line-height:1.4;color:var(--stv-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px;}",
+        ".stv-card-body{display:flex;align-items:center;gap:12px;}",
+        ".stv-card-val{font-size:32px;line-height:1.2;font-weight:700;font-variant-numeric:tabular-nums;}",
+        ".stv-total-body,.stv-watched-body,.stv-genre-body{flex-direction:column;align-items:flex-start;gap:12px;}",
+        ".stv-total-body{gap:10px;}",
+        ".stv-level-inline{display:flex;align-items:baseline;gap:7px;width:100%;margin-top:7px;}",
+        ".stv-level-num-sm,.stv-level-name-sm{font-size:15px;font-weight:600;}",
+        ".stv-level-percent{font-size:12px;margin-left:auto;color:var(--stv-muted);font-variant-numeric:tabular-nums;}",
+        ".stv-level-bar{height:6px;border-radius:4px;background:var(--stv-track);overflow:hidden;width:100%;}",
+        ".stv-level-fill{height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--stv-accent),var(--stv-cyan));}",
+        ".stv-level-sub{font-size:12px;color:var(--stv-muted);line-height:1.45;}",
+        ".stv-watched-counts{display:flex;align-items:baseline;gap:28px;}",
+        ".stv-count{display:flex;flex-direction:column;gap:5px;}",
+        ".stv-big{font-size:32px;line-height:1.2;font-weight:700;font-variant-numeric:tabular-nums;}",
+        ".stv-sub{font-size:13px;color:var(--stv-muted);}",
+        ".stv-posters{display:flex;flex-wrap:wrap;gap:6px;}",
+        ".stv-poster{width:32px;height:48px;border-radius:5px;background-size:cover;background-position:center;background-color:var(--stv-track);position:relative;flex-shrink:0;}",
+        ".stv-poster-empty{display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--stv-muted);}",
+        ".stv-poster-badge{position:absolute;bottom:2px;right:2px;font-size:8px;color:#fff;background:rgba(0,0,0,.8);padding:1px 3px;border-radius:3px;}",
+        ".stv-open-watched{font-size:13px;color:inherit;margin-top:1px;text-decoration:underline;text-decoration-color:var(--stv-accent);text-underline-offset:4px;}",
+        ".stv-genre-name{font-size:23px;font-weight:600;line-height:1.25;overflow-wrap:break-word;}",
+        ".stv-genre-pct{font-size:38px;line-height:1.1;font-weight:600;font-variant-numeric:tabular-nums;}",
+        ".stv-genre-context{font-size:12px;line-height:1.4;color:var(--stv-muted);}",
+        ".stv-section{margin-bottom:26px;}",
+        ".stv-section-title{font-size:13px;line-height:1.5;font-weight:600;letter-spacing:.035em;margin-bottom:16px;}",
+        ".stv-actors-scroll{width:100%;overflow:hidden;}",
+        ".stv-actors{position:relative;display:flex;align-items:flex-start;flex-wrap:nowrap;gap:6px;overflow-x:auto;overflow-y:hidden;padding:8px 4px 16px;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:var(--stv-line) transparent;}",
+        ".stv-actor{width:100px;min-width:100px;flex-shrink:0;text-align:center;padding:8px 4px;border-radius:var(--stv-radius);background:transparent;}",
+        ".stv-actor-photo{width:64px;height:64px;border-radius:50%;margin:0 auto 10px;background-size:cover;background-position:center;background-color:var(--stv-track);}",
+        ".stv-actor-ph{display:flex;align-items:center;justify-content:center;font-size:23px;font-weight:600;color:var(--stv-accent);}",
+        ".stv-actor-name{font-size:12px;font-weight:500;line-height:1.4;min-height:34px;margin-bottom:5px;overflow-wrap:break-word;}",
+        ".stv-actor-meta{font-size:11px;line-height:1.4;color:var(--stv-muted);font-variant-numeric:tabular-nums;}",
+        ".stv-bottom{display:grid;grid-template-columns:1.25fr .95fr 1fr;gap:16px;margin-bottom:26px;}",
+        ".stv-panel{min-width:0;padding:20px;border-radius:var(--stv-radius);background:var(--stv-surface);}",
+        ".stv-bars{display:flex;align-items:stretch;gap:7px;height:210px;padding:25px 0 0;}",
+        ".stv-bar-col{flex:1 1 0;display:flex;flex-direction:column;align-items:center;min-width:0;position:relative;}",
+        ".stv-bar-wrap{position:relative;flex:1 1 auto;width:100%;min-height:0;display:flex;align-items:flex-end;justify-content:center;}",
+        ".stv-bar{width:64%;max-width:28px;background:linear-gradient(180deg,var(--stv-cyan),var(--stv-blue));border-radius:5px 5px 2px 2px;min-height:2px;}",
+        ".stv-bars--years .stv-bar{background:linear-gradient(180deg,var(--stv-violet),var(--stv-purple));}",
+        ".stv-bar-label{flex:0 0 auto;font-size:11px;line-height:1.4;color:var(--stv-muted);margin-top:10px;text-align:center;white-space:nowrap;}",
+        ".stv-bar-time{position:absolute;bottom:calc(var(--stv-bar-size) + 6px);font-size:11px;line-height:1.3;color:var(--stv-muted);white-space:nowrap;text-align:center;font-variant-numeric:tabular-nums;}",
+        ".stv-genres{display:flex;flex-direction:column;gap:14px;}",
+        ".stv-genre-row-label{display:flex;justify-content:space-between;gap:12px;font-size:12px;line-height:1.4;margin-bottom:7px;}",
+        ".stv-genre-row-label>span:first-child{min-width:0;overflow-wrap:break-word;}",
+        ".stv-genre-row-value{flex-shrink:0;font-variant-numeric:tabular-nums;}",
+        ".stv-genre-track{height:5px;border-radius:4px;background:var(--stv-track);overflow:hidden;}",
+        ".stv-genre-fill{height:100%;border-radius:inherit;}",
+        ".stv-genre-fill-0{background:linear-gradient(90deg,var(--stv-blue),var(--stv-cyan));}",
+        ".stv-genre-fill-1{background:linear-gradient(90deg,var(--stv-purple),var(--stv-violet));}",
+        ".stv-genre-fill-2{background:var(--stv-cyan);}",
+        ".stv-genre-fill-3{background:var(--stv-amber);}",
+        ".stv-genre-fill-4{background:var(--stv-coral);}",
+        ".stv-genre-fill-5{background:var(--stv-pink);}",
+        ".stv-works,.stv-watched-list{display:flex;flex-direction:column;gap:12px;}",
+        ".stv-work,.stv-watched-row{display:flex;align-items:center;gap:16px;padding:12px 14px;border-radius:var(--stv-radius);background:var(--stv-surface);}",
+        ".stv-work-poster,.stv-watched-poster{width:48px;height:72px;border-radius:5px;background-size:cover;background-position:center;background-color:var(--stv-track);flex-shrink:0;position:relative;}",
+        ".stv-work-info,.stv-watched-info{min-width:0;}",
+        ".stv-work-title,.stv-watched-title{font-size:16px;font-weight:600;line-height:1.4;margin-bottom:5px;overflow-wrap:break-word;}",
+        ".stv-work-meta,.stv-watched-meta{font-size:12px;line-height:1.5;color:var(--stv-muted);}",
+        ".stv-muted{color:var(--stv-muted);font-size:13px;}",
+        ".stv-empty{padding:36px 22px;border-radius:var(--stv-radius);background:var(--stv-surface);text-align:center;color:var(--stv-muted);margin-bottom:18px;line-height:1.5;}",
+        ".stv-disabled{padding:12px 16px;border-radius:8px;background:rgba(250,153,132,.12);color:#fac3b7;margin-bottom:18px;font-size:14px;line-height:1.5;}",
+        ".stv-reset{display:inline-block;margin:4px 0 32px;padding:11px 16px;border-radius:var(--stv-radius);background:var(--stv-surface);font-size:13px;color:var(--stv-muted);}",
+        "@media(min-width:1600px){.stv-card{padding:24px 26px;}.stv-card-val,.stv-big{font-size:36px;}.stv-genre-pct{font-size:42px;}.stv-bar-time,.stv-bar-label{font-size:12px;}.stv-actor-name{font-size:13px;min-height:37px;}.stv-actor-meta{font-size:12px;}}",
+        "@media(max-width:1100px){.stv-bottom{grid-template-columns:1fr 1fr;}.stv-panel-months{grid-column:1/-1;}.stv-card{padding:18px;}.stv-card-val,.stv-big{font-size:28px;}.stv-genre-name{font-size:21px;}}",
+        "@media(max-width:720px){.stv-root{padding:20px 18px 36px;}.stv-title{font-size:25px;}.stv-cards{grid-template-columns:1fr 1fr;gap:12px;}.stv-card-genre{grid-column:1/-1;}.stv-genre-body{flex-direction:row;align-items:center;flex-wrap:wrap;gap:12px 20px;}.stv-genre-name{flex:1;}.stv-genre-pct{font-size:30px;}.stv-genre-context{width:100%;}.stv-watched-counts{gap:22px;}}",
+        "@media(max-width:520px){.stv-root{padding:18px 14px 30px;}.stv-heading{align-items:flex-start;flex-direction:column;gap:8px;margin-bottom:20px;}.stv-title{font-size:24px;}.stv-cards{grid-template-columns:1fr;}.stv-card-genre{grid-column:auto;}.stv-card{padding:18px;}.stv-card-val,.stv-big{font-size:30px;}.stv-bottom{grid-template-columns:1fr;gap:12px;}.stv-panel-months{grid-column:auto;}.stv-panel{padding:18px 16px;}.stv-bars{height:auto;padding:0;flex-direction:column;gap:10px;}.stv-bars .stv-bar-col{display:flex;flex-direction:row;padding:0 58px 0 35px;min-height:22px;flex:auto;}.stv-bars .stv-bar-label{position:absolute;left:0;width:29px;margin:0;text-align:left;}.stv-bars .stv-bar-wrap{height:8px;display:block;min-width:0;}.stv-bars .stv-bar{width:var(--stv-bar-size);height:8px!important;max-width:none;min-height:0;border-radius:4px;}.stv-bars .stv-bar-time{top:50%;bottom:auto;right:-58px;width:51px;transform:translateY(-50%);text-align:right;}.stv-actors{gap:4px;}.stv-actor{width:94px;min-width:94px;}.stv-actor-photo{width:62px;height:62px;}.stv-work,.stv-watched-row{gap:12px;padding:10px;}.stv-work-title,.stv-watched-title{font-size:15px;}}",
+        "@media(prefers-reduced-motion:reduce){.stv-root *{transition:none!important;}}"
+    ].join("\n");
 
     function installCSS() {
         var old = document.getElementById('lampa-stats-v0993-style');
@@ -2944,7 +2962,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.99.3 ready (chart labels fit inside panels)');
+            console.log('Lampa stats v0.99.4 ready (theme-aware statistics UI)');
         } catch (e) {
             console.error('stats init', e);
         }
