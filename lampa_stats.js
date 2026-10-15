@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.5' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.6' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -1193,11 +1193,13 @@
         sessionHadPlay: false,
         sessionSeedTime: 0,    // timeline position at session start
         sessionIsExternal: false,
+        sessionIsInternal: false,
         sessionLastTl: 0,
         lastPartialFlushAt: 0,
         sessionAddedSec: 0,
         sessionWatchId: '',
         _sessionCommitted: false,
+        _sessionSerial: 0,
         committedIds: {},
         videoHooked: false,
 
@@ -1291,9 +1293,11 @@
             try {
                 if (Lampa.Player && typeof Lampa.Player.callback === 'function') {
                     Lampa.Player.callback(function () {
+                        var serial = self._sessionSerial;
                         // External (Just+/VLC): callback часто при обриві TorrServe/потоку,
                         // поки користувач лишається в плеєрі — сесію НЕ закриваємо.
                         setTimeout(function () {
+                            if (self._sessionSerial !== serial) return;
                             if (self.sessionIsExternal || self.isExternalPlayer()) {
                                 self.sessionIsExternal = true;
                                 if (!self.sessionRunning && self.sessionHadPlay) {
@@ -1312,13 +1316,14 @@
             try {
                 if (Lampa.Player && Lampa.Player.listener) {
                     Lampa.Player.listener.follow('start', function (e) {
-                        self.onPlayerStart(e);
+                        self.onPlayerStart(e, true);
                     });
                     Lampa.Player.listener.follow('ready', function (e) {
-                        self.onPlayerStart(e);
+                        self.onPlayerStart(e, true);
                         self.hookVideoElement();
                     });
                     Lampa.Player.listener.follow('external', function (e) {
+                        self.sessionIsInternal = false;
                         self.sessionIsExternal = true;
                         self.onPlayerStart(e);
                         var m = self.currentMovie || self.resolveMovieFromPlay(e) || Current.getMovie();
@@ -1334,9 +1339,7 @@
                     Lampa.Player.listener.follow('destroy', function () {
                         // Just+/VLC: destroy при старті і при зміні серії — не вбивати сесію
                         var ext = self.sessionIsExternal || self.isExternalPlayer();
-                        var noVideo = false;
-                        try { noVideo = !Current.getVideoState(); } catch (eN) { noVideo = true; }
-                        if (ext || (self.sessionHadPlay && noVideo)) {
+                        if (ext) {
                             self.sessionIsExternal = true;
                             if (!self.sessionRunning && self.sessionHadPlay) {
                                 self.sessionStartedAt = Date.now();
@@ -1345,8 +1348,11 @@
                             self.saveSession();
                             return;
                         }
+                        var serial = self._sessionSerial;
                         [500, 2000, 5000].forEach(function (ms) {
-                            setTimeout(function () { self.endSession('destroy'); }, ms);
+                            setTimeout(function () {
+                                if (self._sessionSerial === serial) self.endSession('destroy');
+                            }, ms);
                         });
                     });
                     // pause / play якщо є
@@ -1535,13 +1541,19 @@
             return movie;
         },
 
-        onPlayerStart: function (e) {
+        onPlayerStart: function (e, internal) {
             var movie = this.resolveMovieFromPlay(e) || this.currentMovie || Current.getMovie();
             if (!movie) return;
             Media.remember(movie);
             movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
             this.currentMovie = movie;
             this.beginSession(movie);
+            // start/ready належать внутрішньому маршруту Lampa, навіть коли
+            // metadata ще не готові або загальне налаштування обирає external.
+            if (internal) {
+                this.sessionIsInternal = true;
+                this.sessionIsExternal = false;
+            }
             MetaLoader.enrich(movie, function (rich) {
                 if (rich) {
                     Tracker.currentMovie = MetaStore.applyToMovie(CardCache.get(rich) || rich);
@@ -1632,6 +1644,7 @@
                 }
             }
 
+            this.sessionIsInternal = false;
             this.sessionIsExternal = true;
             Media.remember(movie);
             movie = MetaStore.applyToMovie(CardCache.get(movie) || movie);
@@ -1713,6 +1726,7 @@
         },
 
         isExternalPlayer: function () {
+            if (this.sessionIsInternal) return false;
             try {
                 var p = Lampa.Storage.get('player') || Lampa.Storage.field('player') || '';
                 p = String(p).toLowerCase();
@@ -1819,6 +1833,7 @@
             this.sessionHadPlay = true;
             // Завжди скидаємо commit при новій серії/фільмі (2-га серія після 1-ї)
             if (isNew) {
+                this._sessionSerial++;
                 this._sessionCommitted = false;
                 this._sessionWallStart = Date.now();
                 this.sessionLastTl = 0;
@@ -1858,10 +1873,6 @@
                 this.sessionStartedAt = Date.now();
                 this.sessionRunning = true;
             }
-
-            try {
-                if (!Current.getVideoState()) this.sessionIsExternal = true;
-            } catch (e) {}
 
             if (!this.sessionWatchId) this.sessionWatchId = Media.getId(movie);
 
@@ -2047,6 +2058,14 @@
 
             reason = reason || '';
             var ext = this.sessionIsExternal || this.isExternalPlayer();
+            // Повернення фокусу/Activity не завершує внутрішній плеєр,
+            // який досі відкритий (у тому числі на паузі).
+            if (!ext && this.sessionIsInternal && (reason === 'activity' || reason === 'visible'
+                || reason === 'focus' || reason === 'app-resume' || reason === 'android-time' || reason === 'timeline')) {
+                try {
+                    if (Lampa.Player && typeof Lampa.Player.opened === 'function' && Lampa.Player.opened()) return;
+                } catch (eOpen) {}
+            }
             // Поки користувач у Just+/VLC: не комітити на обриві потоку / destroy / callback
             // Фіксація лише після повернення в Lampa (activity / visible / focus)
             if (ext && reason && reason !== 'activity' && reason !== 'visible' && reason !== 'focus'
@@ -2085,6 +2104,7 @@
             var wallSec = Math.floor(ms / 1000);
             // external: повний час від старту сесії (обрив TorrServe не ріже таймер)
             wasExternal = wasExternal || this.isExternalPlayer();
+            var internalAddedSec = wasExternal ? 0 : Math.max(0, this.sessionAddedSec || 0);
             if (wasExternal && this._sessionWallStart) {
                 var fullWall = Math.floor((Date.now() - this._sessionWallStart) / 1000);
                 var accounted = this.sessionAddedSec || 0;
@@ -2110,7 +2130,7 @@
             }
 
             // Єдине джерело часу — wall-clock. Timeline не додає хвилини.
-            if (wallSec < 15) {
+            if (wallSec < 15 && !internalAddedSec) {
                 if (wasExternal || this.sessionIsExternal) {
                     // рано при старті external — продовжити сесію
                     this.sessionRunning = true;
@@ -2169,7 +2189,7 @@
             sec = Math.min(sec, hardCap);
             sec = Math.min(sec, 21600);
 
-            if (sec < 15) return;
+            if (sec < 15 && !internalAddedSec) return;
 
             var meta = Media.metaFrom(movie);
             var watchId = this.sessionWatchId || Media.getId(movie);
@@ -2193,6 +2213,7 @@
             this.sessionMovie = null;
             this.sessionSeedTime = 0;
             this.sessionIsExternal = false;
+            this.sessionIsInternal = false;
             this._sessionWallStart = 0;
             this.sessionLastTl = 0;
             this.sessionAddedSec = 0;
@@ -2202,6 +2223,7 @@
             // Completed — online/Just+ часто без фінальної позиції timeline
             try {
                 var done = false;
+                var completedSec = sec + internalAddedSec;
                 var isEp = Media.isEpisode(movie);
                 // online-серіал інколи без episode_number — все одно серія
                 if (!isEp && movie && (movie.original_name || movie.number_of_seasons || movie.first_air_date ||
@@ -2213,7 +2235,7 @@
                     if ((dur - tNow) <= 150 && tNow > 60) done = true;
                 }
                 if (!done && runtimeSec >= 240) {
-                    if (sec >= runtimeSec * 0.70) done = true;
+                    if (completedSec >= runtimeSec * 0.70) done = true;
                     if (tNow > 0 && (runtimeSec - tNow) <= 200 && tNow >= runtimeSec * 0.45) done = true;
                 }
                 if (!done && tNow > 0 && tlDuration > 60) {
@@ -2230,7 +2252,7 @@
                     if (isEp && sec >= 18 * 60) done = true;
                     if (!isEp && sec >= 40 * 60) done = true;
                 }
-                if (!done && isEp && sec >= 22 * 60) done = true;
+                if (!done && isEp && completedSec >= 22 * 60) done = true;
                 try {
                     var pct = 0;
                     if (movie.timeline && Number.isFinite(Number(movie.timeline.percent))) {
@@ -2859,7 +2881,7 @@
         ".stv-title{font-size:28px;font-weight:700;line-height:1.25;margin-bottom:22px;overflow-wrap:break-word;}",
         ".stv-heading .stv-title{margin-bottom:0;}",
         ".stv-period{font-size:13px;color:var(--stv-muted);flex-shrink:0;}",
-        ".stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-watched-row,.stv-empty{border:2px solid transparent;transition:border-color .15s ease,background .15s ease,box-shadow .15s ease;}",
+        ".stv-card,.stv-actor,.stv-panel,.stv-reset,.stv-work,.stv-watched-row,.stv-empty{border:2px solid var(--stv-line);transition:border-color .15s ease,background .15s ease,box-shadow .15s ease;}",
         ".stv-card:focus,.stv-actor:focus,.stv-panel:focus,.stv-reset:focus,.stv-work:focus,.stv-watched-row:focus,.stv-empty:focus,.stv-card.focus,.stv-actor.focus,.stv-panel.focus,.stv-reset.focus,.stv-work.focus,.stv-watched-row.focus,.stv-empty.focus,.stv-card.hover,.stv-actor.hover,.stv-panel.hover,.stv-reset.hover,.stv-work.hover,.stv-watched-row.hover{border-color:var(--stv-accent);background:var(--stv-surface-focus);box-shadow:0 0 0 1px var(--stv-accent);outline:none;}",
         ".stv-cards{display:grid;grid-template-columns:1.1fr 1.25fr .85fr;gap:16px;margin-bottom:28px;}",
         ".stv-card{min-width:0;padding:20px 22px;border-radius:var(--stv-radius);background:var(--stv-surface);}",
@@ -2924,7 +2946,7 @@
         ".stv-work-meta,.stv-watched-meta{font-size:12px;line-height:1.5;color:var(--stv-muted);}",
         ".stv-muted{color:var(--stv-muted);font-size:13px;}",
         ".stv-empty{padding:36px 22px;border-radius:var(--stv-radius);background:var(--stv-surface);text-align:center;color:var(--stv-muted);margin-bottom:18px;line-height:1.5;}",
-        ".stv-disabled{padding:12px 16px;border-radius:8px;background:rgba(250,153,132,.12);color:#fac3b7;margin-bottom:18px;font-size:14px;line-height:1.5;}",
+        ".stv-disabled{padding:12px 16px;border:2px solid var(--stv-line);border-radius:8px;background:rgba(250,153,132,.12);color:#fac3b7;margin-bottom:18px;font-size:14px;line-height:1.5;}",
         ".stv-reset{display:inline-block;margin:4px 0 32px;padding:11px 16px;border-radius:var(--stv-radius);background:var(--stv-surface);font-size:13px;color:var(--stv-muted);}",
         "@media(min-width:1600px){.stv-card{padding:24px 26px;}.stv-card-val,.stv-big{font-size:36px;}.stv-genre-pct{font-size:42px;}.stv-bar-time,.stv-bar-label{font-size:12px;}.stv-actor-name{font-size:13px;min-height:37px;}.stv-actor-meta{font-size:12px;}}",
         "@media(max-width:1100px){.stv-bottom{grid-template-columns:1fr 1fr;}.stv-panel-months{grid-column:1/-1;}.stv-card{padding:18px;}.stv-card-val,.stv-big{font-size:28px;}.stv-genre-name{font-size:21px;}}",
@@ -2961,7 +2983,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.99.5 ready (header navigation and actor cards)');
+            console.log('Lampa stats v0.99.6 ready (internal player accounting and themed outlines)');
         } catch (e) {
             console.error('stats init', e);
         }
