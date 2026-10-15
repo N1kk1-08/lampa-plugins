@@ -2,7 +2,7 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.4' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.5' };
 
     var LANG = {
         menu_title: 'Статистика',
@@ -2359,8 +2359,7 @@
                 },
                 up: function () {
                     if (Navigator.canmove('up')) Navigator.move('up');
-                    else if (typeof scroll.wheel === 'function') scroll.wheel(-200);
-                    else if (typeof scroll.move === 'function') scroll.move(-200);
+                    else Lampa.Controller.toggle('head');
                 },
                 down: function () {
                     if (Navigator.canmove('down')) Navigator.move('down');
@@ -2890,12 +2889,12 @@
         ".stv-section{margin-bottom:26px;}",
         ".stv-section-title{font-size:13px;line-height:1.5;font-weight:600;letter-spacing:.035em;margin-bottom:16px;}",
         ".stv-actors-scroll{width:100%;overflow:hidden;}",
-        ".stv-actors{position:relative;display:flex;align-items:flex-start;flex-wrap:nowrap;gap:6px;overflow-x:auto;overflow-y:hidden;padding:8px 4px 16px;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:var(--stv-line) transparent;}",
-        ".stv-actor{width:100px;min-width:100px;flex-shrink:0;text-align:center;padding:8px 4px;border-radius:var(--stv-radius);background:transparent;}",
+        ".stv-actors{position:relative;display:flex;align-items:stretch;flex-wrap:nowrap;gap:6px;overflow-x:auto;overflow-y:hidden;padding:8px 4px 16px;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:var(--stv-line) transparent;}",
+        ".stv-actor{display:flex;flex-direction:column;width:100px;min-width:100px;flex-shrink:0;text-align:center;padding:10px 4px;border-radius:var(--stv-radius);background:var(--stv-surface);border-color:var(--stv-line);}",
         ".stv-actor-photo{width:64px;height:64px;border-radius:50%;margin:0 auto 10px;background-size:cover;background-position:center;background-color:var(--stv-track);}",
         ".stv-actor-ph{display:flex;align-items:center;justify-content:center;font-size:23px;font-weight:600;color:var(--stv-accent);}",
         ".stv-actor-name{font-size:12px;font-weight:500;line-height:1.4;min-height:34px;margin-bottom:5px;overflow-wrap:break-word;}",
-        ".stv-actor-meta{font-size:11px;line-height:1.4;color:var(--stv-muted);font-variant-numeric:tabular-nums;}",
+        ".stv-actor-meta{font-size:11px;line-height:1.4;color:var(--stv-muted);font-variant-numeric:tabular-nums;margin-top:auto;}",
         ".stv-bottom{display:grid;grid-template-columns:1.25fr .95fr 1fr;gap:16px;margin-bottom:26px;}",
         ".stv-panel{min-width:0;padding:20px;border-radius:var(--stv-radius);background:var(--stv-surface);}",
         ".stv-bars{display:flex;align-items:stretch;gap:7px;height:210px;padding:25px 0 0;}",
@@ -2962,7 +2961,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.99.4 ready (theme-aware statistics UI)');
+            console.log('Lampa stats v0.99.5 ready (header navigation and actor cards)');
         } catch (e) {
             console.error('stats init', e);
         }
