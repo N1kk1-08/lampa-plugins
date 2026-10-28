@@ -65,37 +65,72 @@
         var media = type === 'movie' || type === 'tv' ? type : 'all';
         return source === 'tmdb' ? 'trending/' + media + '/week' : '?sort=top' + (media !== 'all' ? '&cat=' + media : '');
     }
-    function resumeState(card, lastMap, hash, view, watched) {
+    function resumeState(card, lastMap, hash, view, watched, timeline) {
         var series = !!(card.original_name || card.first_air_date || card.number_of_seasons || card.media_type === 'tv');
         var names = [card.original_title, card.original_name, card.title, card.name].filter(function (name, index, all) { return name && all.indexOf(name) === index; });
-        var last = null;
-        names.some(function (name) { last = lastMap[hash(name)]; return last && Number(last.episode) > 0; });
+        var saved = names.map(function (name) { return (lastMap || {})[hash(name)]; }).filter(function (last) { return last && Number(last.episode) > 0 && isFinite(Number(last.episode)); });
         var state = { series: series, season: 0, episode: 0, name: '', hash: '', percent: 0, time: 0, duration: 0, updated: 0 };
+        var hasTimeline = timeline && typeof timeline === 'object';
         var best = null;
-        function consider(key) {
-            var road = view(key) || {};
-            if (!best || (Number(road.updated) || 0) > (Number(best.updated) || 0) || !Number(best.percent) && Number(road.percent)) {
-                best = { hash: key, percent: road.percent, time: road.time, duration: road.duration, updated: road.updated };
+        function consider(key, season, episode, name, road) {
+            road = road || (hasTimeline ? timeline[key] : view(key)) || {};
+            if (typeof road === 'number') road = { percent: road };
+            var updated = Number(road.updated) || 0;
+            var progress = Number(road.percent) > 0 || Number(road.time) > 0;
+            var priorProgress = best && (Number(best.percent) > 0 || Number(best.time) > 0);
+            var prefer = !best || series && progress && !priorProgress;
+            if (best && (!series || progress === priorProgress)) prefer = updated > best.updated || updated === best.updated && (progress && !priorProgress || progress === priorProgress && (season > best.season || season === best.season && episode > best.episode));
+            if (prefer) {
+                if (!name && best && season === best.season && episode === best.episode) name = best.name;
+                best = { hash: key, season: season, episode: episode, name: name || '', percent: road.percent, time: road.time, duration: road.duration, updated: updated };
             }
         }
-        if (series && last && Number(last.episode) > 0) {
-            state.season = Number(last.season) || 1;
-            state.episode = Number(last.episode);
-            state.name = cleanText(last.episode_name || last.name);
-            names.forEach(function (name) { consider(hash([state.season, state.season > 10 ? ':' : '', state.episode, name].join(''))); });
-        } else if (!series) {
-            names.forEach(function (name) { consider(hash(name)); });
-        } else if (watched) {
-            var list = watched(card, true);
-            if (Array.isArray(list) && list.length) {
-                list.sort(function (a, b) { return (Number(a.view.updated) || a.ep) - (Number(b.view.updated) || b.ep); });
-                var latest = list[list.length - 1];
-                state.season = 1;
-                state.episode = latest.ep;
-                best = latest.view;
+        function episodeHash(season, episode, name) { return hash([season, season > 10 ? ':' : '', episode, name].join('')); }
+        if (!series) {
+            names.forEach(function (name) { consider(hash(name), 0, 0, ''); });
+        } else {
+            var counts = {}, lastEpisodes = {}, maxSeason = Math.max(1, Math.min(100, Math.floor(Number(card.number_of_seasons) || 1)));
+            saved.forEach(function (last) {
+                var season = isFinite(Number(last.season)) && Number(last.season) >= 0 ? Math.floor(Number(last.season)) : 1;
+                var episode = Math.floor(Number(last.episode));
+                lastEpisodes[season] = Math.max(lastEpisodes[season] || 0, episode);
+                maxSeason = Math.max(maxSeason, Math.min(100, season + 1));
+                names.forEach(function (name) { consider(episodeHash(season, episode, name), season, episode, cleanText(last.episode_name || last.name)); });
+            });
+            (Array.isArray(card.seasons) ? card.seasons : []).forEach(function (season) {
+                var number = Number(season.season_number);
+                if (!isFinite(number) || number < 0) return;
+                counts[number] = Number(season.episode_count) || (Array.isArray(season.episodes) ? season.episodes.length : 0);
+                maxSeason = Math.max(maxSeason, Math.min(100, number));
+            });
+            // A provider's last-opened pointer can lag behind autoplay or synced timecodes.
+            // Match only existing progress in the active profile; probing must not create marks.
+            if (hasTimeline) {
+                for (var season = 1; season <= maxSeason; season++) if (!(season in counts)) counts[season] = 0;
+                Object.keys(lastEpisodes).forEach(function (season) { if (!(season in counts)) counts[season] = 0; });
+                Object.keys(counts).forEach(function (number) {
+                    var season = Number(number);
+                    var fallback = season === 1 && !(Number(card.number_of_seasons) > 1) ? Number(card.number_of_episodes) || 100 : 100;
+                    var limit = Math.min(2000, Math.max(counts[number] || fallback, (lastEpisodes[number] || 0) + 1));
+                    for (var episode = 1; episode <= limit; episode++) names.forEach(function (name) {
+                        var key = episodeHash(season, episode, name);
+                        if (!Object.prototype.hasOwnProperty.call(timeline, key)) return;
+                        var road = typeof timeline[key] === 'number' ? { percent: timeline[key] } : timeline[key];
+                        if (road && (Number(road.percent) > 0 || Number(road.time) > 0)) consider(key, season, episode, '', road);
+                    });
+                });
+            }
+            if (watched && !hasTimeline) {
+                var list = watched(card, true);
+                if (Array.isArray(list)) list.forEach(function (item) {
+                    if (item && item.view && Number(item.ep) > 0 && (Number(item.view.percent) > 0 || Number(item.view.time) > 0)) consider(item.view.hash || episodeHash(1, item.ep, names[0]), 1, Number(item.ep), '', item.view);
+                });
             }
         }
         if (best) {
+            state.season = best.season;
+            state.episode = best.episode;
+            state.name = best.name;
             state.hash = best.hash || '';
             state.time = Math.max(0, Number(best.time) || 0);
             state.duration = Math.max(0, Number(best.duration) || 0);
@@ -843,7 +878,8 @@
         return data && (data.mls_continue || data.title === Lampa.Lang.translate('title_continue') || data.title === Lampa.Lang.translate('title_watched'));
     }
     function getResume(card) {
-        return resumeState(card, Lampa.Storage.get('online_watched_last', {}), Lampa.Utils.hash, Lampa.Timeline.view, Lampa.Timeline.watched);
+        var filename = Lampa.Timeline.filename ? Lampa.Timeline.filename() : 'file_view';
+        return resumeState(card, Lampa.Storage.get('online_watched_last', {}), Lampa.Utils.hash, Lampa.Timeline.view, Lampa.Timeline.watched, Lampa.Storage.get(filename, {}));
     }
     function continueCards() {
         var history = Lampa.Favorite.get({ type: 'history' }) || [];
