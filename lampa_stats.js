@@ -2,56 +2,227 @@
     'use strict';
 
     if (window.lampa_ukrainian_stats && window.lampa_ukrainian_stats.initialized) return;
-    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.7' };
+    window.lampa_ukrainian_stats = { initialized: true, version: '0.99.8' };
 
-    var LANG = {
-        menu_title: 'Статистика',
-        page_title: 'Моя статистика переглядів',
-        all_time: 'За весь час',
-        month_period: 'Період переглядів',
-        total_time: 'СУМАРНИЙ ЧАС',
-        watched: 'ПЕРЕГЛЯНУТО',
-        fav_genre: 'УЛЮБЛЕНИЙ ЖАНР',
-        fav_actors: 'Актори, яких дивитеся найчастіше',
-        records: 'За місяцями',
-        by_years: 'Роки випуску',
-        genre_share: 'Частка серед жанрів',
-        legacy_months: 'Попередні дані без року',
-        storage_error: 'Не вдалося зберегти статистику. Перевірте вільне місце у сховищі.',
-        genres_dist: 'РОЗПОДІЛ ЖАНРІВ',
-        level_label: 'РІВЕНЬ',
-        level_max: 'Максимальний рівень',
-        level_to: 'до',
-        movies: 'фільмів',
-        episodes: 'серій',
-        hours: 'год.',
-        minutes: 'хв.',
-        days: 'дн.',
-        day: 'день',
-        empty_text: 'Тут поки що порожньо. Почніть дивитися фільми або серіали.',
-        disabled_text: 'Збір статистики вимкнено в налаштуваннях.',
-        collect_setting: 'Збирати статистику переглядів',
-        menu_setting: 'Показувати статистику в головному меню',
-        settings_title: 'Статистика переглядів',
-        reset: 'Скинути статистику',
-        reset_confirm: 'Скинути всю статистику переглядів?',
-        reset_yes: 'Так, скинути',
-        reset_no: 'Скасувати',
-        reset_done: 'Статистику скинуто.',
-        no_genre: '—',
-        no_actors: 'Актори з’являться після переглядів',
-        films_short: 'фільмів',
-        actor_works: 'Фільми та серіали',
-        no_works: 'Поки немає записів',
-        film: 'фільм',
-        series_ep: 'серія',
-        level_up: 'Новий рівень',
-        watched_list_title: 'Усі перегляди',
-        watched_empty: 'Ще немає завершених переглядів',
-        watched_time: 'Час перегляду',
-        open_watched: 'Відкрити список'
+    var TRANSLATIONS = {
+        uk: {
+            menu_title: 'Статистика',
+            page_title: 'Моя статистика переглядів',
+            all_time: 'За весь час',
+            month_period: 'Період переглядів',
+            total_time: 'СУМАРНИЙ ЧАС',
+            watched: 'ПЕРЕГЛЯНУТО',
+            fav_genre: 'УЛЮБЛЕНИЙ ЖАНР',
+            fav_actors: 'Актори, яких дивитеся найчастіше',
+            records: 'За місяцями',
+            by_years: 'Роки випуску',
+            genre_share: 'Частка серед жанрів',
+            legacy_months: 'Попередні дані без року',
+            storage_error: 'Не вдалося зберегти статистику. Перевірте вільне місце у сховищі.',
+            genres_dist: 'РОЗПОДІЛ ЖАНРІВ',
+            level_label: 'РІВЕНЬ',
+            level_max: 'Максимальний рівень',
+            level_to: 'до',
+            movies: 'фільмів',
+            episodes: 'серій',
+            hours: 'год.',
+            minutes: 'хв.',
+            days: 'дн.',
+            day: 'день',
+            empty_text: 'Тут поки що порожньо. Почніть дивитися фільми або серіали.',
+            disabled_text: 'Збір статистики вимкнено в налаштуваннях.',
+            collect_setting: 'Збирати статистику переглядів',
+            menu_setting: 'Показувати статистику в головному меню',
+            settings_title: 'Статистика переглядів',
+            reset: 'Скинути статистику',
+            reset_confirm: 'Скинути всю статистику переглядів?',
+            reset_yes: 'Так, скинути',
+            reset_no: 'Скасувати',
+            reset_done: 'Статистику скинуто.',
+            no_genre: '—',
+            other_genre: 'Інше',
+            no_actors: 'Актори з’являться після переглядів',
+            films_short: 'фільмів',
+            actor_works: 'Фільми та серіали',
+            no_works: 'Поки немає записів',
+            film: 'фільм',
+            series_ep: 'серія',
+            level_up: 'Новий рівень',
+            watched_list_title: 'Усі перегляди',
+            watched_empty: 'Ще немає завершених переглядів',
+            watched_time: 'Час перегляду',
+            open_watched: 'Відкрити список',
+            movie_forms: ['фільм', 'фільми', 'фільмів'],
+            episode_forms: ['серія', 'серії', 'серій'],
+            level_names: ['Новачок', 'Глядач', 'Кіноман', 'Марафонець', 'Серіаломан', 'Експерт екрану', 'Критик', 'Колекціонер', 'Легенда кіно', 'Кінобог'],
+            months: ['Січ', 'Лют', 'Бер', 'Кві', 'Тра', 'Чер', 'Лип', 'Сер', 'Вер', 'Жов', 'Лис', 'Гру'],
+            movie_initial: 'Ф',
+            episode_initial: 'С',
+            episode_badge: 'СЕР'
+        },
+        ru: {
+            menu_title: 'Статистика',
+            page_title: 'Моя статистика просмотров',
+            all_time: 'За всё время',
+            month_period: 'Период просмотров',
+            total_time: 'ОБЩЕЕ ВРЕМЯ',
+            watched: 'ПРОСМОТРЕНО',
+            fav_genre: 'ЛЮБИМЫЙ ЖАНР',
+            fav_actors: 'Актёры, которых смотрите чаще всего',
+            records: 'По месяцам',
+            by_years: 'Годы выпуска',
+            genre_share: 'Доля среди жанров',
+            legacy_months: 'Прежние данные без указания года',
+            storage_error: 'Не удалось сохранить статистику. Проверьте свободное место в хранилище.',
+            genres_dist: 'РАСПРЕДЕЛЕНИЕ ЖАНРОВ',
+            level_label: 'УРОВЕНЬ',
+            level_max: 'Максимальный уровень',
+            level_to: 'до',
+            movies: 'фильмов',
+            episodes: 'серий',
+            hours: 'ч.',
+            minutes: 'мин.',
+            days: 'дн.',
+            day: 'день',
+            empty_text: 'Здесь пока пусто. Начните смотреть фильмы или сериалы.',
+            disabled_text: 'Сбор статистики отключён в настройках.',
+            collect_setting: 'Собирать статистику просмотров',
+            menu_setting: 'Показывать статистику в главном меню',
+            settings_title: 'Статистика просмотров',
+            reset: 'Сбросить статистику',
+            reset_confirm: 'Сбросить всю статистику просмотров?',
+            reset_yes: 'Да, сбросить',
+            reset_no: 'Отмена',
+            reset_done: 'Статистика сброшена.',
+            no_genre: '—',
+            other_genre: 'Другое',
+            no_actors: 'Актёры появятся после просмотров',
+            films_short: 'фильмов',
+            actor_works: 'Фильмы и сериалы',
+            no_works: 'Пока нет записей',
+            film: 'фильм',
+            series_ep: 'серия',
+            level_up: 'Новый уровень',
+            watched_list_title: 'Все просмотры',
+            watched_empty: 'Пока нет завершённых просмотров',
+            watched_time: 'Время просмотра',
+            open_watched: 'Открыть список',
+            movie_forms: ['фильм', 'фильма', 'фильмов'],
+            episode_forms: ['серия', 'серии', 'серий'],
+            level_names: ['Новичок', 'Зритель', 'Киноман', 'Марафонец', 'Сериаломан', 'Эксперт экрана', 'Критик', 'Коллекционер', 'Легенда кино', 'Кинобог'],
+            months: ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'],
+            movie_initial: 'Ф',
+            episode_initial: 'С',
+            episode_badge: 'СЕР'
+        },
+        en: {
+            menu_title: 'Statistics',
+            page_title: 'My viewing statistics',
+            all_time: 'All time',
+            month_period: 'Viewing period',
+            total_time: 'TOTAL TIME',
+            watched: 'WATCHED',
+            fav_genre: 'FAVORITE GENRE',
+            fav_actors: 'Actors you watch most often',
+            records: 'By month',
+            by_years: 'Release years',
+            genre_share: 'Share of viewing by genre',
+            legacy_months: 'Earlier data without a recorded year',
+            storage_error: 'Unable to save statistics. Check the available storage space.',
+            genres_dist: 'GENRE DISTRIBUTION',
+            level_label: 'LEVEL',
+            level_max: 'Maximum level',
+            level_to: 'to',
+            movies: 'films',
+            episodes: 'episodes',
+            hours: 'hr',
+            minutes: 'min',
+            days: 'days',
+            day: 'day',
+            empty_text: 'Nothing here yet. Start watching films or TV shows.',
+            disabled_text: 'Statistics collection is disabled in settings.',
+            collect_setting: 'Collect viewing statistics',
+            menu_setting: 'Show statistics in the main menu',
+            settings_title: 'Viewing statistics',
+            reset: 'Reset statistics',
+            reset_confirm: 'Reset all viewing statistics?',
+            reset_yes: 'Yes, reset',
+            reset_no: 'Cancel',
+            reset_done: 'Statistics have been reset.',
+            no_genre: '—',
+            other_genre: 'Other',
+            no_actors: 'Actors will appear after you start watching',
+            films_short: 'films',
+            actor_works: 'Films and TV shows',
+            no_works: 'No entries yet',
+            film: 'film',
+            series_ep: 'episode',
+            level_up: 'Level up',
+            watched_list_title: 'Viewing history',
+            watched_empty: 'No completed views yet',
+            watched_time: 'Viewing time',
+            open_watched: 'Open list',
+            movie_forms: ['film', 'films', 'films'],
+            episode_forms: ['episode', 'episodes', 'episodes'],
+            level_names: ['Newcomer', 'Viewer', 'Film buff', 'Marathoner', 'Series fan', 'Screen expert', 'Critic', 'Collector', 'Cinema legend', 'Movie god'],
+            months: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+            movie_initial: 'F',
+            episode_initial: 'S',
+            episode_badge: 'EP'
+        }
     };
 
+    var I18n = {
+        code: function () {
+            var code = '';
+            try {
+                if (window.Lampa && Lampa.Storage) {
+                    if (typeof Lampa.Storage.get === 'function') code = Lampa.Storage.get('language') || '';
+                    if (!code && typeof Lampa.Storage.field === 'function') code = Lampa.Storage.field('language') || '';
+                }
+                if (!code && window.Lampa && Lampa.Lang && typeof Lampa.Lang.selected === 'function') {
+                    ['uk', 'ru', 'en'].some(function (value) {
+                        if (Lampa.Lang.selected([value])) { code = value; return true; }
+                        return false;
+                    });
+                }
+            } catch (e) {}
+            if (!code && window.navigator) code = window.navigator.language || '';
+            code = String(code || 'uk').trim().toLowerCase().replace(/_/g, '-').split('-')[0];
+            if (code === 'ua') code = 'uk';
+            return code === 'uk' || code === 'ru' || code === 'en' ? code : 'en';
+        },
+        noun: function (forms, count) {
+            var n = Math.abs(Math.floor(Number(count) || 0));
+            var index = n % 100 >= 11 && n % 100 <= 14 ? 2 : (n % 10 === 1 ? 0 : (n % 10 >= 2 && n % 10 <= 4 ? 1 : 2));
+            if (this.code() === 'en') index = n === 1 ? 0 : 1;
+            return forms[index];
+        },
+        levelName: function (level, fallback) { return LANG.level_names[level - 1] || fallback || ''; },
+        monthName: function (index, fallback) { return LANG.months[index] || fallback || ''; },
+        decade: function (year, fallback) {
+            if (!year) return fallback || '';
+            var short = String(year).slice(-2), code = this.code();
+            return short + (code === 'en' ? 's' : (code === 'ru' ? '-е' : (year === 2000 ? '-ні' : '-ті')));
+        },
+        genreName: function (name) {
+            var text = String(name || '').trim().toLowerCase();
+            if (['інше', 'другое', 'прочее', 'other'].indexOf(text) >= 0) return LANG.other_genre;
+            var keys = Object.keys(GENRE_MAP);
+            for (var i = 0; i < keys.length; i++) {
+                var id = keys[i];
+                if ([GENRE_MAP[id], GENRE_TRANSLATIONS.ru[id], GENRE_TRANSLATIONS.en[id]].some(function (value) { return String(value || '').toLowerCase() === text; })) {
+                    var code = this.code();
+                    return code === 'uk' ? GENRE_MAP[id] : GENRE_TRANSLATIONS[code][id];
+                }
+            }
+            return name || '';
+        }
+    };
+    var LANG = {};
+    Object.keys(TRANSLATIONS.uk).forEach(function (key) {
+        Object.defineProperty(LANG, key, { enumerable: true, get: function () { return TRANSLATIONS[I18n.code()][key] || TRANSLATIONS.en[key] || TRANSLATIONS.uk[key]; } });
+    });
 
     var CONFIG = {
         stats_storage: 'lampa_personal_stats_v9',
@@ -104,6 +275,30 @@
     };
 
     var MONTHS = ['Січ', 'Лют', 'Бер', 'Кві', 'Тра', 'Чер', 'Лип', 'Сер', 'Вер', 'Жов', 'Лис', 'Гру'];
+
+    // Display labels only: keep GENRE_MAP and stored genre keys unchanged.
+    var GENRE_TRANSLATIONS = {
+        ru: {
+            28: 'Боевик', 12: 'Приключения', 16: 'Мультфильм', 35: 'Комедия',
+            80: 'Криминал', 99: 'Документальный', 18: 'Драма', 10751: 'Семейный',
+            14: 'Фэнтези', 36: 'История', 27: 'Ужасы', 10402: 'Музыка',
+            9648: 'Детектив', 10749: 'Мелодрама', 878: 'Фантастика',
+            10770: 'Телевизионный фильм', 53: 'Триллер', 10752: 'Военный', 37: 'Вестерн',
+            10759: 'Боевик и приключения', 10762: 'Детский', 10763: 'Новости',
+            10764: 'Реалити-шоу', 10765: 'НФ и фэнтези', 10766: 'Мыльная опера',
+            10767: 'Ток-шоу', 10768: 'Война и политика'
+        },
+        en: {
+            28: 'Action', 12: 'Adventure', 16: 'Animation', 35: 'Comedy',
+            80: 'Crime', 99: 'Documentary', 18: 'Drama', 10751: 'Family',
+            14: 'Fantasy', 36: 'History', 27: 'Horror', 10402: 'Music',
+            9648: 'Mystery', 10749: 'Romance', 878: 'Science Fiction',
+            10770: 'TV Movie', 53: 'Thriller', 10752: 'War', 37: 'Western',
+            10759: 'Action & Adventure', 10762: 'Kids', 10763: 'News',
+            10764: 'Reality', 10765: 'Sci-Fi & Fantasy', 10766: 'Soap',
+            10767: 'Talk', 10768: 'War & Politics'
+        }
+    };
 
     var DEFAULT_STATS = {
         seconds_watched: 0,
@@ -724,11 +919,11 @@
             }
             return {
                 level: cur.level,
-                name: cur.name,
+                name: I18n.levelName(cur.level, cur.name),
                 xp: xp,
                 progress: progress,
                 toNext: toNext,
-                nextName: next ? next.name : null,
+                nextName: next ? I18n.levelName(next.level, next.name) : null,
                 max: !next
             };
         },
@@ -2532,7 +2727,7 @@
             var c = $('<div class="stv-card selector stv-card-watched"></div>');
             c.append('<div class="stv-card-label">' + LANG.watched + '</div>');
             var body = $('<div class="stv-card-body stv-watched-body"></div>');
-            body.append('<div class="stv-watched-counts"><div class="stv-count"><span class="stv-big">' + (StatsDB.data.movies_watched || 0) + '</span><span class="stv-sub">' + LANG.movies + '</span></div><div class="stv-count"><span class="stv-big">' + (StatsDB.data.episodes_watched || 0) + '</span><span class="stv-sub">' + LANG.episodes + '</span></div></div>');
+            body.append('<div class="stv-watched-counts"><div class="stv-count"><span class="stv-big">' + (StatsDB.data.movies_watched || 0) + '</span><span class="stv-sub">' + I18n.noun(LANG.movie_forms, StatsDB.data.movies_watched) + '</span></div><div class="stv-count"><span class="stv-big">' + (StatsDB.data.episodes_watched || 0) + '</span><span class="stv-sub">' + I18n.noun(LANG.episode_forms, StatsDB.data.episodes_watched) + '</span></div></div>');
             var posters = $('<div class="stv-posters"></div>');
             StatsDB.recentCompleted(CONFIG.max_posters_show).forEach(function (item) {
                 var p = $('<div class="stv-poster"></div>').attr('title', item.title || '');
@@ -2540,9 +2735,9 @@
                 if (url) p.css('background-image', 'url("' + url.replace(/"/g, '') + '")');
                 else {
                     p.addClass('stv-poster-empty');
-                    p.text(item.isEpisode ? 'S' : 'F');
+                    p.text(item.isEpisode ? LANG.episode_initial : LANG.movie_initial);
                 }
-                if (item.isEpisode) p.append('<span class="stv-poster-badge">EP</span>');
+                if (item.isEpisode) p.append($('<span class="stv-poster-badge"></span>').text(LANG.episode_badge));
                 posters.append(p);
             });
             body.append(posters);
@@ -2566,7 +2761,7 @@
             var c = $('<div class="stv-card selector stv-card-genre"></div>');
             c.append($('<div class="stv-card-label"></div>').text(LANG.fav_genre));
             var body = $('<div class="stv-card-body stv-genre-body"></div>');
-            body.append($('<div class="stv-genre-name"></div>').text(g.name));
+            body.append($('<div class="stv-genre-name"></div>').text(I18n.genreName(g.name)));
             body.append($('<div class="stv-genre-pct"></div>').text(g.percent + '%'));
             body.append($('<div class="stv-genre-context"></div>').text(LANG.genre_share));
             c.append(body);
@@ -2677,7 +2872,7 @@
                 wrap.append($('<div class="stv-bar-time"></div>').text(timeText));
                 wrap.append($('<div class="stv-bar"></div>').css('height', h + '%'));
                 col.append(wrap);
-                col.append($('<div class="stv-bar-label"></div>').text(d.label || ''));
+                col.append($('<div class="stv-bar-label"></div>').text(I18n.monthName(d.index, d.label)));
                 box.append(col);
             });
             return box;
@@ -2696,7 +2891,7 @@
                 wrap.append($('<div class="stv-bar-time"></div>').text(StatsDB.formatHoursOrMin(d.seconds)));
                 wrap.append($('<div class="stv-bar"></div>').css('height', h + '%'));
                 col.append(wrap);
-                col.append($('<div class="stv-bar-label"></div>').text(d.label || ''));
+                col.append($('<div class="stv-bar-label"></div>').text(I18n.decade(d.decade, d.label)));
                 box.append(col);
             });
             return box;
@@ -2713,7 +2908,7 @@
                 var p = (g.seconds / total) * 100;
                 var row = $('<div class="stv-genre-row"></div>');
                 var label = $('<div class="stv-genre-row-label"></div>');
-                label.append($('<span></span>').text(g.name || ''));
+                label.append($('<span></span>').text(I18n.genreName(g.name)));
                 label.append($('<span class="stv-genre-row-value"></span>').text(Math.round(p) + '%'));
                 row.append(label);
                 row.append($('<div class="stv-genre-track"></div>').append(
@@ -2845,7 +3040,7 @@
                 var poster = $('<div class="stv-work-poster"></div>');
                 var url = posterUrl(w.poster, 'w92');
                 if (url) poster.css('background-image', 'url("' + url.replace(/"/g, '') + '")');
-                else poster.addClass('stv-poster-empty').text(w.isEpisode ? 'S' : 'F');
+                else poster.addClass('stv-poster-empty').text(w.isEpisode ? LANG.episode_initial : LANG.movie_initial);
                 var info = $('<div class="stv-work-info"></div>');
                 info.append($('<div class="stv-work-title"></div>').text(w.title || ''));
                 info.append('<div class="stv-work-meta">' + (w.isEpisode ? LANG.series_ep : LANG.film) + ' · ' + StatsDB.formatTime(w.seconds) + (w.completed ? ' · ✓' : '') + '</div>');
@@ -2896,8 +3091,8 @@
                 var poster = $('<div class="stv-watched-poster"></div>');
                 var url = posterUrl(w.poster, 'w185');
                 if (url) poster.css('background-image', 'url("' + url.replace(/"/g, '') + '")');
-                else poster.addClass('stv-poster-empty').text(w.isEpisode ? 'S' : 'F');
-                if (w.isEpisode) poster.append('<span class="stv-poster-badge">EP</span>');
+                else poster.addClass('stv-poster-empty').text(w.isEpisode ? LANG.episode_initial : LANG.movie_initial);
+                if (w.isEpisode) poster.append($('<span class="stv-poster-badge"></span>').text(LANG.episode_badge));
                 var info = $('<div class="stv-watched-info"></div>');
                 info.append($('<div class="stv-watched-title"></div>').text(w.title || ''));
                 var kind = w.isEpisode ? LANG.series_ep : LANG.film;
@@ -3050,7 +3245,7 @@
             Menu.init();
             setTimeout(function () { Tracker.recoverSession(); }, 1200);
             setTimeout(function () { Tracker.recoverSession(); }, 4000);
-            console.log('Lampa stats v0.99.7 ready (session-owned progress and bounded storage)');
+            console.log('Lampa stats v0.99.8 ready (Ukrainian, Russian and English interface)');
         } catch (e) {
             console.error('stats init', e);
         }
