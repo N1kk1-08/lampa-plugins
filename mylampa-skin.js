@@ -974,8 +974,10 @@
             }, right: function () { focusDelta(1); }, left: function () { focusDelta(-1); }, up: function () { row.emit('up'); }, down: function () { row.emit('down'); }, back: function () { row.emit('back'); } });
             Lampa.Controller.toggle('mls_home');
         };
-        root.find('.selector').on('hover:focus hover:hover hover:touch', function () {
-            row.last = this;
+        var controls = root.find('.selector');
+        controls.on('hover:focus hover:hover hover:touch', function () { row.last = this; });
+        // Hover and touch can start a scroll gesture; only remote focus should snap to a row.
+        controls.on('hover:focus', function () {
             if (!Lampa.Controller.own(row) && ['content', 'items_line', 'head', 'mls_home'].indexOf(Lampa.Controller.enabled().name) >= 0) row.toggle();
         });
         row.destroy = function () { row.dead = true; clearInterval(row.timer); row.timer = null; root.remove(); row.emit('destroy'); };
@@ -1121,6 +1123,31 @@
         var active = Lampa.Activity.active();
         return active && active.activity && active.activity.component === component && ['content', 'items_line', 'mls_home'].indexOf(Lampa.Controller.enabled().name) >= 0;
     }
+    function homeScrollAnchor(component) {
+        if (!currentContent(component)) return null;
+        var scroll = component.scroll, viewport = scroll.render(true), body = scroll.body(true);
+        var bounds = viewport.getBoundingClientRect(), tv = Lampa.Platform.screen('tv');
+        var origin = tv ? body.getBoundingClientRect().top : bounds.top;
+        for (var i = 0; i < body.children.length; i++) {
+            var node = body.children[i], rect = node.getBoundingClientRect();
+            if (rect.bottom > bounds.top && rect.top < bounds.bottom) {
+                return { node: node, top: rect.top - origin, position: scroll.position(), tv: tv };
+            }
+        }
+        return null;
+    }
+    function restoreHomeScroll(component, anchor) {
+        if (!anchor) return;
+        var scroll = component.scroll, body = scroll.body(true);
+        if (anchor.node.parentNode !== body) return;
+        var origin = anchor.tv ? body : scroll.render(true);
+        var delta = anchor.node.getBoundingClientRect().top - origin.getBoundingClientRect().top - anchor.top;
+        // Native scrolling may already have anchored the row; TV scrolling uses a transform.
+        if (anchor.tv && scroll.shift) {
+            var shift = scroll.position() - anchor.position + delta;
+            if (Math.abs(shift) >= 1) scroll.shift(shift);
+        } else if (!anchor.tv && Math.abs(delta) >= 1) origin.scrollTop += delta;
+    }
     function attachFront(component, front, focus) {
         var prior = component.items[component.active];
         component.items = front.concat(component.items.filter(function (item) { return front.indexOf(item) < 0; }));
@@ -1129,9 +1156,10 @@
         component.active = focus ? 0 : Math.max(0, component.items.indexOf(prior));
         if (currentContent(component) && focus && component.items[0]) component.items[0].toggle();
     }
-    function layoutHome(component, focus) {
+    function layoutHome(component, focus, anchor) {
         var state = component.mlsHome;
         if (!state || component.mlsSlot !== 'home') return;
+        if (typeof anchor === 'undefined' && !focus) anchor = homeScrollAnchor(component);
         var prior = component.items[component.active], oldIndex = component.active;
         var rows = state.front.filter(function (item) { return item !== state.fallback && item !== state.hero; }).concat(state.original.filter(function (item) { return !setting('resume', true) || !isContinueRow(item.data); }));
         rows.forEach(function (item) { rowKey(component, item); });
@@ -1163,6 +1191,7 @@
             if (body.children[index] !== node) body.insertBefore(node, body.children[index] || null);
         });
         component.active = focus ? 0 : visible.indexOf(prior) >= 0 ? visible.indexOf(prior) : Math.min(oldIndex, visible.length - 1);
+        restoreHomeScroll(component, anchor);
         if (state.hero) state.hero.refresh(false);
         if (currentContent(component) && (focus || prior && visible.indexOf(prior) < 0)) visible[component.active].toggle();
         if (Lampa.Layer) Lampa.Layer.visible(component.scroll.render(true));
@@ -1245,7 +1274,7 @@
                 var toggle = controller.toggle;
                 controller.toggle = function () {
                     toggle.call(this);
-                    if (component.mlsHome && Lampa.Controller.enabled().name === 'content' && component.items[component.active]) component.items[component.active].toggle();
+                    if (component.mlsHome && Lampa.Platform.screen('tv') && Lampa.Controller.enabled().name === 'content' && component.items[component.active]) component.items[component.active].toggle();
                 };
             },
             onDestroy: function () {
@@ -1314,9 +1343,11 @@
                     (state.resume.items || []).forEach(function (card) { if (card.emit) card.emit('update'); });
                     return;
                 }
-                var prior = component.items[component.active], priorKey = prior && prior.mlsLayoutKey;
+                var prior = component.items[component.active], old = state.resume;
                 var focused = prior && prior.items && prior.items[prior.active], focusedKey = focused && focused.data && cardIdentity(focused.data);
-                var own = currentContent(component), old = state.resume;
+                var restoreFocus = currentContent(component) && Lampa.Controller.own(old);
+                var anchor = homeScrollAnchor(component);
+                var oldNode = old.render(true);
                 state.front.splice(state.front.indexOf(old), 1);
                 component.items = component.items.filter(function (item) { return item !== old; });
                 old.destroy();
@@ -1330,11 +1361,15 @@
                 state.resume.mlsLayoutKey = 'resume';
                 state.resumeSignature = signature;
                 state.front.push(state.resume);
-                layoutHome(component, false);
-                if (own && priorKey === 'resume' && component.items.indexOf(state.resume) >= 0) {
+                var active = component.items.indexOf(prior === old ? state.resume : prior);
+                if (active >= 0) component.active = active;
+                if (anchor && anchor.node === oldNode) anchor.node = state.resume.render(true);
+                layoutHome(component, false, anchor);
+                if (restoreFocus && component.items.indexOf(state.resume) >= 0) {
                     (state.resume.items || []).some(function (card) { if (card.data && cardIdentity(card.data) === focusedKey) { state.resume.last = card.render(true); return true; } return false; });
-                    component.active = component.items.indexOf(state.resume);
-                    state.resume.toggle();
+                    if (Lampa.Platform.screen('tv')) state.resume.toggle();
+                    else Lampa.Controller.toggle('content');
+                    restoreHomeScroll(component, anchor);
                 }
             });
         }, 180);
@@ -1733,9 +1768,9 @@
             '.mls-hero-shade{position:absolute;inset:0;background:linear-gradient(90deg,#0c111b 0%,rgba(12,17,27,.95) 22%,rgba(12,17,27,.64) 45%,rgba(12,17,27,.08) 78%),linear-gradient(0deg,#0c111b 0%,transparent 48%)}',
             '.mls-hero-content{position:relative;z-index:1;padding:1.1em 1.5em 1.1em;max-width:34em}',
             '.mls-hero-eyebrow{font-size:.6em;text-transform:uppercase;letter-spacing:.22em;color:#becbe0;margin-bottom:.6em;font-weight:600}',
-            '.mls-hero-title{font-size:2em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-weight:650;line-height:1.03;letter-spacing:-.035em;margin:0 0 .32em;max-width:14em;text-shadow:0 2px 20px rgba(0,0,0,.4)}',
-            '.mls-hero-meta{font-size:.7em;color:#becbe0;margin-bottom:.6em}',
-            '.mls-hero-description{font-size:.78em;line-height:1.35;color:#d1d9e6;max-width:30em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:1em}',
+            '.mls-hero-title{font-size:2em;min-height:2.06em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-weight:650;line-height:1.03;letter-spacing:-.035em;margin:0 0 .32em;max-width:14em;text-shadow:0 2px 20px rgba(0,0,0,.4)}',
+            '.mls-hero-meta{font-size:.7em;line-height:1.25;min-height:1.25em;color:#becbe0;margin-bottom:.6em}',
+            '.mls-hero-description{font-size:.78em;line-height:1.35;min-height:2.7em;color:#d1d9e6;max-width:30em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:1em}',
             '.mls-hero-actions{display:flex;gap:.7em;align-items:center}',
             '.mls-hero-button{display:flex;align-items:center;justify-content:center;gap:.5em;min-height:2.75em;padding:.65em 1.2em;border:1px solid #3b4658;border-radius:.75em;background:rgba(21,29,43,.72);font-size:.8em;font-weight:600;color:#f0f5fd;cursor:pointer}',
             '.mls-hero-button svg{width:1.2em;height:1.2em;flex-shrink:0}',
@@ -1743,7 +1778,7 @@
             '.mls-hero-button.focus,.mls-hero-prev.focus,.mls-hero-next.focus{box-shadow:0 0 0 3px #fff;background:var(--mls-accent);color:#101827;border-color:var(--mls-accent)}',
             '.mls-hero-pagination{position:absolute;z-index:2;right:1.5em;bottom:1.4em;display:flex;align-items:center;gap:.7em;color:#c6d0df;font-size:.75em}',
             '.mls-hero-prev,.mls-hero-next{display:flex;align-items:center;justify-content:center;width:2em;height:2em;border-radius:50%;background:#111b2bc4;border:1px solid #3b4658;font-size:1.3em;cursor:pointer}',
-            '.mls-hero-loading .mls-hero-book,.mls-hero-error .mls-hero-book{display:none}.mls-hero-loading .mls-hero-title{font-size:1.8em}.mls-image-missing{opacity:.15!important}',
+            '.mls-hero-loading .mls-hero-book,.mls-hero-error .mls-hero-book{display:none}.mls-image-missing{opacity:.15!important}',
             'body.mls-enabled .mls-main-page .items-line{padding-bottom:1.6em}body.mls-enabled .mls-main-page .items-line__head{margin-bottom:.7em}body.mls-enabled .mls-main-page .items-line__title{font-size:1.15em;font-weight:600}',
             'body.mls-enabled .mls-catalog-page .card{font-size:calc(1em * var(--mls-card-scale,1))}@media(min-width:767px){body.mls-enabled.size--bigger .mls-catalog-page .card{font-size:calc(1.14em * var(--mls-card-scale,1))}}',
             'body.mls-enabled .mls-resume-row{padding-bottom:1.1em!important}body.mls-enabled .mls-resume-row .items-line__head{margin-bottom:.55em}body.mls-enabled .mls-resume-row .items-line__title{font-size:1.15em;font-weight:600}body.mls-enabled .mls-resume-row .items-line__more{font-size:.75em;color:#bac6d9}',
