@@ -1679,6 +1679,9 @@
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: PREFIX + 'edit_buttons', type: 'button' }, field: { name: 'Налаштувати верхні кнопки', description: 'Пункти меню та плагінів, власні назви, іконки й порядок.' }, onChange: function () { openEditor(true); } });
         Lampa.SettingsApi.addParam({ component: COMPONENT, param: { name: PREFIX + 'reset_appearance', type: 'button' }, field: { name: 'Відновити оформлення', description: 'Повертає стандартну тему MyLampa, кольори, підсвітку, розмір карток, панелі та показ банерів і продовження. Верхні кнопки, порядок блоків, приховані картки й історія зберігаються. Потрібне підтвердження.' }, onChange: confirmAppearanceReset });
     }
+    function markMobileMenu(modal) {
+        if (modal) $(modal).each(function () { $(this).toggleClass('mls-menu-sheet', !!this.querySelector('.modal__body .menu__list .menu__item')); });
+    }
     function addStyle() {
         var style = document.createElement('style');
         style.id = 'mylampa-skin-style';
@@ -1795,6 +1798,15 @@
             '@media(max-width:620px){body.mls-enabled .mls-hero{min-height:21em}.mls-hero-image{object-position:65% center}.mls-hero-shade{background:linear-gradient(0deg,#0c111b 0%,rgba(12,17,27,.75) 50%,rgba(12,17,27,.08) 100%)}.mls-hero-content{padding:7em 1em 2em}.mls-hero-title{font-size:1.8em}.mls-hero-actions{gap:.4em}.mls-hero-button{font-size:.68em;padding:.65em .85em}.mls-hero-pagination{bottom:.65em;right:1em}body.mls-enabled .mls-resume-row .card{width:calc(100vw - var(--mls-rail) - 3em)!important}.mls-resume-empty-body{flex-wrap:wrap}.mls-resume-catalog{margin-left:0}.mls-resume-empty-body p{max-width:24em}body.mls-enabled .head__time{margin-left:0}.head__time-date{white-space:nowrap}}',
             '@media(max-width:900px){body.mls-enabled .mls-top-button{padding:.45em .6em;max-width:11em}}',
             '@media(max-width:620px){body.mls-enabled{--mls-rail:3.7em}body.mls-enabled .menu__item{padding:.8em .7em}body.mls-enabled.mls-wide-sidebar{--mls-rail:10em}}',
+            '@media(max-width:767px){',
+            'body.mls-enabled .modal.mls-menu-sheet .modal__content{position:absolute;left:0;right:0;bottom:0;width:100%;max-width:30rem;box-sizing:border-box;padding:0;border-radius:20px 20px 0 0!important;border-bottom:0;background:var(--mls-window-panel)!important}',
+            'body.mls-enabled .mls-menu-sheet .modal__head{margin:0;padding:16px 20px 13px;border-bottom:1px solid var(--mls-line)}body.mls-enabled .mls-menu-sheet.modal--empty-title .modal__head{display:none}body.mls-enabled .mls-menu-sheet .modal__title{font-size:21px;font-weight:600;line-height:1.25}',
+            'body.mls-enabled .mls-menu-sheet .modal__body>.scroll{max-height:calc(82vh - 60px);max-height:calc(82dvh - 60px);overflow-x:hidden!important;overflow-y:auto!important;overscroll-behavior:contain;-webkit-mask-image:none;mask-image:none}',
+            'body.mls-enabled .mls-menu-sheet .modal__body>.scroll>.scroll__content{max-height:none!important;padding:8px 12px 12px;padding-bottom:calc(12px + env(safe-area-inset-bottom))}body.mls-enabled .mls-menu-sheet .menu__list{padding:0;list-style:none}',
+            'body.mls-enabled .mls-menu-sheet .menu__item{box-sizing:border-box;min-height:46px;margin:0;padding:6px 8px}body.mls-enabled .mls-menu-sheet .menu__item+.menu__item{margin-top:2px}',
+            'body.mls-enabled .mls-menu-sheet .menu__ico{box-sizing:border-box;flex:0 0 32px;width:32px;height:32px;align-items:center;justify-content:center;margin:0 12px 0 0;border-radius:9px;background:rgba(127,127,127,.14)}body.mls-enabled .mls-menu-sheet .menu__ico>svg,body.mls-enabled .mls-menu-sheet .menu__ico>img{display:block;width:19px;height:19px;object-fit:contain}',
+            'body.mls-enabled .mls-menu-sheet .menu__text{min-width:0;margin:0;font-size:16px;font-weight:500;line-height:1.3;white-space:normal;overflow-wrap:break-word}body.mls-enabled .mls-menu-sheet .menu__split{width:auto;height:0;margin:8px;border:0;border-top:1px solid var(--mls-line)}',
+            '}',
             '@media(max-width:900px){body.mls-enabled .head{font-size:clamp(14px,var(--mls-native-size,16px),18px)}body.mls-enabled .head__body{position:relative;display:flex!important;flex-wrap:nowrap!important;align-items:center;gap:.4em;min-height:6.8em;padding:.45em .65em 3.5em!important}body.mls-enabled .head__backward,body.mls-enabled .head__menu-icon{display:none!important}body.mls-enabled .head__logo-icon{display:block!important;width:2.4em;margin:0;order:0}body.mls-enabled .head__time{order:1;gap:.35em;margin:0 .15em!important;min-width:0}body.mls-enabled .head__time-now{font-size:1.3em}body.mls-enabled .head__time-date,body.mls-enabled .head__time-week{font-size:.64em;white-space:nowrap}body.mls-enabled .head__actions{order:2;flex:1;min-width:0;justify-content:flex-end;flex-wrap:nowrap;gap:.2em}body.mls-enabled .head__actions>.head__action{flex:0 0 auto;width:2.7em;height:2.7em;min-width:40px;min-height:40px;margin:0!important}body.mls-enabled .mls-top-nav{position:absolute;left:.65em;right:.65em;bottom:.4em;width:auto;flex-wrap:nowrap;gap:.3em;overflow-x:auto;overflow-y:hidden;touch-action:pan-x;overscroll-behavior-x:contain;scrollbar-width:none;padding:.15em 0}body.mls-enabled .mls-top-nav::-webkit-scrollbar{display:none}body.mls-enabled .mls-top-button{flex:0 0 auto;max-width:none;font-size:.92em;height:2.85em;min-height:40px;padding:.35em .5em;gap:.35em}body.mls-enabled .mls-top-icon{height:1em!important;width:1em!important}}',
             // Keep Lampa's native menu controller and logo handler; only hide the idle rail.
             'body.mls-enabled.mls-hidden-sidebar{--mls-rail:0em}body.mls-enabled.mls-hidden-sidebar .wrap__left{width:0!important;border-right:0;pointer-events:none;visibility:hidden!important;transform:translate3d(calc(0px - var(--mls-expanded)),0,0)!important}body.mls-enabled.mls-hidden-sidebar .wrap__left>.scroll{width:var(--mls-expanded)!important}body.mls-enabled.mls-hidden-sidebar .head__logo-icon{cursor:pointer}',
@@ -1851,6 +1863,10 @@
         if (Lampa.Storage.value(PREFIX + 'hero_home') === '' && Lampa.Storage.value(PREFIX + 'hero') !== '') Lampa.Storage.set(PREFIX + 'hero_home', setting('hero', true) ? 'true' : 'false');
         loadButtons();
         addStyle();
+        if (Lampa.Modal && Lampa.Modal.listener) {
+            ['fullshow', 'update'].forEach(function (name) { Lampa.Modal.listener.follow(name, function (event) { markMobileMenu(event.html); }); });
+            markMobileMenu($('.modal'));
+        }
         addSettings();
         registerHome();
         initVisuals();
